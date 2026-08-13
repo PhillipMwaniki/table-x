@@ -134,6 +134,117 @@ fn push_statement(out: &mut Vec<String>, s: &str) {
     }
 }
 
+/// Whether a submission appears to modify data or schema.
+///
+/// This backs the per-connection read-only flag, which exists to stop someone
+/// running a migration against production by mistake. It is **a guard, not a
+/// security boundary**: it is a keyword scan, and a determined statement can
+/// evade it (`SELECT pg_terminate_backend(...)` has side effects and reads as a
+/// SELECT). Real protection is a database role without write permission.
+///
+/// It deliberately errs toward calling things writes. A false positive costs a
+/// user one toggle; a false negative costs them a table.
+///
+/// Keywords are matched only outside strings, comments, and quoted identifiers,
+/// so `SELECT 'update'` and `SELECT update_time FROM t` are both reads.
+pub fn looks_like_write(sql: &str) -> bool {
+    const WRITE_KEYWORDS: &[&str] = &[
+        "INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT", "REPLACE", "TRUNCATE", "DROP", "CREATE",
+        "ALTER", "RENAME", "GRANT", "REVOKE", "COMMENT", "VACUUM", "REINDEX", "CLUSTER", "COPY",
+        "CALL", "DO", "EXECUTE", "SET", "RESET", "LOCK", "REFRESH", "ATTACH", "DETACH",
+    ];
+    bare_words(sql)
+        .into_iter()
+        .any(|w| WRITE_KEYWORDS.contains(&w.to_ascii_uppercase().as_str()))
+}
+
+/// Identifier-like tokens that appear outside strings, comments, and quoted
+/// identifiers. Used for keyword scanning where a match inside a literal would
+/// be a false positive.
+fn bare_words(sql: &str) -> Vec<&str> {
+    let bytes = sql.as_bytes();
+    let mut words = Vec::new();
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        let c = bytes[i];
+        match c {
+            b'\'' | b'"' | b'`' => {
+                let quote = c;
+                i += 1;
+                while i < bytes.len() {
+                    if bytes[i] == quote {
+                        if i + 1 < bytes.len() && bytes[i + 1] == quote {
+                            i += 2;
+                            continue;
+                        }
+                        i += 1;
+                        break;
+                    }
+                    if bytes[i] == b'\\' && quote == b'\'' && i + 1 < bytes.len() {
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                }
+            }
+            b'[' => {
+                i += 1;
+                while i < bytes.len() && bytes[i] != b']' {
+                    i += 1;
+                }
+                i += 1;
+            }
+            b'-' if i + 1 < bytes.len() && bytes[i + 1] == b'-' => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'*' => {
+                let mut depth = 1;
+                i += 2;
+                while i < bytes.len() && depth > 0 {
+                    if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+                        depth += 1;
+                        i += 2;
+                    } else if bytes[i] == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                        depth -= 1;
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+            b'$' => {
+                if let Some(tag_end) = dollar_tag_end(bytes, i) {
+                    let tag = &bytes[i..tag_end];
+                    i = tag_end;
+                    while i < bytes.len() {
+                        if bytes[i] == b'$' && bytes[i..].starts_with(tag) {
+                            i += tag.len();
+                            break;
+                        }
+                        i += 1;
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+            c if c.is_ascii_alphabetic() || c == b'_' => {
+                let start = i;
+                while i < bytes.len()
+                    && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'$')
+                {
+                    i += 1;
+                }
+                words.push(&sql[start..i]);
+            }
+            _ => i += 1,
+        }
+    }
+    words
+}
+
 /// Quote an identifier for interpolation into generated SQL.
 ///
 /// Used when building `UPDATE` statements for inline edits, where table and
@@ -283,6 +394,60 @@ mod tests {
         // Users run half-typed SQL constantly; this must terminate cleanly.
         let parts = split_statements("SELECT 'unterminated");
         assert_eq!(parts, vec!["SELECT 'unterminated"]);
+    }
+
+    #[test]
+    fn reads_are_not_flagged_as_writes() {
+        for sql in [
+            "SELECT * FROM users",
+            "  select 1  ",
+            "EXPLAIN ANALYZE SELECT * FROM t",
+            "WITH recent AS (SELECT * FROM events) SELECT * FROM recent",
+            "SHOW TABLES",
+            "VALUES (1), (2)",
+        ] {
+            assert!(!looks_like_write(sql), "false positive on: {sql}");
+        }
+    }
+
+    #[test]
+    fn writes_are_flagged() {
+        for sql in [
+            "INSERT INTO t VALUES (1)",
+            "update t set a = 1",
+            "DELETE FROM t",
+            "DROP TABLE t",
+            "TRUNCATE t",
+            "ALTER TABLE t ADD COLUMN c int",
+            "GRANT SELECT ON t TO bob",
+        ] {
+            assert!(looks_like_write(sql), "missed write: {sql}");
+        }
+    }
+
+    #[test]
+    fn a_write_hidden_behind_a_cte_is_still_a_write() {
+        // The statement opens with WITH and reads like a SELECT, but it deletes.
+        let sql = "WITH doomed AS (SELECT id FROM t WHERE stale) \
+                   DELETE FROM t USING doomed WHERE t.id = doomed.id";
+        assert!(looks_like_write(sql));
+    }
+
+    #[test]
+    fn keywords_inside_literals_are_not_writes() {
+        // The classic false positive: a read that merely mentions a keyword.
+        assert!(!looks_like_write("SELECT 'drop table users' AS note"));
+        assert!(!looks_like_write("SELECT * FROM t WHERE msg = 'delete me'"));
+        assert!(!looks_like_write("SELECT 1 -- delete this later"));
+        assert!(!looks_like_write("SELECT 1 /* insert notes */"));
+    }
+
+    #[test]
+    fn identifiers_containing_keywords_are_not_writes() {
+        // `update_time` must not read as UPDATE; word boundaries matter.
+        assert!(!looks_like_write("SELECT update_time, created FROM t"));
+        assert!(!looks_like_write("SELECT dropped_at FROM t"));
+        assert!(!looks_like_write(r#"SELECT "delete" FROM t"#));
     }
 
     #[test]

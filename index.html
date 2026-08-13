@@ -3,9 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- `connect-src` must name Tauri's IPC origin explicitly. Without it the
+         custom-protocol transport is blocked and Tauri silently falls back to
+         postMessage, which is slower and caps message size — a real problem for
+         a tool that ships result sets over IPC. -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+      content="default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
     />
     <title>TablePro X</title>
   </head>

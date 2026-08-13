@@ -41,6 +41,10 @@ chrono.workspace = true
 # The default `v1` feature already selects the native store for all three.
 keyring = "4"
 
+[dev-dependencies]
+# Only for building ConnectionConfig fixtures in tests.
+indexmap.workspace = true
+
 [features]
 # Enabled by `tauri dev`; keeps devtools out of release bundles.
 default = []

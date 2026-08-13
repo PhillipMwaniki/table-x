@@ -25,7 +25,10 @@ export default defineConfig({
   build: {
     // Safari 13 / Chromium 105 are the floor for Tauri's webviews.
     target: process.env.TAURI_ENV_PLATFORM === "windows" ? "chrome105" : "safari13",
-    minify: !process.env.TAURI_ENV_DEBUG ? "esbuild" : false,
+    // Vite 8 builds on Rolldown and no longer ships esbuild; "oxc" is the
+    // built-in minifier. Asking for "esbuild" here fails at build time with a
+    // missing-package error rather than falling back.
+    minify: process.env.TAURI_ENV_DEBUG ? false : "oxc",
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
   },
 

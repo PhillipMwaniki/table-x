@@ -5,9 +5,13 @@
 //! `tablepro-drivers`, which know nothing about Tauri.
 
 mod ipc;
+mod secrets;
+mod sessions;
 mod state;
+mod store;
 
 use state::AppState;
+use tauri::Manager;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -24,10 +28,36 @@ pub fn run() {
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
-        .manage(AppState::new())
+        .setup(|app| {
+            // The config directory is only resolvable once the app exists, so
+            // state is built here rather than before the builder.
+            let config_dir = app.path().app_config_dir()?;
+            app.manage(AppState::new(&config_dir));
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                // Close database sockets rather than letting the process exit
+                // drop them, so servers see a clean disconnect.
+                let state = window.state::<AppState>();
+                tauri::async_runtime::block_on(state.sessions.close_all());
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             ipc::backend_info,
-            ipc::list_drivers
+            ipc::list_drivers,
+            ipc::list_connections,
+            ipc::open_connections,
+            ipc::save_connection,
+            ipc::delete_connection,
+            ipc::connect,
+            ipc::test_connection,
+            ipc::disconnect,
+            ipc::execute,
+            ipc::browse,
+            ipc::table_detail,
+            ipc::apply_edit,
+            ipc::completion_scope,
         ])
         .run(tauri::generate_context!())
         .expect("error while running TablePro X");
