@@ -53,7 +53,10 @@ impl SessionRegistry {
     pub async fn insert(&self, id: &str, connection: Box<dyn Connection>, tunnel: Option<Tunnel>) {
         let previous = {
             let mut map = self.sessions.lock().await;
-            map.insert(id.to_string(), Arc::new(LiveSession::new(connection, tunnel)))
+            map.insert(
+                id.to_string(),
+                Arc::new(LiveSession::new(connection, tunnel)),
+            )
         };
         if let Some(old) = previous {
             // Reconnecting must not leak the old socket, or the old tunnel —
@@ -225,7 +228,13 @@ mod tests {
 
         // The registry map must not still be locked, or every other connection
         // in the app would stall behind this one query.
-        let fast = reg.get("fast").await.expect("registry must stay responsive");
-        assert!(fast.connection.try_lock().is_ok(), "an unrelated session must be free");
+        let fast = reg
+            .get("fast")
+            .await
+            .expect("registry must stay responsive");
+        assert!(
+            fast.connection.try_lock().is_ok(),
+            "an unrelated session must be free"
+        );
     }
 }

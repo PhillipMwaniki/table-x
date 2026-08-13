@@ -45,7 +45,9 @@ pub fn list_drivers(state: tauri::State<'_, AppState>) -> Vec<DriverInfo> {
 // ---------------------------------------------------------------------------
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn list_connections(state: tauri::State<'_, AppState>) -> IpcResult<Vec<ConnectionConfig>> {
+pub async fn list_connections(
+    state: tauri::State<'_, AppState>,
+) -> IpcResult<Vec<ConnectionConfig>> {
     Ok(state.connections.lock().await.clone())
 }
 
@@ -339,10 +341,9 @@ pub async fn execute(
     // permissions the database itself grants. This is a guard against running the
     // wrong statement against production, not a security boundary.
     if config.read_only && tablex_core::sql::looks_like_write(&request.sql) {
-        return Err(tablex_core::Error::Unsupported(
-            "this connection is marked read-only".into(),
-        )
-        .into());
+        return Err(
+            tablex_core::Error::Unsupported("this connection is marked read-only".into()).into(),
+        );
     }
 
     let defaults = FetchOptions::default();
@@ -388,10 +389,9 @@ pub async fn apply_edit(
 ) -> IpcResult<()> {
     let config = state.config_for(&connection_id).await?;
     if config.read_only {
-        return Err(tablex_core::Error::Unsupported(
-            "this connection is marked read-only".into(),
-        )
-        .into());
+        return Err(
+            tablex_core::Error::Unsupported("this connection is marked read-only".into()).into(),
+        );
     }
 
     let session = state.sessions.get(&connection_id).await?;

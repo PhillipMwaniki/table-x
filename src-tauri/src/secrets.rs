@@ -12,7 +12,8 @@ use tablex_core::error::{Error, Result};
 const SERVICE: &str = "dev.tablex.app";
 
 fn entry(key: &str) -> Result<keyring::Entry> {
-    keyring::Entry::new(SERVICE, key).map_err(|e| Error::Other(format!("keychain unavailable: {e}")))
+    keyring::Entry::new(SERVICE, key)
+        .map_err(|e| Error::Other(format!("keychain unavailable: {e}")))
 }
 
 /// Store or replace a secret.

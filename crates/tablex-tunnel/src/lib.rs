@@ -131,11 +131,7 @@ async fn authenticate(
             }
         })?;
 
-    let fingerprint = seen
-        .lock()
-        .ok()
-        .and_then(|s| s.clone())
-        .unwrap_or_default();
+    let fingerprint = seen.lock().ok().and_then(|s| s.clone()).unwrap_or_default();
 
     let authenticated = match ssh.auth {
         SshAuth::Password => {
@@ -162,7 +158,12 @@ async fn authenticate(
                         Arc::new(key),
                         // Let russh pick the strongest signature algorithm the
                         // server advertises rather than pinning SHA-1 RSA.
-                        session.best_supported_rsa_hash().await.ok().flatten().flatten(),
+                        session
+                            .best_supported_rsa_hash()
+                            .await
+                            .ok()
+                            .flatten()
+                            .flatten(),
                     ),
                 )
                 .await
@@ -350,8 +351,15 @@ pub async fn open(
             // One task per forwarded connection: a driver that opens several
             // sockets (pooling, a cancel channel) must not serialize on one.
             tokio::spawn(async move {
-                if let Err(e) =
-                    forward(&session, stream, peer, &target_host, target_port, conn_cancel).await
+                if let Err(e) = forward(
+                    &session,
+                    stream,
+                    peer,
+                    &target_host,
+                    target_port,
+                    conn_cancel,
+                )
+                .await
                 {
                     tracing::warn!("tunnel forwarding failed: {e}");
                 }
@@ -454,7 +462,10 @@ mod tests {
             assert!(!observer.is_cancelled());
         }
         // Otherwise the listener socket would outlive the connection.
-        assert!(observer.is_cancelled(), "dropping must tear the tunnel down");
+        assert!(
+            observer.is_cancelled(),
+            "dropping must tear the tunnel down"
+        );
     }
 
     #[test]
