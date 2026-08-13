@@ -7,6 +7,8 @@
 
 use tablepro_core::registry::DriverRegistry;
 
+#[cfg(feature = "postgres")]
+pub mod postgres;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
 
@@ -18,6 +20,8 @@ pub fn registry() -> DriverRegistry {
     #[allow(unused_mut)]
     let mut reg = DriverRegistry::new();
 
+    #[cfg(feature = "postgres")]
+    reg.register(std::sync::Arc::new(postgres::PostgresDriver::new()));
     #[cfg(feature = "sqlite")]
     reg.register(std::sync::Arc::new(sqlite::SqliteDriver::new()));
 
