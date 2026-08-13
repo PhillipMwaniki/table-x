@@ -8,6 +8,7 @@
 import { useEffect, useState } from "react";
 import { ConnectionList } from "./components/ConnectionList";
 import { ConnectionDialog } from "./components/ConnectionDialog";
+import { Workspace } from "./components/workspace/Workspace";
 import { Banner, Button, Spinner } from "./components/ui/primitives";
 import { useConnections } from "./store/connections";
 import type { ConnectionConfig } from "./lib/types";
@@ -17,11 +18,13 @@ export default function App() {
     drivers,
     connections,
     open,
+    busy,
     selectedId,
     loading,
     error,
     init,
     save,
+    connect,
     clearError,
   } = useConnections();
 
@@ -72,38 +75,52 @@ export default function App() {
             </div>
           )}
 
-          <div className="flex flex-1 items-center justify-center p-6">
-            {selected ? (
-              <div className="text-center">
-                <h2 className="text-[13px] font-semibold">{selected.name}</h2>
-                <p className="mt-1 font-mono text-[11px] text-text-muted">
-                  {selected.driver}
-                </p>
-                <p className="mt-4 max-w-sm text-[12px] text-text-muted">
-                  {open.has(selected.id)
-                    ? "Connected. The schema browser, SQL editor, and result grid land in the next milestone."
-                    : "Not connected. Press ▶ in the sidebar, or double-click the connection."}
-                </p>
-              </div>
-            ) : (
-              <div className="text-center">
-                <h2 className="text-[13px] font-semibold">No connection selected</h2>
-                <p className="mt-1 max-w-sm text-[12px] text-text-muted">
-                  Select a connection from the sidebar, or create one to get started.
-                </p>
-                <Button
-                  variant="primary"
-                  className="mt-4"
-                  onClick={() => {
-                    setEditing(null);
-                    setDialogOpen(true);
-                  }}
-                >
-                  New connection
-                </Button>
-              </div>
-            )}
-          </div>
+          {selected && open.has(selected.id) ? (
+            // Keyed by connection so switching rebuilds the schema tree rather
+            // than showing the previous connection's objects against the new one.
+            <Workspace
+              key={selected.id}
+              connection={selected}
+              driver={drivers.find((d) => d.id === selected.driver)}
+            />
+          ) : (
+            <div className="flex flex-1 items-center justify-center p-6">
+              {selected ? (
+                <div className="text-center">
+                  <h2 className="text-[13px] font-semibold">{selected.name}</h2>
+                  <p className="mt-1 font-mono text-[11px] text-text-muted">{selected.driver}</p>
+                  <p className="mt-4 max-w-sm text-[12px] text-text-muted">
+                    Not connected yet.
+                  </p>
+                  <Button
+                    variant="primary"
+                    className="mt-3"
+                    busy={busy.has(selected.id)}
+                    onClick={() => void connect(selected.id)}
+                  >
+                    Connect
+                  </Button>
+                </div>
+              ) : (
+                <div className="text-center">
+                  <h2 className="text-[13px] font-semibold">No connection selected</h2>
+                  <p className="mt-1 max-w-sm text-[12px] text-text-muted">
+                    Select a connection from the sidebar, or create one to get started.
+                  </p>
+                  <Button
+                    variant="primary"
+                    className="mt-4"
+                    onClick={() => {
+                      setEditing(null);
+                      setDialogOpen(true);
+                    }}
+                  >
+                    New connection
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
         </main>
       </div>
 

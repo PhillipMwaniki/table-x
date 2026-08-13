@@ -12,6 +12,8 @@
     "app:dev": "tauri dev",
     "app:build": "tauri build",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "lint": "eslint . --ext ts,tsx",
     "fmt": "prettier --write \"src/**/*.{ts,tsx,css}\"",
     "rs:check": "cargo check --workspace",
@@ -43,6 +45,7 @@
     "@vitejs/plugin-react": "^6.0.5",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.9.3",
-    "vite": "^8.2.1"
+    "vite": "^8.2.1",
+    "vitest": "^4.1.10"
   }
 }
