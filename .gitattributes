@@ -1,0 +1,26 @@
+# Normalize to LF in the repository. Contributors on Windows still get CRLF in
+# their working copy where the platform expects it, but the committed bytes are
+# identical across machines — which keeps diffs and code review clean.
+* text=auto eol=lf
+
+# Windows-only files that genuinely need CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary assets: never touched, never diffed as text.
+*.png binary
+*.ico binary
+*.icns binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.woff binary
+*.woff2 binary
+*.db binary
+*.sqlite binary
+
+# Generated — collapse in review and exclude from language statistics.
+pnpm-lock.yaml linguist-generated=true -diff
+Cargo.lock linguist-generated=true -diff
+src-tauri/icons/** linguist-generated=true

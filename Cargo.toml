@@ -1,0 +1,50 @@
+[workspace]
+resolver = "2"
+members = ["crates/tablepro-core", "crates/tablepro-drivers", "src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/PhillipMwaniki/tablepro-x"
+authors = ["TablePro X contributors"]
+
+[workspace.dependencies]
+# Internal
+tablepro-core = { path = "crates/tablepro-core" }
+tablepro-drivers = { path = "crates/tablepro-drivers" }
+
+# Async runtime
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
+tokio-util = "0.7"
+async-trait = "0.1"
+futures-util = "0.3"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Errors / logging
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Common types
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+rust_decimal = { version = "1", features = ["serde"] }
+bytes = "1"
+indexmap = { version = "2", features = ["serde"] }
+
+# Profiles: debug builds of a DB client are unusably slow without optimized deps.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

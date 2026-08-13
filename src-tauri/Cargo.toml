@@ -1,0 +1,46 @@
+[package]
+name = "tablepro-x"
+description = "A fast, cross-platform database client for developers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+default-run = "tablepro-x"
+
+# The `cdylib`/`staticlib` crate types are what let this same crate be linked
+# into the iOS and Android shells that `tauri android`/`tauri ios` generate.
+[lib]
+name = "tablepro_x_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tablepro-core.workspace = true
+tablepro-drivers.workspace = true
+
+tauri = { version = "2.11", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-os = "2"
+tauri-plugin-store = "2"
+
+tokio.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+
+# OS keychain: Windows Credential Manager, macOS Keychain, Linux Secret Service.
+# The default `v1` feature already selects the native store for all three.
+keyring = "4"
+
+[features]
+# Enabled by `tauri dev`; keeps devtools out of release bundles.
+default = []

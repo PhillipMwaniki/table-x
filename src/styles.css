@@ -1,0 +1,124 @@
+@import "tailwindcss";
+
+/* Dark mode is driven by a class on <html>, not the OS media query alone —
+   developers routinely want the app dark while the OS is light. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  /* Type: a UI face for chrome, a mono face for everything that is data.
+     Column values, SQL, and type names must align vertically to be scannable. */
+  --font-sans: "Inter var", "Segoe UI Variable", "Segoe UI", system-ui, -apple-system,
+    "Helvetica Neue", sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", "SF Mono", "Consolas", ui-monospace, monospace;
+
+  /* Neutral ramp */
+  --color-surface-0: oklch(100% 0 0);
+  --color-surface-1: oklch(98.4% 0.001 250);
+  --color-surface-2: oklch(96.2% 0.002 250);
+  --color-surface-3: oklch(93.0% 0.003 250);
+  --color-border: oklch(89.0% 0.004 250);
+  --color-text: oklch(24.0% 0.008 250);
+  --color-text-muted: oklch(52.0% 0.010 250);
+
+  /* Accent */
+  --color-accent: oklch(58.0% 0.170 255);
+  --color-accent-fg: oklch(99.0% 0 0);
+
+  /* Semantic — also used to tint result-grid cells by value kind */
+  --color-ok: oklch(62.0% 0.150 150);
+  --color-warn: oklch(72.0% 0.160 75);
+  --color-danger: oklch(58.0% 0.200 25);
+  --color-null: oklch(60.0% 0.030 290);
+
+  --radius-sm: 3px;
+  --radius-md: 5px;
+  --radius-lg: 8px;
+}
+
+/* Dark theme reassigns the same tokens, so components never branch on theme. */
+.dark {
+  --color-surface-0: oklch(17.0% 0.006 255);
+  --color-surface-1: oklch(20.5% 0.007 255);
+  --color-surface-2: oklch(24.0% 0.008 255);
+  --color-surface-3: oklch(28.5% 0.009 255);
+  --color-border: oklch(33.0% 0.010 255);
+  --color-text: oklch(93.0% 0.004 255);
+  --color-text-muted: oklch(66.0% 0.012 255);
+
+  --color-accent: oklch(68.0% 0.155 255);
+  --color-accent-fg: oklch(17.0% 0.006 255);
+
+  --color-ok: oklch(70.0% 0.145 150);
+  --color-warn: oklch(78.0% 0.150 75);
+  --color-danger: oklch(66.0% 0.185 25);
+  --color-null: oklch(64.0% 0.040 290);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--color-surface-0);
+    color: var(--color-text);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 1.5;
+    /* This is a desktop app: the page itself must never rubber-band or scroll. */
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
+  /* Chrome is not selectable; data is. Accidental drag-selection of labels
+     while working in a grid is a persistent annoyance in database tools. */
+  body {
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  input,
+  textarea,
+  [data-selectable] {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-surface-3);
+    border-radius: 5px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-border);
+    background-clip: content-box;
+  }
+}
+
+@layer utilities {
+  /* Region that the OS treats as titlebar for window dragging. */
+  .drag-region {
+    -webkit-app-region: drag;
+    app-region: drag;
+  }
+  .no-drag {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+  }
+}

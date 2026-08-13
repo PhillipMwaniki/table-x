@@ -1,0 +1,18 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Baseline permissions for the main window. Deliberately narrow: the frontend gets no filesystem, shell, or network access of its own — every privileged action goes through a reviewed Rust command.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-set-title",
+    "os:allow-platform",
+    "os:allow-version",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "dialog:allow-message",
+    "dialog:allow-confirm",
+    "store:default"
+  ]
+}

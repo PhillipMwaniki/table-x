@@ -1,0 +1,47 @@
+{
+  "name": "tablepro-x",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "A fast, cross-platform database client for developers",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "app:dev": "tauri dev",
+    "app:build": "tauri build",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --ext ts,tsx",
+    "fmt": "prettier --write \"src/**/*.{ts,tsx,css}\"",
+    "rs:check": "cargo check --workspace",
+    "rs:test": "cargo test --workspace",
+    "rs:fmt": "cargo fmt --all"
+  },
+  "dependencies": {
+    "@codemirror/autocomplete": "^6.19.0",
+    "@codemirror/commands": "^6.9.0",
+    "@codemirror/lang-sql": "^6.10.0",
+    "@codemirror/search": "^6.5.11",
+    "@codemirror/state": "^6.5.2",
+    "@codemirror/view": "^6.38.6",
+    "@tanstack/react-virtual": "^3.14.9",
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-dialog": "^2.4.0",
+    "@tauri-apps/plugin-os": "^2.3.1",
+    "@tauri-apps/plugin-store": "^2.4.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "zustand": "^5.0.15"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@tauri-apps/cli": "^2.11.4",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^6.0.5",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.3",
+    "vite": "^8.2.1"
+  }
+}
