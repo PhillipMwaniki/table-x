@@ -57,8 +57,26 @@ tiberius = { version = "0.12", optional = true, default-features = false, featur
 ] }
 tokio-util = { workspace = true, optional = true, features = ["compat"] }
 
+# ClickHouse is driven over its HTTP interface rather than the `clickhouse`
+# crate. That crate is row-oriented around serde derive, which needs the row
+# shape at compile time — precisely what a client running arbitrary user SQL
+# does not have. The HTTP endpoint's JSONCompact format returns column metadata
+# alongside the data, which is exactly the dynamic shape this client needs.
+#
+# `rustls-no-provider` rather than `rustls`: in reqwest 0.13 the latter selects
+# the aws-lc-rs backend, which needs NASM on Windows. This variant leaves the
+# provider to the `rustls` dependency above, which is pinned to ring.
+# No `http2`: ClickHouse's HTTP interface is a plain request/response endpoint
+# with no multiplexing to gain from, and dropping it removes the whole h2 tree.
+reqwest = { version = "0.13", optional = true, default-features = false, features = [
+    "rustls-no-provider",
+    "json",
+    "gzip",
+    "charset",
+] }
+
 [features]
-default = ["postgres", "sqlite", "mysql", "mssql"]
+default = ["postgres", "sqlite", "mysql", "mssql", "clickhouse"]
 postgres = [
     "dep:tokio-postgres",
     "dep:postgres-protocol",
@@ -69,6 +87,9 @@ postgres = [
 sqlite = ["dep:rusqlite"]
 mysql = ["dep:mysql_async"]
 mssql = ["dep:tiberius", "dep:tokio-util"]
+# Pulls `rustls` so the ring provider is compiled in; reqwest is built with
+# `rustls-no-provider` and relies on it being the only one available.
+clickhouse = ["dep:reqwest", "dep:rustls"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }

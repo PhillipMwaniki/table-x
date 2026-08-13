@@ -125,7 +125,7 @@ Milestone 1 ("core + power features") is the current target.
 | ⬜ | **Query history** | Persisted, full-text searchable. |
 | ⬜ | **Multi-tab workspace** | Tabs, split panes, session restore. |
 | ⬜ | **CSV/JSON import-export** | Streaming, so file size is not bounded by RAM. |
-| ⬜ | **ClickHouse driver** | Rounding out to five drivers. |
+| ✅ | **ClickHouse driver** | HTTP + JSONCompact, exact wide integers and `Decimal`. Read-only — no row-level `UPDATE`. 23 tests. |
 | ⬜ | **CI/CD + packaging** | MSI/NSIS, .dmg, .deb/.rpm/AppImage, mobile bundles. |
 
 Deliberately **out of scope** for milestone 1, and tracked for later: the third-party
@@ -157,7 +157,7 @@ plugin system, AI chat and query assistance, MCP server integration, and setting
 │                         │ │ │                                 │
 │ • Value model           │ │ │ • PostgreSQL   • SQLite         │
 │ • Driver/Connection     │ │ │ • MySQL/MariaDB                 │
-│ • Schema description    │ │ │ • MSSQL, ClickHouse — planned   │
+│ • Schema description    │ │ │ • SQL Server   • ClickHouse     │
 │ • Error taxonomy        │ │ │                                 │
 │ • Driver registry       │ │ │ One Cargo feature per driver.   │
 │                         │ │ │                                 │

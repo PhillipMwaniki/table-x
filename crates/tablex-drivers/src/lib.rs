@@ -7,6 +7,8 @@
 
 use tablex_core::registry::DriverRegistry;
 
+#[cfg(feature = "clickhouse")]
+pub mod clickhouse;
 #[cfg(feature = "mssql")]
 pub mod mssql;
 #[cfg(feature = "mysql")]
@@ -24,6 +26,8 @@ pub fn registry() -> DriverRegistry {
     #[allow(unused_mut)]
     let mut reg = DriverRegistry::new();
 
+    #[cfg(feature = "clickhouse")]
+    reg.register(std::sync::Arc::new(clickhouse::ClickhouseDriver::new()));
     #[cfg(feature = "mssql")]
     reg.register(std::sync::Arc::new(mssql::MssqlDriver::new()));
     #[cfg(feature = "mysql")]
