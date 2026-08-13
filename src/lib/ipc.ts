@@ -17,6 +17,7 @@ import type {
   QueryOutcome,
   RowEdit,
   SchemaNode,
+  SshConfig,
   TableDetail,
 } from "./types";
 
@@ -110,4 +111,12 @@ export const ipc = {
 
   completionScope: (connection_id: string) =>
     call<CompletionScope>("completion_scope", { connection_id }),
+
+  /**
+   * Read an SSH server's host key fingerprint for the user to confirm.
+   *
+   * Must be done before a tunnelled connection can be opened: `connect` refuses
+   * to tunnel to a host whose key is not already known.
+   */
+  sshHostFingerprint: (ssh: SshConfig) => call<string>("ssh_host_fingerprint", { ssh }),
 };

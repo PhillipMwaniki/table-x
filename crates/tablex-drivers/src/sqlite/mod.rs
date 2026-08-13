@@ -8,7 +8,7 @@ mod types;
 
 use async_trait::async_trait;
 use std::sync::{Arc, Mutex};
-use tablepro_core::{
+use tablex_core::{
     config::ConnectionConfig,
     driver::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
@@ -405,7 +405,7 @@ fn run_one(
         })
         .collect();
 
-    let mut rows_out: Vec<Vec<tablepro_core::Value>> = Vec::new();
+    let mut rows_out: Vec<Vec<tablex_core::Value>> = Vec::new();
     let mut truncated = false;
     let mut seen = 0usize;
 

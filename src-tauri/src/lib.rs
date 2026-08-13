@@ -1,8 +1,8 @@
 //! Tauri application shell.
 //!
 //! Intentionally thin: this layer owns process lifetime, the IPC surface, and the
-//! OS keychain. All database behaviour lives in `tablepro-core` and
-//! `tablepro-drivers`, which know nothing about Tauri.
+//! OS keychain. All database behaviour lives in `tablex-core` and
+//! `tablex-drivers`, which know nothing about Tauri.
 
 mod ipc;
 mod secrets;
@@ -19,8 +19,8 @@ pub fn run() {
     tracing_subscriber::registry()
         .with(fmt::layer().with_target(false))
         .with(
-            EnvFilter::try_from_env("TABLEPRO_LOG")
-                .unwrap_or_else(|_| EnvFilter::new("tablepro=info,warn")),
+            EnvFilter::try_from_env("TABLEX_LOG")
+                .unwrap_or_else(|_| EnvFilter::new("tablex=info,warn")),
         )
         .init();
 
@@ -58,7 +58,8 @@ pub fn run() {
             ipc::table_detail,
             ipc::apply_edit,
             ipc::completion_scope,
+            ipc::ssh_host_fingerprint,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running TablePro X");
+        .expect("error while running Table X");
 }

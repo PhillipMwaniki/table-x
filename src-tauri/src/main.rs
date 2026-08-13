@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    tablepro_x_lib::run()
+    tablex_lib::run()
 }

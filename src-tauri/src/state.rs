@@ -2,7 +2,7 @@
 
 use crate::{sessions::SessionRegistry, store::ConnectionStore};
 use std::path::Path;
-use tablepro_core::{
+use tablex_core::{
     error::{Error, Result},
     registry::DriverRegistry,
     ConnectionConfig,
@@ -31,7 +31,7 @@ impl AppState {
         });
 
         AppState {
-            drivers: tablepro_drivers::registry(),
+            drivers: tablex_drivers::registry(),
             sessions: SessionRegistry::new(),
             connections: Mutex::new(connections),
             store,

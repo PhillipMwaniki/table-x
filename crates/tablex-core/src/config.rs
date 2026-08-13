@@ -80,8 +80,13 @@ pub struct SshConfig {
     pub username: String,
     #[serde(default)]
     pub auth: SshAuth,
-    /// Expected host key fingerprint. Populated on first connect after the user
-    /// confirms it, then checked on every subsequent connect.
+    /// Path to the private key for [`SshAuth::PublicKey`]. The path is not a
+    /// secret and lives here; the passphrase lives in the keychain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_path: Option<String>,
+    /// Expected host key fingerprint, in OpenSSH `SHA256:...` form. Populated on
+    /// first connect after the user confirms it, then checked on every
+    /// subsequent connect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_key_fingerprint: Option<String>,
 }

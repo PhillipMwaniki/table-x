@@ -6,7 +6,7 @@
 //! those live in the OS keychain and are looked up by connection id.
 
 use std::path::{Path, PathBuf};
-use tablepro_core::{
+use tablex_core::{
     error::{Error, Result},
     ConnectionConfig,
 };
@@ -92,10 +92,10 @@ impl ConnectionStore {
 mod tests {
     use super::*;
     use indexmap::IndexMap;
-    use tablepro_core::config::TlsConfig;
+    use tablex_core::config::TlsConfig;
 
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("tablepro-store-test-{name}"));
+        let dir = std::env::temp_dir().join(format!("tablex-store-test-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create temp dir");
         dir

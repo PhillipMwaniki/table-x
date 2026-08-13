@@ -1,6 +1,6 @@
 //! Live database sessions.
 //!
-//! One [`tablepro_core::Connection`] per open connection, addressed by the saved
+//! One [`tablex_core::Connection`] per open connection, addressed by the saved
 //! connection's id. Each session sits behind its own async mutex: the trait takes
 //! `&mut self` because a database session is not safe to use concurrently, and
 //! holding a per-session lock means two tabs querying *different* connections
@@ -9,14 +9,32 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use tablepro_core::{
+use tablex_core::{
     error::{Error, Result},
     Connection,
 };
+use tablex_tunnel::Tunnel;
 use tokio::sync::Mutex;
 
+/// One live session, plus the SSH tunnel it travels over if there is one.
+pub struct LiveSession {
+    pub connection: Mutex<Box<dyn Connection>>,
+    /// Held only so it stays alive: the tunnel shuts down when this is dropped,
+    /// which ties its lifetime to the session that needs it.
+    _tunnel: Option<Tunnel>,
+}
+
+impl LiveSession {
+    pub fn new(connection: Box<dyn Connection>, tunnel: Option<Tunnel>) -> Self {
+        LiveSession {
+            connection: Mutex::new(connection),
+            _tunnel: tunnel,
+        }
+    }
+}
+
 /// A handle to one live session.
-pub type Session = Arc<Mutex<Box<dyn Connection>>>;
+pub type Session = Arc<LiveSession>;
 
 #[derive(Default)]
 pub struct SessionRegistry {
@@ -32,14 +50,15 @@ impl SessionRegistry {
 
     /// Register a freshly opened session, replacing and closing any previous one
     /// for the same connection id.
-    pub async fn insert(&self, id: &str, connection: Box<dyn Connection>) {
+    pub async fn insert(&self, id: &str, connection: Box<dyn Connection>, tunnel: Option<Tunnel>) {
         let previous = {
             let mut map = self.sessions.lock().await;
-            map.insert(id.to_string(), Arc::new(Mutex::new(connection)))
+            map.insert(id.to_string(), Arc::new(LiveSession::new(connection, tunnel)))
         };
         if let Some(old) = previous {
-            // Reconnecting must not leak the old socket.
-            let _ = old.lock().await.close().await;
+            // Reconnecting must not leak the old socket, or the old tunnel —
+            // which is torn down when the replaced session is dropped.
+            let _ = old.connection.lock().await.close().await;
         }
     }
 
@@ -58,7 +77,7 @@ impl SessionRegistry {
     pub async fn remove(&self, id: &str) -> Result<()> {
         let session = self.sessions.lock().await.remove(id);
         if let Some(session) = session {
-            session.lock().await.close().await?;
+            session.connection.lock().await.close().await?;
         }
         Ok(())
     }
@@ -77,7 +96,7 @@ impl SessionRegistry {
             map.drain().map(|(_, s)| s).collect()
         };
         for session in drained {
-            let _ = session.lock().await.close().await;
+            let _ = session.connection.lock().await.close().await;
         }
     }
 }
@@ -87,7 +106,7 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use tablepro_core::{
+    use tablex_core::{
         driver::{CompletionScope, FetchOptions, RowEdit},
         result::QueryOutcome,
         schema::{SchemaNode, TableDetail},
@@ -148,7 +167,7 @@ mod tests {
     async fn sessions_are_retrievable_after_insert() {
         let closes = Arc::new(AtomicUsize::new(0));
         let reg = SessionRegistry::new();
-        reg.insert("a", fake(&closes)).await;
+        reg.insert("a", fake(&closes), None).await;
 
         assert!(reg.get("a").await.is_ok());
         assert_eq!(reg.open_ids().await, vec!["a".to_string()]);
@@ -158,8 +177,8 @@ mod tests {
     async fn reconnecting_closes_the_replaced_session() {
         let closes = Arc::new(AtomicUsize::new(0));
         let reg = SessionRegistry::new();
-        reg.insert("a", fake(&closes)).await;
-        reg.insert("a", fake(&closes)).await;
+        reg.insert("a", fake(&closes), None).await;
+        reg.insert("a", fake(&closes), None).await;
 
         // Without this, reconnecting would leak a socket every time.
         assert_eq!(closes.load(Ordering::SeqCst), 1);
@@ -170,7 +189,7 @@ mod tests {
     async fn removing_closes_the_session_and_is_idempotent() {
         let closes = Arc::new(AtomicUsize::new(0));
         let reg = SessionRegistry::new();
-        reg.insert("a", fake(&closes)).await;
+        reg.insert("a", fake(&closes), None).await;
 
         reg.remove("a").await.expect("first remove");
         assert_eq!(closes.load(Ordering::SeqCst), 1);
@@ -185,8 +204,8 @@ mod tests {
     async fn close_all_closes_every_session() {
         let closes = Arc::new(AtomicUsize::new(0));
         let reg = SessionRegistry::new();
-        reg.insert("a", fake(&closes)).await;
-        reg.insert("b", fake(&closes)).await;
+        reg.insert("a", fake(&closes), None).await;
+        reg.insert("b", fake(&closes), None).await;
 
         reg.close_all().await;
         assert_eq!(closes.load(Ordering::SeqCst), 2);
@@ -197,16 +216,16 @@ mod tests {
     async fn a_busy_session_does_not_block_a_different_one() {
         let closes = Arc::new(AtomicUsize::new(0));
         let reg = SessionRegistry::new();
-        reg.insert("slow", fake(&closes)).await;
-        reg.insert("fast", fake(&closes)).await;
+        reg.insert("slow", fake(&closes), None).await;
+        reg.insert("fast", fake(&closes), None).await;
 
         // Hold "slow" the way a long-running query would.
         let slow = reg.get("slow").await.expect("slow session");
-        let _held = slow.lock().await;
+        let _held = slow.connection.lock().await;
 
         // The registry map must not still be locked, or every other connection
         // in the app would stall behind this one query.
         let fast = reg.get("fast").await.expect("registry must stay responsive");
-        assert!(fast.try_lock().is_ok(), "an unrelated session must be free");
+        assert!(fast.connection.try_lock().is_ok(), "an unrelated session must be free");
     }
 }

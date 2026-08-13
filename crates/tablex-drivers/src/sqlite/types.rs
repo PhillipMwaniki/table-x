@@ -8,7 +8,7 @@
 //! distinguishes them.
 
 use rusqlite::types::ValueRef;
-use tablepro_core::Value;
+use tablex_core::Value;
 
 /// The declared-type hint for one column, precomputed once per statement so we
 /// do not re-parse the declaration for every row.

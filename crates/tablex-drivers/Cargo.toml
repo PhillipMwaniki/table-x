@@ -1,6 +1,6 @@
 [package]
-name = "tablepro-drivers"
-description = "Database driver implementations for TablePro X"
+name = "tablex-drivers"
+description = "Database driver implementations for Table X"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,7 +9,7 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-tablepro-core.workspace = true
+tablex-core.workspace = true
 
 async-trait.workspace = true
 tokio.workspace = true

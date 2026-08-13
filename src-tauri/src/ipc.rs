@@ -8,7 +8,7 @@
 //! errors — the SQLSTATE and character offset the editor needs.
 
 use serde::{Deserialize, Serialize};
-use tablepro_core::{
+use tablex_core::{
     driver::{DriverInfo, FetchOptions, RowEdit},
     result::QueryOutcome,
     schema::{SchemaNode, TableDetail},
@@ -68,10 +68,10 @@ pub async fn save_connection(
     secret: Option<String>,
 ) -> IpcResult<()> {
     if config.id.trim().is_empty() {
-        return Err(tablepro_core::Error::Config("connection id is required".into()).into());
+        return Err(tablex_core::Error::Config("connection id is required".into()).into());
     }
     if !state.drivers.contains(&config.driver) {
-        return Err(tablepro_core::Error::UnknownDriver(config.driver.clone()).into());
+        return Err(tablex_core::Error::UnknownDriver(config.driver.clone()).into());
     }
 
     if let Some(secret) = secret {
@@ -100,7 +100,7 @@ pub async fn delete_connection(state: tauri::State<'_, AppState>, id: String) ->
 
     let mut connections = state.connections.lock().await;
     let Some(index) = connections.iter().position(|c| c.id == id) else {
-        return Err(tablepro_core::Error::UnknownConnection(id).into());
+        return Err(tablex_core::Error::UnknownConnection(id).into());
     };
     let removed = connections.remove(index);
     state.store.save(&connections)?;
@@ -116,16 +116,57 @@ pub async fn delete_connection(state: tauri::State<'_, AppState>, id: String) ->
 // Sessions
 // ---------------------------------------------------------------------------
 
-/// Open a session for a saved connection.
+/// Open a session for a saved connection, establishing an SSH tunnel first if
+/// the connection is configured to use one.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn connect(state: tauri::State<'_, AppState>, id: String) -> IpcResult<()> {
     let config = state.config_for(&id).await?;
     let driver = state.drivers.get(&config.driver)?;
     let secret = secrets::get(&config.keychain_key())?;
 
+    let (config, tunnel) = establish_tunnel(&config).await?;
     let connection = driver.connect(&config, secret.as_deref()).await?;
-    state.sessions.insert(&id, connection).await;
+    state.sessions.insert(&id, connection, tunnel).await;
     Ok(())
+}
+
+/// Open the SSH tunnel, if configured, and rewrite the config to point at its
+/// local end.
+///
+/// Returning the rewritten config rather than mutating in place keeps the saved
+/// connection untouched: the loopback port is ephemeral and must never be
+/// written back to disk.
+async fn establish_tunnel(
+    config: &ConnectionConfig,
+) -> IpcResult<(ConnectionConfig, Option<tablex_tunnel::Tunnel>)> {
+    let Some(ssh) = &config.ssh else {
+        return Ok((config.clone(), None));
+    };
+
+    let target_host = config.host.clone().unwrap_or_else(|| "localhost".into());
+    let target_port = config.port.ok_or_else(|| {
+        tablex_core::Error::Config("a tunnelled connection needs a target port".into())
+    })?;
+
+    // The SSH credential is stored separately from the database password, so a
+    // key passphrase and a database password never overwrite each other.
+    let ssh_secret = secrets::get(&config.ssh_keychain_key())?;
+    let tunnel =
+        tablex_tunnel::open(ssh, &target_host, target_port, ssh_secret.as_deref()).await?;
+
+    let mut tunnelled = config.clone();
+    tunnelled.host = Some("127.0.0.1".into());
+    tunnelled.port = Some(tunnel.local_port());
+    Ok((tunnelled, Some(tunnel)))
+}
+
+/// Read the SSH server's host key fingerprint so the user can confirm it.
+///
+/// Connecting requires a stored fingerprint, so this is the first step when
+/// setting up a tunnelled connection. Nothing is authenticated or forwarded.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn ssh_host_fingerprint(ssh: tablex_core::config::SshConfig) -> IpcResult<String> {
+    Ok(tablex_tunnel::probe_host_key(&ssh).await?)
 }
 
 /// Try a connection without saving a session — the "Test connection" button.
@@ -152,10 +193,15 @@ pub async fn test_connection(
         }
     };
 
+    // Tunnel too, so "Test connection" exercises the same path a real connect
+    // takes rather than reporting success on a route that will not be used.
+    let (config, tunnel) = establish_tunnel(&config).await?;
+
     let mut connection = driver.connect(&config, secret).await?;
     let result = connection.ping().await;
     // Close regardless of the ping result: a test must never leave a socket open.
     let _ = connection.close().await;
+    drop(tunnel);
     result?;
     Ok(())
 }
@@ -192,8 +238,8 @@ pub async fn execute(
     // A read-only connection refuses writes here, independently of whatever
     // permissions the database itself grants. This is a guard against running the
     // wrong statement against production, not a security boundary.
-    if config.read_only && tablepro_core::sql::looks_like_write(&request.sql) {
-        return Err(tablepro_core::Error::Unsupported(
+    if config.read_only && tablex_core::sql::looks_like_write(&request.sql) {
+        return Err(tablex_core::Error::Unsupported(
             "this connection is marked read-only".into(),
         )
         .into());
@@ -207,7 +253,7 @@ pub async fn execute(
     };
 
     let session = state.sessions.get(&request.connection_id).await?;
-    let mut guard = session.lock().await;
+    let mut guard = session.connection.lock().await;
     Ok(guard.execute(&request.sql, &opts).await?)
 }
 
@@ -218,7 +264,7 @@ pub async fn browse(
     parent: Option<String>,
 ) -> IpcResult<Vec<SchemaNode>> {
     let session = state.sessions.get(&connection_id).await?;
-    let mut guard = session.lock().await;
+    let mut guard = session.connection.lock().await;
     Ok(guard.browse(parent.as_deref()).await?)
 }
 
@@ -230,7 +276,7 @@ pub async fn table_detail(
     table: String,
 ) -> IpcResult<TableDetail> {
     let session = state.sessions.get(&connection_id).await?;
-    let mut guard = session.lock().await;
+    let mut guard = session.connection.lock().await;
     Ok(guard.table_detail(schema.as_deref(), &table).await?)
 }
 
@@ -242,14 +288,14 @@ pub async fn apply_edit(
 ) -> IpcResult<()> {
     let config = state.config_for(&connection_id).await?;
     if config.read_only {
-        return Err(tablepro_core::Error::Unsupported(
+        return Err(tablex_core::Error::Unsupported(
             "this connection is marked read-only".into(),
         )
         .into());
     }
 
     let session = state.sessions.get(&connection_id).await?;
-    let mut guard = session.lock().await;
+    let mut guard = session.connection.lock().await;
     Ok(guard.apply_edit(&edit).await?)
 }
 
@@ -257,8 +303,8 @@ pub async fn apply_edit(
 pub async fn completion_scope(
     state: tauri::State<'_, AppState>,
     connection_id: String,
-) -> IpcResult<tablepro_core::driver::CompletionScope> {
+) -> IpcResult<tablex_core::driver::CompletionScope> {
     let session = state.sessions.get(&connection_id).await?;
-    let mut guard = session.lock().await;
+    let mut guard = session.connection.lock().await;
     Ok(guard.completion_scope().await?)
 }

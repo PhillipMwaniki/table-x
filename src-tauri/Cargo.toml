@@ -1,5 +1,5 @@
 [package]
-name = "tablepro-x"
+name = "table-x"
 description = "A fast, cross-platform database client for developers"
 version.workspace = true
 edition.workspace = true
@@ -7,20 +7,21 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-default-run = "tablepro-x"
+default-run = "table-x"
 
 # The `cdylib`/`staticlib` crate types are what let this same crate be linked
 # into the iOS and Android shells that `tauri android`/`tauri ios` generate.
 [lib]
-name = "tablepro_x_lib"
+name = "tablex_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tablepro-core.workspace = true
-tablepro-drivers.workspace = true
+tablex-core.workspace = true
+tablex-drivers.workspace = true
+tablex-tunnel.workspace = true
 
 tauri = { version = "2.11", features = [] }
 tauri-plugin-dialog = "2"

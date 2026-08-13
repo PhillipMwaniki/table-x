@@ -11,7 +11,7 @@ mod types;
 use async_trait::async_trait;
 use std::collections::HashMap;
 
-use tablepro_core::{
+use tablex_core::{
     config::{ConnectionConfig, TlsMode},
     driver::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
@@ -87,7 +87,7 @@ impl Driver for PostgresDriver {
         if let Some(password) = secret {
             pg.password(password);
         }
-        pg.application_name("TablePro X");
+        pg.application_name("Table X");
 
         let client = establish(&pg, config.tls.mode).await?;
         Ok(Box::new(PostgresConnection {
@@ -363,7 +363,7 @@ impl PostgresConnection {
         let cap = opts.max_rows.unwrap_or(usize::MAX);
         let truncated = rows.len().saturating_sub(opts.offset) > cap;
 
-        let decoded: Vec<Vec<tablepro_core::Value>> = rows
+        let decoded: Vec<Vec<tablex_core::Value>> = rows
             .iter()
             .skip(opts.offset)
             .take(cap)

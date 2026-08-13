@@ -1,19 +1,25 @@
 [workspace]
 resolver = "2"
-members = ["crates/tablepro-core", "crates/tablepro-drivers", "src-tauri"]
+members = [
+    "crates/tablex-core",
+    "crates/tablex-drivers",
+    "crates/tablex-tunnel",
+    "src-tauri",
+]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.82"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/PhillipMwaniki/tablepro-x"
-authors = ["TablePro X contributors"]
+repository = "https://github.com/PhillipMwaniki/table-x"
+authors = ["Table X contributors"]
 
 [workspace.dependencies]
 # Internal
-tablepro-core = { path = "crates/tablepro-core" }
-tablepro-drivers = { path = "crates/tablepro-drivers" }
+tablex-core = { path = "crates/tablex-core" }
+tablex-drivers = { path = "crates/tablex-drivers" }
+tablex-tunnel = { path = "crates/tablex-tunnel" }
 
 # Async runtime
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }

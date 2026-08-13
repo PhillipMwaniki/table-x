@@ -1,11 +1,11 @@
-//! # tablepro-drivers
+//! # tablex-drivers
 //!
-//! Concrete [`tablepro_core::Driver`] implementations, one module per database.
+//! Concrete [`tablex_core::Driver`] implementations, one module per database.
 //! Each is behind a Cargo feature so a build can ship only the drivers it needs —
 //! which keeps binary size down and, on mobile, keeps unlinkable native
 //! dependencies out of the build entirely.
 
-use tablepro_core::registry::DriverRegistry;
+use tablex_core::registry::DriverRegistry;
 
 #[cfg(feature = "postgres")]
 pub mod postgres;

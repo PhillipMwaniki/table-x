@@ -1,6 +1,6 @@
 [package]
-name = "tablepro-core"
-description = "Database-agnostic types, traits, and value model for TablePro X"
+name = "tablex-core"
+description = "Database-agnostic types, traits, and value model for Table X"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -5,11 +5,11 @@
 //! is the Credential Manager, on macOS the Keychain, and on Linux the Secret
 //! Service (GNOME Keyring, KWallet).
 
-use tablepro_core::error::{Error, Result};
+use tablex_core::error::{Error, Result};
 
 /// Service name under which all entries are filed. Stable across versions —
 /// changing it would orphan every stored credential.
-const SERVICE: &str = "dev.tablepro.x";
+const SERVICE: &str = "dev.tablex.app";
 
 fn entry(key: &str) -> Result<keyring::Entry> {
     keyring::Entry::new(SERVICE, key).map_err(|e| Error::Other(format!("keychain unavailable: {e}")))

@@ -3,11 +3,11 @@
 //! The decoding logic — which is where the subtle bugs live — is covered by pure
 //! unit tests in `numeric` and `types` that need no server.
 //!
-//! The tests below exercise a real server and are skipped unless `TABLEPRO_TEST_PG`
+//! The tests below exercise a real server and are skipped unless `TABLEX_TEST_PG`
 //! is set to a connection URL, e.g.
 //!
 //! ```text
-//! TABLEPRO_TEST_PG=postgres://postgres:postgres@localhost:5432/postgres cargo test -p tablepro-drivers
+//! TABLEX_TEST_PG=postgres://postgres:postgres@localhost:5432/postgres cargo test -p tablex-drivers
 //! ```
 //!
 //! They are skipped rather than failed when unset: a missing database is a missing
@@ -16,11 +16,11 @@
 
 use super::*;
 use indexmap::IndexMap;
-use tablepro_core::{config::TlsConfig, Value};
+use tablex_core::{config::TlsConfig, Value};
 
-/// Parse `TABLEPRO_TEST_PG` into a config, or `None` to skip.
+/// Parse `TABLEX_TEST_PG` into a config, or `None` to skip.
 fn test_config() -> Option<ConnectionConfig> {
-    let url = std::env::var("TABLEPRO_TEST_PG").ok()?;
+    let url = std::env::var("TABLEX_TEST_PG").ok()?;
     let rest = url
         .strip_prefix("postgres://")
         .or_else(|| url.strip_prefix("postgresql://"))?;
@@ -63,7 +63,7 @@ async fn connect() -> Option<Box<dyn Connection>> {
     let password = cfg.options.get("__password").cloned().unwrap_or_default();
     match PostgresDriver::new().connect(&cfg, Some(&password)).await {
         Ok(c) => Some(c),
-        Err(e) => panic!("TABLEPRO_TEST_PG is set but connecting failed: {e}"),
+        Err(e) => panic!("TABLEX_TEST_PG is set but connecting failed: {e}"),
     }
 }
 
@@ -71,7 +71,7 @@ async fn connect() -> Option<Box<dyn Connection>> {
 macro_rules! requires_server {
     ($conn:ident) => {
         let Some(mut $conn) = connect().await else {
-            eprintln!("skipping: TABLEPRO_TEST_PG not set");
+            eprintln!("skipping: TABLEX_TEST_PG not set");
             return;
         };
     };
@@ -111,12 +111,12 @@ fn driver_advertises_provenance_which_sqlite_cannot() {
     assert!(!info.capabilities.cancel);
     assert_eq!(
         info.capabilities.placeholder_style,
-        tablepro_core::driver::PlaceholderStyle::Dollar
+        tablex_core::driver::PlaceholderStyle::Dollar
     );
 }
 
 // ---------------------------------------------------------------------------
-// Integration tests — require TABLEPRO_TEST_PG.
+// Integration tests — require TABLEX_TEST_PG.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -200,27 +200,27 @@ async fn single_table_results_are_editable_and_joins_are_not() {
     requires_server!(conn);
     exec(
         &mut conn,
-        "DROP TABLE IF EXISTS tpx_users, tpx_orders CASCADE",
+        "DROP TABLE IF EXISTS tx_users, tx_orders CASCADE",
     )
     .await;
     exec(
         &mut conn,
-        "CREATE TABLE tpx_users (id int PRIMARY KEY, email text NOT NULL)",
+        "CREATE TABLE tx_users (id int PRIMARY KEY, email text NOT NULL)",
     )
     .await;
     exec(
         &mut conn,
-        "CREATE TABLE tpx_orders (id int PRIMARY KEY, user_id int REFERENCES tpx_users(id))",
+        "CREATE TABLE tx_orders (id int PRIMARY KEY, user_id int REFERENCES tx_users(id))",
     )
     .await;
     exec(
         &mut conn,
-        "INSERT INTO tpx_users VALUES (1, 'a@example.com'), (2, 'b@example.com')",
+        "INSERT INTO tx_users VALUES (1, 'a@example.com'), (2, 'b@example.com')",
     )
     .await;
 
     // Provenance resolves to one table and the primary key is projected.
-    let rs = query(&mut conn, "SELECT id, email FROM tpx_users ORDER BY id").await;
+    let rs = query(&mut conn, "SELECT id, email FROM tx_users ORDER BY id").await;
     assert!(
         rs.editable,
         "single-table result with its PK must be editable"
@@ -228,101 +228,101 @@ async fn single_table_results_are_editable_and_joins_are_not() {
     assert_eq!(rs.key_columns, vec!["id".to_string()]);
 
     // A projection that omits the key cannot build a safe WHERE clause.
-    let rs = query(&mut conn, "SELECT email FROM tpx_users").await;
+    let rs = query(&mut conn, "SELECT email FROM tx_users").await;
     assert!(!rs.editable, "result without its key must be read-only");
 
     // A join has no single target table for an UPDATE.
     let rs = query(
         &mut conn,
-        "SELECT u.id, o.id AS order_id FROM tpx_users u JOIN tpx_orders o ON o.user_id = u.id",
+        "SELECT u.id, o.id AS order_id FROM tx_users u JOIN tx_orders o ON o.user_id = u.id",
     )
     .await;
     assert!(!rs.editable, "a join must never be editable");
 
     // An aggregate has no provenance at all.
-    let rs = query(&mut conn, "SELECT count(*) FROM tpx_users").await;
+    let rs = query(&mut conn, "SELECT count(*) FROM tx_users").await;
     assert!(!rs.editable);
 
-    exec(&mut conn, "DROP TABLE tpx_orders, tpx_users CASCADE").await;
+    exec(&mut conn, "DROP TABLE tx_orders, tx_users CASCADE").await;
 }
 
 #[tokio::test]
 async fn apply_edit_updates_exactly_one_row() {
     requires_server!(conn);
-    exec(&mut conn, "DROP TABLE IF EXISTS tpx_edit CASCADE").await;
+    exec(&mut conn, "DROP TABLE IF EXISTS tx_edit CASCADE").await;
     exec(
         &mut conn,
-        "CREATE TABLE tpx_edit (id int PRIMARY KEY, email text, amount numeric(30,10))",
+        "CREATE TABLE tx_edit (id int PRIMARY KEY, email text, amount numeric(30,10))",
     )
     .await;
     exec(
         &mut conn,
-        "INSERT INTO tpx_edit VALUES (1, 'a@example.com', 1.5), (2, 'b@example.com', 2.5)",
+        "INSERT INTO tx_edit VALUES (1, 'a@example.com', 1.5), (2, 'b@example.com', 2.5)",
     )
     .await;
 
     conn.apply_edit(&RowEdit {
         schema: Some("public".into()),
-        table: "tpx_edit".into(),
+        table: "tx_edit".into(),
         changes: vec![("email".into(), Value::Text("new@example.com".into()))],
         key: vec![("id".into(), Value::Int(1))],
     })
     .await
     .expect("edit applies");
 
-    let rs = query(&mut conn, "SELECT email FROM tpx_edit WHERE id = 1").await;
+    let rs = query(&mut conn, "SELECT email FROM tx_edit WHERE id = 1").await;
     assert_eq!(rs.rows[0][0], Value::Text("new@example.com".into()));
 
     // The sibling row is untouched.
-    let rs = query(&mut conn, "SELECT email FROM tpx_edit WHERE id = 2").await;
+    let rs = query(&mut conn, "SELECT email FROM tx_edit WHERE id = 2").await;
     assert_eq!(rs.rows[0][0], Value::Text("b@example.com".into()));
 
-    exec(&mut conn, "DROP TABLE tpx_edit CASCADE").await;
+    exec(&mut conn, "DROP TABLE tx_edit CASCADE").await;
 }
 
 #[tokio::test]
 async fn editing_a_numeric_column_does_not_round_it() {
     requires_server!(conn);
-    exec(&mut conn, "DROP TABLE IF EXISTS tpx_money CASCADE").await;
+    exec(&mut conn, "DROP TABLE IF EXISTS tx_money CASCADE").await;
     exec(
         &mut conn,
-        "CREATE TABLE tpx_money (id int PRIMARY KEY, amount numeric(40,20))",
+        "CREATE TABLE tx_money (id int PRIMARY KEY, amount numeric(40,20))",
     )
     .await;
-    exec(&mut conn, "INSERT INTO tpx_money VALUES (1, 0)").await;
+    exec(&mut conn, "INSERT INTO tx_money VALUES (1, 0)").await;
 
     // The text-cast parameter path must carry every digit through to the server.
     let exact = "12345678901234567890.12345678901234567890";
     conn.apply_edit(&RowEdit {
         schema: Some("public".into()),
-        table: "tpx_money".into(),
+        table: "tx_money".into(),
         changes: vec![("amount".into(), Value::Numeric(exact.into()))],
         key: vec![("id".into(), Value::Int(1))],
     })
     .await
     .expect("edit applies");
 
-    let rs = query(&mut conn, "SELECT amount FROM tpx_money WHERE id = 1").await;
+    let rs = query(&mut conn, "SELECT amount FROM tx_money WHERE id = 1").await;
     assert_eq!(rs.rows[0][0], Value::Numeric(exact.into()));
 
-    exec(&mut conn, "DROP TABLE tpx_money CASCADE").await;
+    exec(&mut conn, "DROP TABLE tx_money CASCADE").await;
 }
 
 #[tokio::test]
 async fn apply_edit_rolls_back_when_the_key_is_not_unique() {
     requires_server!(conn);
-    exec(&mut conn, "DROP TABLE IF EXISTS tpx_dup CASCADE").await;
-    exec(&mut conn, "CREATE TABLE tpx_dup (grp int, note text)").await;
+    exec(&mut conn, "DROP TABLE IF EXISTS tx_dup CASCADE").await;
+    exec(&mut conn, "CREATE TABLE tx_dup (grp int, note text)").await;
     exec(
         &mut conn,
-        "INSERT INTO tpx_dup VALUES (1, 'one'), (1, 'two'), (2, 'three')",
+        "INSERT INTO tx_dup VALUES (1, 'one'), (1, 'two'), (2, 'three')",
     )
     .await;
 
     let err = conn
         .apply_edit(&RowEdit {
             schema: Some("public".into()),
-            table: "tpx_dup".into(),
+            table: "tx_dup".into(),
             changes: vec![("note".into(), Value::Text("clobbered".into()))],
             key: vec![("grp".into(), Value::Int(1))],
         })
@@ -332,43 +332,43 @@ async fn apply_edit_rolls_back_when_the_key_is_not_unique() {
 
     let rs = query(
         &mut conn,
-        "SELECT count(*) FROM tpx_dup WHERE note = 'clobbered'",
+        "SELECT count(*) FROM tx_dup WHERE note = 'clobbered'",
     )
     .await;
     assert_eq!(rs.rows[0][0], Value::Int(0), "rollback must leave no trace");
 
-    exec(&mut conn, "DROP TABLE tpx_dup CASCADE").await;
+    exec(&mut conn, "DROP TABLE tx_dup CASCADE").await;
 }
 
 #[tokio::test]
 async fn apply_edit_matches_null_keys_with_is_null() {
     requires_server!(conn);
-    exec(&mut conn, "DROP TABLE IF EXISTS tpx_null CASCADE").await;
-    exec(&mut conn, "CREATE TABLE tpx_null (k text, v text)").await;
-    exec(&mut conn, "INSERT INTO tpx_null VALUES (NULL, 'before')").await;
+    exec(&mut conn, "DROP TABLE IF EXISTS tx_null CASCADE").await;
+    exec(&mut conn, "CREATE TABLE tx_null (k text, v text)").await;
+    exec(&mut conn, "INSERT INTO tx_null VALUES (NULL, 'before')").await;
 
     conn.apply_edit(&RowEdit {
         schema: Some("public".into()),
-        table: "tpx_null".into(),
+        table: "tx_null".into(),
         changes: vec![("v".into(), Value::Text("after".into()))],
         key: vec![("k".into(), Value::Null)],
     })
     .await
     .expect("NULL key must match via IS NULL");
 
-    let rs = query(&mut conn, "SELECT v FROM tpx_null").await;
+    let rs = query(&mut conn, "SELECT v FROM tx_null").await;
     assert_eq!(rs.rows[0][0], Value::Text("after".into()));
 
-    exec(&mut conn, "DROP TABLE tpx_null CASCADE").await;
+    exec(&mut conn, "DROP TABLE tx_null CASCADE").await;
 }
 
 #[tokio::test]
 async fn browse_walks_schemas_then_tables_then_columns() {
     requires_server!(conn);
-    exec(&mut conn, "DROP TABLE IF EXISTS tpx_browse CASCADE").await;
+    exec(&mut conn, "DROP TABLE IF EXISTS tx_browse CASCADE").await;
     exec(
         &mut conn,
-        "CREATE TABLE tpx_browse (id int PRIMARY KEY, label text NOT NULL)",
+        "CREATE TABLE tx_browse (id int PRIMARY KEY, label text NOT NULL)",
     )
     .await;
 
@@ -379,17 +379,17 @@ async fn browse_walks_schemas_then_tables_then_columns() {
     assert!(!schemas.iter().any(|s| s.name == "information_schema"));
 
     let tables = conn.browse(Some("public")).await.expect("browse tables");
-    assert!(tables.iter().any(|t| t.name == "tpx_browse"));
+    assert!(tables.iter().any(|t| t.name == "tx_browse"));
 
     let columns = conn
-        .browse(Some("public.tpx_browse"))
+        .browse(Some("public.tx_browse"))
         .await
         .expect("browse columns");
     let names: Vec<_> = columns.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(names, vec!["id", "label"]);
     assert!(columns.iter().all(|c| !c.expandable));
 
-    exec(&mut conn, "DROP TABLE tpx_browse CASCADE").await;
+    exec(&mut conn, "DROP TABLE tx_browse CASCADE").await;
 }
 
 #[tokio::test]
@@ -397,21 +397,21 @@ async fn table_detail_reports_keys_indexes_and_foreign_keys() {
     requires_server!(conn);
     exec(
         &mut conn,
-        "DROP TABLE IF EXISTS tpx_child, tpx_parent CASCADE",
+        "DROP TABLE IF EXISTS tx_child, tx_parent CASCADE",
     )
     .await;
-    exec(&mut conn, "CREATE TABLE tpx_parent (id int PRIMARY KEY)").await;
+    exec(&mut conn, "CREATE TABLE tx_parent (id int PRIMARY KEY)").await;
     exec(
         &mut conn,
-        "CREATE TABLE tpx_child ( \
+        "CREATE TABLE tx_child ( \
             id int PRIMARY KEY, \
-            parent_id int NOT NULL REFERENCES tpx_parent(id) ON DELETE CASCADE, \
+            parent_id int NOT NULL REFERENCES tx_parent(id) ON DELETE CASCADE, \
             code text NOT NULL UNIQUE )",
     )
     .await;
 
     let detail = conn
-        .table_detail(Some("public"), "tpx_child")
+        .table_detail(Some("public"), "tx_child")
         .await
         .expect("detail");
     assert_eq!(detail.primary_key, vec!["id".to_string()]);
@@ -419,14 +419,14 @@ async fn table_detail_reports_keys_indexes_and_foreign_keys() {
     assert_eq!(detail.columns.len(), 3);
 
     let fk = detail.foreign_keys.first().expect("a foreign key");
-    assert_eq!(fk.referenced_table, "tpx_parent");
+    assert_eq!(fk.referenced_table, "tx_parent");
     assert_eq!(fk.columns, vec!["parent_id".to_string()]);
     assert_eq!(fk.on_delete.as_deref(), Some("CASCADE"));
 
     assert!(detail.indexes.iter().any(|i| i.primary));
     assert!(detail.indexes.iter().any(|i| i.unique && !i.primary));
 
-    exec(&mut conn, "DROP TABLE tpx_child, tpx_parent CASCADE").await;
+    exec(&mut conn, "DROP TABLE tx_child, tx_parent CASCADE").await;
 }
 
 #[tokio::test]
@@ -453,12 +453,12 @@ async fn row_cap_truncates_and_says_so() {
 #[tokio::test]
 async fn writes_report_affected_rows() {
     requires_server!(conn);
-    exec(&mut conn, "DROP TABLE IF EXISTS tpx_count CASCADE").await;
-    exec(&mut conn, "CREATE TABLE tpx_count (n int)").await;
+    exec(&mut conn, "DROP TABLE IF EXISTS tx_count CASCADE").await;
+    exec(&mut conn, "CREATE TABLE tx_count (n int)").await;
 
     let out = conn
         .execute(
-            "INSERT INTO tpx_count SELECT generate_series(1, 5)",
+            "INSERT INTO tx_count SELECT generate_series(1, 5)",
             &FetchOptions::default(),
         )
         .await
@@ -468,14 +468,14 @@ async fn writes_report_affected_rows() {
         other => panic!("expected affected count, got {other:?}"),
     }
 
-    exec(&mut conn, "DROP TABLE tpx_count CASCADE").await;
+    exec(&mut conn, "DROP TABLE tx_count CASCADE").await;
 }
 
 #[tokio::test]
 async fn completion_scope_lists_schemas_tables_and_functions() {
     requires_server!(conn);
-    exec(&mut conn, "DROP TABLE IF EXISTS tpx_scope CASCADE").await;
-    exec(&mut conn, "CREATE TABLE tpx_scope (alpha int, beta text)").await;
+    exec(&mut conn, "DROP TABLE IF EXISTS tx_scope CASCADE").await;
+    exec(&mut conn, "CREATE TABLE tx_scope (alpha int, beta text)").await;
 
     let scope = conn.completion_scope().await.expect("scope");
     assert!(scope.schemas.iter().any(|s| s == "public"));
@@ -483,12 +483,12 @@ async fn completion_scope_lists_schemas_tables_and_functions() {
     let (_, columns) = scope
         .tables
         .iter()
-        .find(|(t, _)| t == "public.tpx_scope")
+        .find(|(t, _)| t == "public.tx_scope")
         .expect("table in completion scope");
     assert!(columns.contains(&"alpha".to_string()));
     assert!(!scope.functions.is_empty());
 
-    exec(&mut conn, "DROP TABLE tpx_scope CASCADE").await;
+    exec(&mut conn, "DROP TABLE tx_scope CASCADE").await;
 }
 
 #[tokio::test]

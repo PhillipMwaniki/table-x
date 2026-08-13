@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "TablePro X",
+  "productName": "Table X",
   "version": "0.1.0",
-  "identifier": "dev.tablepro.x",
+  "identifier": "dev.tablex.app",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "TablePro X",
+        "title": "Table X",
         "width": 1400,
         "height": 900,
         "minWidth": 800,
@@ -38,7 +38,7 @@
     ],
     "category": "DeveloperTool",
     "shortDescription": "A fast, cross-platform database client",
-    "longDescription": "TablePro X is a fast, open-source database client for developers, with a SQL editor, schema browser, and editable result grid across PostgreSQL, MySQL, SQLite, and more.",
+    "longDescription": "Table X is a fast, open-source database client for developers, with a SQL editor, schema browser, and editable result grid across PostgreSQL, MySQL, SQLite, and more.",
     "linux": {
       "deb": {
         "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0"]

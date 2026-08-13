@@ -1,6 +1,6 @@
-//! # tablepro-core
+//! # tablex-core
 //!
-//! Database-agnostic foundations for TablePro X: the dynamic [`value::Value`] model,
+//! Database-agnostic foundations for Table X: the dynamic [`value::Value`] model,
 //! the [`driver::Driver`] / [`driver::Connection`] contract, schema description types,
 //! and the normalized [`error::Error`].
 //!

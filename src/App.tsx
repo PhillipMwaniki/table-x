@@ -40,7 +40,7 @@ export default function App() {
   return (
     <div className="flex h-full flex-col bg-surface-0 text-text">
       <header className="drag-region flex h-9 shrink-0 items-center gap-2 border-b border-border bg-surface-1 px-3">
-        <span className="text-[12px] font-semibold tracking-wide">TablePro X</span>
+        <span className="text-[12px] font-semibold tracking-wide">Table X</span>
         <span className="text-[11px] text-text-muted">
           {open.size > 0 && `${open.size} connected`}
         </span>

@@ -128,6 +128,13 @@ export interface SshConfig {
   port: number;
   username: string;
   auth: SshAuth;
+  /** Private key path for `public_key` auth. Not a secret; the passphrase is. */
+  key_path?: string | undefined;
+  /**
+   * Expected host key, in OpenSSH `SHA256:...` form. Required before a tunnel
+   * will open — there is no trust-on-first-use, since an unverified tunnel
+   * gives no protection against the attacker a bastion exists to defend against.
+   */
   host_key_fingerprint?: string | undefined;
 }
 

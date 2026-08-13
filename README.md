@@ -1,6 +1,6 @@
 <div align="center">
 
-# TablePro X
+# Table X
 
 **A fast, cross-platform database client for developers.**
 
@@ -43,7 +43,7 @@ Windows · Linux · macOS · iOS · Android
 
 ## What this is
 
-TablePro X is an open-source database client aimed at developers who spend their day in
+Table X is an open-source database client aimed at developers who spend their day in
 SQL: a fast editor, a schema browser that handles large catalogs, and a result grid you
 can edit in place — across every major database, on every major platform.
 
@@ -66,7 +66,7 @@ This project is inspired by [TablePro](https://github.com/TableProApp/TablePro),
 excellent native database client for macOS and iOS. TablePro is written in Swift and
 SwiftUI, and its Linux port is still in development.
 
-**TablePro X is an independent, clean-room reimplementation.** It shares no code with
+**Table X is an independent, clean-room reimplementation.** It shares no code with
 TablePro. It was written from scratch in Rust and TypeScript, and is not affiliated with
 or endorsed by the TablePro project or its authors.
 
@@ -79,7 +79,7 @@ targets all five natively.
 If you are on macOS or iOS today, **use TablePro** — it is mature, native, and excellent.
 This project exists for everyone else.
 
-> TablePro is licensed AGPLv3. Because TablePro X shares no code with it, it is not a
+> TablePro is licensed AGPLv3. Because Table X shares no code with it, it is not a
 > derivative work and carries its own permissive license. No TablePro source was consulted
 > while writing any implementation file here.
 
@@ -115,11 +115,11 @@ Milestone 1 ("core + power features") is the current target.
 | ✅ | **SQLite driver** | Dynamic decoding by declared type, catalog introspection, guarded inline edits. 38 tests against a real engine. |
 | ✅ | **PostgreSQL driver** | Exact `NUMERIC`, column provenance, `pg_catalog` introspection, TLS via rustls. 45 tests, 18 against a live server. |
 | ✅ | **IPC + session registry** | 14 commands, per-session locking, atomic connection persistence, OS keychain. |
-| 🚧 | **Connection manager UI** | Per-driver forms, test-connection, connection list. |
-| ⬜ | **Schema browser** | Lazily expanded object tree. |
-| ⬜ | **SQL editor** | CodeMirror 6, schema-aware autocomplete, multi-cursor, themes. |
-| ⬜ | **Result grid** | Virtualized, inline editing, sorting, filtering, undo/redo. |
-| ⬜ | **SSH tunnels** | Password / private key / agent auth, host key verification. |
+| ✅ | **Connection manager UI** | Per-driver forms, test-connection, colour tags, read-only flag. |
+| ✅ | **Schema browser** | Lazily expanded object tree with per-node caching. |
+| ✅ | **SQL editor** | CodeMirror 6, schema-aware autocomplete, run-selection, error positioning. |
+| ✅ | **Result grid** | Virtualized rows, inline editing, sorting, filtering, undo/redo. |
+| 🚧 | **SSH tunnels** | Password / private key / agent auth, mandatory host key verification. |
 | ⬜ | **Query history** | Persisted, full-text searchable. |
 | ⬜ | **Multi-tab workspace** | Tabs, split panes, session restore. |
 | ⬜ | **CSV/JSON import-export** | Streaming, so file size is not bounded by RAM. |
@@ -147,23 +147,32 @@ plugin system, AI chat and query assistance, MCP server integration, and setting
 │   Thin by design: no database logic lives here.                 │
 └───────────────────────────┬─────────────────────────────────────┘
                             │
-        ┌───────────────────┴───────────────────┐
-        │                                       │
-┌───────▼─────────────────────┐   ┌─────────────▼───────────────────┐
-│ tablepro-core               │   │ tablepro-drivers                │
-│ (crates/tablepro-core)      │◄──┤ (crates/tablepro-drivers)       │
-│                             │   │                                 │
-│ • Value model               │   │ • PostgreSQL   • MySQL          │
-│ • Driver / Connection traits│   │ • SQLite       • MSSQL          │
-│ • Schema description        │   │ • ClickHouse   • …              │
-│ • Error taxonomy            │   │                                 │
-│ • Driver registry           │   │ One Cargo feature per driver.   │
-│                             │   │                                 │
-│ No Tauri, no GUI, no DB.    │   │                                 │
-└─────────────────────────────┘   └─────────────────────────────────┘
+        ┌───────────────────┼───────────────────┐
+        │                   │                   │
+┌───────▼─────────────────┐ │ ┌─────────────────▼───────────────┐
+│ tablex-core             │ │ │ tablex-drivers                  │
+│ (crates/tablex-core)    │◄──┤ (crates/tablex-drivers)         │
+│                         │ │ │                                 │
+│ • Value model           │ │ │ • PostgreSQL   • MySQL          │
+│ • Driver/Connection     │ │ │ • SQLite       • MSSQL          │
+│ • Schema description    │ │ │ • ClickHouse   • …              │
+│ • Error taxonomy        │ │ │                                 │
+│ • Driver registry       │ │ │ One Cargo feature per driver.   │
+│                         │ │ │                                 │
+│ No Tauri, no GUI, no DB.│ │ └─────────────────────────────────┘
+└─────────────────────────┘ │
+                            │ ┌─────────────────────────────────┐
+                            └─┤ tablex-tunnel                   │
+                              │ (crates/tablex-tunnel)          │
+                              │                                 │
+                              │ SSH local port forwarding.      │
+                              │ Established before the driver   │
+                              │ connects, so drivers know       │
+                              │ nothing about SSH.              │
+                              └─────────────────────────────────┘
 ```
 
-**Why the core is a separate crate.** `tablepro-core` depends on no GUI toolkit, no
+**Why the core is a separate crate.** `tablex-core` depends on no GUI toolkit, no
 database, and not on Tauri. That buys three things: drivers can be tested headlessly in
 CI without launching a window; the same logic can back a future CLI or headless server
 without a rewrite; and the compile-fail boundary makes it impossible to accidentally leak
@@ -239,7 +248,8 @@ exhaust the client's memory.
 | **Database vs. SSH secrets** | Stored under distinct keychain entries so a database password and a key passphrase cannot overwrite each other. |
 | **Frontend privileges** | The Tauri capability allowlist (`src-tauri/capabilities/default.json`) grants the webview no filesystem, shell, or network access of its own. Every privileged action goes through a reviewed Rust command. |
 | **CSP** | `script-src 'self'` with no `unsafe-eval`, enforced in both `index.html` and `tauri.conf.json`. |
-| **SSH host keys** | Fingerprint recorded on first connect after user confirmation, then verified on every subsequent connect. |
+| **SSH host keys** | Verified on every connect against a stored fingerprint. There is **no trust-on-first-use**: a tunnel opens only once the fingerprint is known, so the user must first call `ssh_host_fingerprint` and confirm what the server presented. An unverified tunnel offers no protection against exactly the attacker a bastion exists to defend against. |
+| **SSH key material** | With agent authentication, no private key is ever loaded into this process — signing is delegated to the OS agent over a Unix socket or the Windows OpenSSH named pipe. |
 | **Accidental writes** | Connections carry a `read_only` flag enforced client-side regardless of database permissions, plus a color tag so production connections are visibly distinct. |
 | **Inline edits** | Built as parameterized `UPDATE`s keyed on the row's original values, and rolled back unless exactly one row is affected. |
 
@@ -293,8 +303,8 @@ xcode-select --install
 ### Run it
 
 ```bash
-git clone https://github.com/PhillipMwaniki/tablepro-x
-cd tablepro-x
+git clone https://github.com/PhillipMwaniki/table-x
+cd table-x
 
 pnpm install          # frontend dependencies
 pnpm app:dev          # build Rust, start Vite, open the app
@@ -315,9 +325,9 @@ Artifacts land in `target/release/bundle/` — `.msi` and `.exe` on Windows, `.d
 ## Project structure
 
 ```
-tablepro-x/
+table-x/
 ├── crates/
-│   ├── tablepro-core/           # Database-agnostic foundations. No Tauri, no GUI.
+│   ├── tablex-core/           # Database-agnostic foundations. No Tauri, no GUI.
 │   │   └── src/
 │   │       ├── value.rs         #   Dynamic value model  (Value, ValueKind)
 │   │       ├── driver.rs        #   Driver / Connection traits, Capabilities
@@ -327,7 +337,10 @@ tablepro-x/
 │   │       ├── error.rs         #   Error taxonomy and wire payload
 │   │       └── registry.rs      #   Driver registry
 │   │
-│   └── tablepro-drivers/        # One module per database, one Cargo feature each.
+│   ├── tablex-drivers/        # One module per database, one Cargo feature each.
+│   │   └── src/
+│   │
+│   └── tablex-tunnel/         # SSH local port forwarding.
 │       └── src/
 │
 ├── src-tauri/                   # Thin Tauri shell.
@@ -363,7 +376,7 @@ pnpm fmt                  # prettier
 
 # Rust
 cargo test --workspace    # all tests
-cargo test -p tablepro-core
+cargo test -p tablex-core
 cargo clippy --workspace --all-targets
 cargo fmt --all
 
@@ -379,15 +392,15 @@ test uses a real in-memory database rather than a mock.
 
 PostgreSQL splits in two. The decoding logic, where the subtle bugs live, is
 covered by unit tests that need no server and always run. The integration tests
-need a live server and are **skipped** unless `TABLEPRO_TEST_PG` is set:
+need a live server and are **skipped** unless `TABLEX_TEST_PG` is set:
 
 ```bash
 # macOS / Linux
-TABLEPRO_TEST_PG=postgres://user:password@localhost:5432/postgres cargo test -p tablepro-drivers
+TABLEX_TEST_PG=postgres://user:password@localhost:5432/postgres cargo test -p tablex-drivers
 
 # Windows PowerShell
-$env:TABLEPRO_TEST_PG = "postgres://user:password@localhost:5432/postgres"
-cargo test -p tablepro-drivers
+$env:TABLEX_TEST_PG = "postgres://user:password@localhost:5432/postgres"
+cargo test -p tablex-drivers
 ```
 
 They are skipped rather than failed when unset, because a missing database is a
@@ -397,19 +410,19 @@ reports `ok`, so when you need to confirm they really ran, check for skips
 explicitly:
 
 ```bash
-cargo test -p tablepro-drivers postgres::tests:: -- --nocapture | grep skipping
+cargo test -p tablex-drivers postgres::tests:: -- --nocapture | grep skipping
 ```
 
-These tests create and drop tables prefixed `tpx_`. Point them at a scratch
+These tests create and drop tables prefixed `tx_`. Point them at a scratch
 database, not one you care about.
 
 ### Logging
 
-Set `TABLEPRO_LOG` using `tracing-subscriber` filter syntax:
+Set `TABLEX_LOG` using `tracing-subscriber` filter syntax:
 
 ```bash
-TABLEPRO_LOG=tablepro=debug pnpm app:dev     # macOS / Linux
-$env:TABLEPRO_LOG="tablepro=debug"; pnpm app:dev   # Windows PowerShell
+TABLEX_LOG=tablex=debug pnpm app:dev     # macOS / Linux
+$env:TABLEX_LOG="tablex=debug"; pnpm app:dev   # Windows PowerShell
 ```
 
 ### Regenerating icons
@@ -421,12 +434,12 @@ pnpm tauri icon app-icon.png
 
 ## Writing a driver
 
-A driver implements two traits from `tablepro-core`. `Driver` is a stateless factory;
+A driver implements two traits from `tablex-core`. `Driver` is a stateless factory;
 `Connection` is one live session.
 
 ```rust
 use async_trait::async_trait;
-use tablepro_core::{
+use tablex_core::{
     config::ConnectionConfig,
     driver::{Capabilities, Connection, Driver, DriverInfo, FetchOptions, RowEdit},
     error::Result,
@@ -479,7 +492,7 @@ impl Driver for MyDriver {
 5. In `apply_edit`, verify exactly one row was affected and roll back otherwise.
 6. Map errors to specific `Error` variants — `Auth`, `Network`, `Query { position, code }` —
    so the UI can react correctly.
-7. Register the driver in `tablepro_drivers::registry()` behind its Cargo feature.
+7. Register the driver in `tablex_drivers::registry()` behind its Cargo feature.
 
 ## Platform support
 

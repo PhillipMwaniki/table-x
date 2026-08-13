@@ -5,7 +5,7 @@
 
 use super::*;
 use indexmap::IndexMap;
-use tablepro_core::{config::TlsConfig, Value};
+use tablex_core::{config::TlsConfig, Value};
 
 fn config() -> ConnectionConfig {
     ConnectionConfig {
@@ -246,7 +246,7 @@ async fn syntax_errors_are_categorized_as_query_errors() {
         .execute("SLECT 1", &FetchOptions::default())
         .await
         .expect_err("must fail");
-    assert_eq!(err.category(), tablepro_core::ErrorCategory::Query);
+    assert_eq!(err.category(), tablex_core::ErrorCategory::Query);
     // Retrying identical broken SQL is pointless; the UI must not offer it.
     assert!(!err.is_retryable());
 }
@@ -417,7 +417,7 @@ async fn apply_edit_refuses_a_row_with_no_key() {
         .await
         .expect_err("must refuse");
     // An empty WHERE clause would update every row in the table.
-    assert_eq!(err.category(), tablepro_core::ErrorCategory::Unsupported);
+    assert_eq!(err.category(), tablex_core::ErrorCategory::Unsupported);
 }
 
 #[tokio::test]
@@ -517,7 +517,7 @@ async fn missing_file_path_is_a_config_error() {
     cfg.file_path = None;
     // `Box<dyn Connection>` is not Debug, so `expect_err` is unavailable here.
     match SqliteDriver::new().connect(&cfg, None).await {
-        Err(e) => assert_eq!(e.category(), tablepro_core::ErrorCategory::Config),
+        Err(e) => assert_eq!(e.category(), tablex_core::ErrorCategory::Config),
         Ok(_) => panic!("connecting without a file path must fail"),
     }
 }

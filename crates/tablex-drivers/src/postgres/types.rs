@@ -10,7 +10,7 @@ use super::numeric;
 // `ArrayValues` iterates fallibly (each element can fail to decode independently),
 // so the trait must be in scope to call `next`.
 use postgres_protocol::types as pg;
-use tablepro_core::Value;
+use tablex_core::Value;
 use tokio_postgres::fallible_iterator::FallibleIterator;
 use tokio_postgres::types::{FromSql, Kind, Type};
 

@@ -1,0 +1,25 @@
+[package]
+name = "tablex-tunnel"
+description = "SSH local port forwarding for Table X"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+tablex-core.workspace = true
+
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+
+# `ring` rather than the default `aws-lc-rs` backend: aws-lc-sys compiles C and
+# assembly and hard-requires NASM on Windows, which would make a working NASM
+# install a prerequisite for every contributor and every CI runner. This matches
+# the rustls backend already chosen in tablex-drivers.
+russh = { version = "0.62", default-features = false, features = ["ring", "rsa", "flate2"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "io-util"] }

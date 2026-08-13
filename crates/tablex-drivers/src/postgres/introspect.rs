@@ -7,7 +7,7 @@
 
 use super::{map_err, OidMap};
 use std::collections::HashMap;
-use tablepro_core::{
+use tablex_core::{
     driver::CompletionScope,
     error::{Error, Result},
     schema::{ColumnDef, ForeignKeyDef, IndexDef, NodeKind, SchemaNode, TableDetail},
