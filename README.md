@@ -111,10 +111,11 @@ Milestone 1 ("core + power features") is the current target.
 |:---:|---|---|
 | ✅ | **Core type system** | Dynamic value model, error taxonomy, schema types, connection config. 26 unit tests. |
 | ✅ | **Driver contract** | `Driver`/`Connection` traits, capability negotiation, driver registry. |
-| ✅ | **App scaffold** | Tauri 2.11 + React 19 + Vite 8 + Tailwind 4, IPC handshake, icons for all 5 platforms. |
-| 🚧 | **PostgreSQL + SQLite drivers** | Dynamic row decoding, catalog introspection. |
-| ⬜ | **IPC + connection registry** | Live session management, paginated result delivery, cancellation. |
-| ⬜ | **Connection manager UI** | Per-driver forms, test-connection, OS keychain storage. |
+| ✅ | **App scaffold** | Tauri 2.11 + React 19 + Vite 8 + Tailwind 4, icons for all 5 platforms. |
+| ✅ | **SQLite driver** | Dynamic decoding by declared type, catalog introspection, guarded inline edits. 38 tests against a real engine. |
+| ✅ | **PostgreSQL driver** | Exact `NUMERIC`, column provenance, `pg_catalog` introspection, TLS via rustls. 45 tests, 18 against a live server. |
+| ✅ | **IPC + session registry** | 14 commands, per-session locking, atomic connection persistence, OS keychain. |
+| 🚧 | **Connection manager UI** | Per-driver forms, test-connection, connection list. |
 | ⬜ | **Schema browser** | Lazily expanded object tree. |
 | ⬜ | **SQL editor** | CodeMirror 6, schema-aware autocomplete, multi-cursor, themes. |
 | ⬜ | **Result grid** | Virtualized, inline editing, sorting, filtering, undo/redo. |
@@ -370,6 +371,37 @@ cargo fmt --all
 pnpm app:dev              # Rust + Vite + window, with hot reload on both sides
 pnpm app:build            # release bundle
 ```
+
+### Database tests
+
+SQLite tests run everywhere with no setup — the engine is compiled in, and every
+test uses a real in-memory database rather than a mock.
+
+PostgreSQL splits in two. The decoding logic, where the subtle bugs live, is
+covered by unit tests that need no server and always run. The integration tests
+need a live server and are **skipped** unless `TABLEPRO_TEST_PG` is set:
+
+```bash
+# macOS / Linux
+TABLEPRO_TEST_PG=postgres://user:password@localhost:5432/postgres cargo test -p tablepro-drivers
+
+# Windows PowerShell
+$env:TABLEPRO_TEST_PG = "postgres://user:password@localhost:5432/postgres"
+cargo test -p tablepro-drivers
+```
+
+They are skipped rather than failed when unset, because a missing database is a
+missing environment, not a broken driver — and a suite that fails on a fresh
+checkout trains people to ignore it. The tradeoff is that a skipped test still
+reports `ok`, so when you need to confirm they really ran, check for skips
+explicitly:
+
+```bash
+cargo test -p tablepro-drivers postgres::tests:: -- --nocapture | grep skipping
+```
+
+These tests create and drop tables prefixed `tpx_`. Point them at a scratch
+database, not one you care about.
 
 ### Logging
 
