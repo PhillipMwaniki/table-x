@@ -20,10 +20,17 @@ uuid.workspace = true
 chrono.workspace = true
 futures-util.workspace = true
 
+# `bundled` compiles SQLite from source rather than linking the system copy.
+# That keeps behaviour identical across Windows, Linux, macOS, iOS, and Android,
+# where the system SQLite versions differ by years.
+rusqlite = { version = "0.40", features = ["bundled", "column_decltype"], optional = true }
+
 [features]
 default = ["postgres", "sqlite"]
 postgres = []
-sqlite = []
+sqlite = ["dep:rusqlite"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }
+# Only for building ConnectionConfig fixtures in tests; not needed at runtime.
+indexmap.workspace = true

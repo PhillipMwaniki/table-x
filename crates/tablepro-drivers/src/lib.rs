@@ -7,6 +7,9 @@
 
 use tablepro_core::registry::DriverRegistry;
 
+#[cfg(feature = "sqlite")]
+pub mod sqlite;
+
 /// Build the registry of drivers compiled into this binary.
 ///
 /// Each driver registers itself here behind its Cargo feature, so the set of
@@ -15,7 +18,8 @@ pub fn registry() -> DriverRegistry {
     #[allow(unused_mut)]
     let mut reg = DriverRegistry::new();
 
-    // Drivers are added here as they land.
+    #[cfg(feature = "sqlite")]
+    reg.register(std::sync::Arc::new(sqlite::SqliteDriver::new()));
 
     reg
 }
