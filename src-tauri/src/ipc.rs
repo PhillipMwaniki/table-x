@@ -26,7 +26,7 @@ pub struct BackendInfo {
 }
 
 /// Handshake used by the frontend on boot.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn backend_info(state: tauri::State<'_, AppState>) -> BackendInfo {
     BackendInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),
@@ -35,7 +35,7 @@ pub fn backend_info(state: tauri::State<'_, AppState>) -> BackendInfo {
 }
 
 /// Full driver descriptors, used to render the connection form for a chosen driver.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn list_drivers(state: tauri::State<'_, AppState>) -> Vec<DriverInfo> {
     state.drivers.list()
 }
@@ -44,13 +44,13 @@ pub fn list_drivers(state: tauri::State<'_, AppState>) -> Vec<DriverInfo> {
 // Saved connections
 // ---------------------------------------------------------------------------
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn list_connections(state: tauri::State<'_, AppState>) -> IpcResult<Vec<ConnectionConfig>> {
     Ok(state.connections.lock().await.clone())
 }
 
 /// Ids of connections with a live session, so the UI can show which are open.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn open_connections(state: tauri::State<'_, AppState>) -> IpcResult<Vec<String>> {
     Ok(state.sessions.open_ids().await)
 }
@@ -61,7 +61,7 @@ pub async fn open_connections(state: tauri::State<'_, AppState>) -> IpcResult<Ve
 /// cannot end up in the JSON file by accident. Passing `None` leaves any existing
 /// keychain entry untouched, which is what lets the UI save an edited connection
 /// without re-prompting for the password.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn save_connection(
     state: tauri::State<'_, AppState>,
     config: ConnectionConfig,
@@ -92,7 +92,7 @@ pub async fn save_connection(
 }
 
 /// Delete a saved connection, its credentials, and any live session.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn delete_connection(state: tauri::State<'_, AppState>, id: String) -> IpcResult<()> {
     // Drop the live session first: leaving an open socket for a connection the
     // user just deleted would keep querying a database they can no longer see.
@@ -117,7 +117,7 @@ pub async fn delete_connection(state: tauri::State<'_, AppState>, id: String) ->
 // ---------------------------------------------------------------------------
 
 /// Open a session for a saved connection.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn connect(state: tauri::State<'_, AppState>, id: String) -> IpcResult<()> {
     let config = state.config_for(&id).await?;
     let driver = state.drivers.get(&config.driver)?;
@@ -132,7 +132,7 @@ pub async fn connect(state: tauri::State<'_, AppState>, id: String) -> IpcResult
 ///
 /// Takes the config directly rather than an id so it can validate a form the user
 /// has not saved yet.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn test_connection(
     state: tauri::State<'_, AppState>,
     config: ConnectionConfig,
@@ -160,7 +160,7 @@ pub async fn test_connection(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn disconnect(state: tauri::State<'_, AppState>, id: String) -> IpcResult<()> {
     state.sessions.remove(&id).await?;
     Ok(())
@@ -182,7 +182,7 @@ pub struct ExecuteRequest {
     pub timeout_secs: Option<u64>,
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn execute(
     state: tauri::State<'_, AppState>,
     request: ExecuteRequest,
@@ -211,7 +211,7 @@ pub async fn execute(
     Ok(guard.execute(&request.sql, &opts).await?)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn browse(
     state: tauri::State<'_, AppState>,
     connection_id: String,
@@ -222,7 +222,7 @@ pub async fn browse(
     Ok(guard.browse(parent.as_deref()).await?)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn table_detail(
     state: tauri::State<'_, AppState>,
     connection_id: String,
@@ -234,7 +234,7 @@ pub async fn table_detail(
     Ok(guard.table_detail(schema.as_deref(), &table).await?)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn apply_edit(
     state: tauri::State<'_, AppState>,
     connection_id: String,
@@ -253,7 +253,7 @@ pub async fn apply_edit(
     Ok(guard.apply_edit(&edit).await?)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn completion_scope(
     state: tauri::State<'_, AppState>,
     connection_id: String,

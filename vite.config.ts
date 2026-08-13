@@ -36,5 +36,17 @@ export default defineConfig({
     alias: {
       "@": new URL("./src", import.meta.url).pathname,
     },
+    // There is only one React on disk, but the dep optimizer can still end up
+    // with two *module instances*: react-dom gets Vite's optimized copy while a
+    // pre-bundled dependency reaches the raw CJS build. Two instances mean two
+    // hook dispatchers, and every hook call from that dependency throws
+    // "Invalid hook call". Deduping pins both to a single instance.
+    dedupe: ["react", "react-dom"],
+  },
+
+  optimizeDeps: {
+    // Optimize the React-consuming dependencies together so they share one
+    // pre-bundled React chunk rather than each resolving their own.
+    include: ["react", "react-dom", "react-dom/client", "zustand", "@tanstack/react-virtual"],
   },
 });

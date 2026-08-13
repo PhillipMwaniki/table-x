@@ -1,58 +1,119 @@
 /**
  * Application shell.
  *
- * The real layout (connection sidebar, schema tree, editor, result grid) lands
- * with the UI milestones. This scaffold exists to prove the Vite + Tauri + Tailwind
- * pipeline end to end and to surface the backend version over IPC.
+ * The sidebar is real; the main pane is a placeholder until the schema browser,
+ * editor, and result grid land.
  */
-import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 
-interface Backend {
-  version: string;
-  drivers: string[];
-}
+import { useEffect, useState } from "react";
+import { ConnectionList } from "./components/ConnectionList";
+import { ConnectionDialog } from "./components/ConnectionDialog";
+import { Banner, Button, Spinner } from "./components/ui/primitives";
+import { useConnections } from "./store/connections";
+import type { ConnectionConfig } from "./lib/types";
 
 export default function App() {
-  const [backend, setBackend] = useState<Backend | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const {
+    drivers,
+    connections,
+    open,
+    selectedId,
+    loading,
+    error,
+    init,
+    save,
+    clearError,
+  } = useConnections();
+
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editing, setEditing] = useState<ConnectionConfig | null>(null);
 
   useEffect(() => {
-    invoke<Backend>("backend_info")
-      .then(setBackend)
-      .catch((e: unknown) => setError(String(e)));
-  }, []);
+    void init();
+  }, [init]);
+
+  const selected = connections.find((c) => c.id === selectedId) ?? null;
 
   return (
     <div className="flex h-full flex-col bg-surface-0 text-text">
-      <header className="drag-region flex h-9 shrink-0 items-center border-b border-border bg-surface-1 px-3">
-        <span className="text-[12px] font-medium tracking-wide">TablePro X</span>
+      <header className="drag-region flex h-9 shrink-0 items-center gap-2 border-b border-border bg-surface-1 px-3">
+        <span className="text-[12px] font-semibold tracking-wide">TablePro X</span>
+        <span className="text-[11px] text-text-muted">
+          {open.size > 0 && `${open.size} connected`}
+        </span>
       </header>
 
-      <main className="flex flex-1 items-center justify-center">
-        <div className="text-center">
-          <h1 className="mb-1 text-lg font-semibold">TablePro X</h1>
-          <p className="mb-6 text-text-muted">
-            A fast, cross-platform database client for developers.
-          </p>
-
-          {error && (
-            <p className="font-mono text-danger" role="alert">
-              {error}
-            </p>
+      <div className="flex min-h-0 flex-1">
+        <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-surface-1">
+          {loading ? (
+            <div className="flex flex-1 items-center justify-center">
+              <Spinner className="text-text-muted" />
+            </div>
+          ) : (
+            <ConnectionList
+              onNew={() => {
+                setEditing(null);
+                setDialogOpen(true);
+              }}
+              onEdit={(config) => {
+                setEditing(config);
+                setDialogOpen(true);
+              }}
+            />
           )}
+        </aside>
 
-          {backend && (
-            <div className="font-mono text-[12px] text-text-muted">
-              <p>backend v{backend.version}</p>
-              <p>
-                {backend.drivers.length} driver
-                {backend.drivers.length === 1 ? "" : "s"}: {backend.drivers.join(", ") || "none"}
-              </p>
+        <main className="flex min-w-0 flex-1 flex-col">
+          {error && (
+            <div className="shrink-0 p-2">
+              <Banner tone="error" onDismiss={clearError}>
+                {error}
+              </Banner>
             </div>
           )}
-        </div>
-      </main>
+
+          <div className="flex flex-1 items-center justify-center p-6">
+            {selected ? (
+              <div className="text-center">
+                <h2 className="text-[13px] font-semibold">{selected.name}</h2>
+                <p className="mt-1 font-mono text-[11px] text-text-muted">
+                  {selected.driver}
+                </p>
+                <p className="mt-4 max-w-sm text-[12px] text-text-muted">
+                  {open.has(selected.id)
+                    ? "Connected. The schema browser, SQL editor, and result grid land in the next milestone."
+                    : "Not connected. Press ▶ in the sidebar, or double-click the connection."}
+                </p>
+              </div>
+            ) : (
+              <div className="text-center">
+                <h2 className="text-[13px] font-semibold">No connection selected</h2>
+                <p className="mt-1 max-w-sm text-[12px] text-text-muted">
+                  Select a connection from the sidebar, or create one to get started.
+                </p>
+                <Button
+                  variant="primary"
+                  className="mt-4"
+                  onClick={() => {
+                    setEditing(null);
+                    setDialogOpen(true);
+                  }}
+                >
+                  New connection
+                </Button>
+              </div>
+            )}
+          </div>
+        </main>
+      </div>
+
+      <ConnectionDialog
+        open={dialogOpen}
+        onClose={() => setDialogOpen(false)}
+        drivers={drivers}
+        editing={editing}
+        onSaved={save}
+      />
     </div>
   );
 }
