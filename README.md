@@ -115,6 +115,7 @@ Milestone 1 ("core + power features") is the current target.
 | ✅ | **SQLite driver** | Dynamic decoding by declared type, catalog introspection, guarded inline edits. 38 tests against a real engine. |
 | ✅ | **PostgreSQL driver** | Exact `NUMERIC`, column provenance, `pg_catalog` introspection, TLS via rustls. 45 tests, 18 against a live server. |
 | ✅ | **MySQL / MariaDB driver** | Exact `DECIMAL`, column provenance, `information_schema` introspection, TLS via rustls. 21 tests. |
+| ✅ | **SQL Server driver** | Exact `DECIMAL`, `sys.*` introspection, escaped-literal edits. Read-only results — tiberius exposes no column provenance. 24 tests. |
 | ✅ | **IPC + session registry** | 14 commands, per-session locking, atomic connection persistence, OS keychain. |
 | ✅ | **Connection manager UI** | Per-driver forms, test-connection, colour tags, read-only flag. |
 | ✅ | **Schema browser** | Lazily expanded object tree with per-node caching. |
@@ -124,7 +125,7 @@ Milestone 1 ("core + power features") is the current target.
 | ⬜ | **Query history** | Persisted, full-text searchable. |
 | ⬜ | **Multi-tab workspace** | Tabs, split panes, session restore. |
 | ⬜ | **CSV/JSON import-export** | Streaming, so file size is not bounded by RAM. |
-| ⬜ | **MSSQL, ClickHouse** | Rounding out to five drivers. |
+| ⬜ | **ClickHouse driver** | Rounding out to five drivers. |
 | ⬜ | **CI/CD + packaging** | MSI/NSIS, .dmg, .deb/.rpm/AppImage, mobile bundles. |
 
 Deliberately **out of scope** for milestone 1, and tracked for later: the third-party

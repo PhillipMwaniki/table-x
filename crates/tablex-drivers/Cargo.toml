@@ -46,8 +46,19 @@ mysql_async = { version = "0.37", optional = true, default-features = false, fea
     "chrono",
 ] }
 
+# `rustls` instead of the default `native-tls`, keeping one TLS stack across the
+# workspace. `tds73` enables the modern date/time types; without it DATE and
+# TIME come back as legacy DATETIME.
+tiberius = { version = "0.12", optional = true, default-features = false, features = [
+    "rustls",
+    "tds73",
+    "chrono",
+    "winauth",
+] }
+tokio-util = { workspace = true, optional = true, features = ["compat"] }
+
 [features]
-default = ["postgres", "sqlite", "mysql"]
+default = ["postgres", "sqlite", "mysql", "mssql"]
 postgres = [
     "dep:tokio-postgres",
     "dep:postgres-protocol",
@@ -57,6 +68,7 @@ postgres = [
 ]
 sqlite = ["dep:rusqlite"]
 mysql = ["dep:mysql_async"]
+mssql = ["dep:tiberius", "dep:tokio-util"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }

@@ -7,6 +7,8 @@
 
 use tablex_core::registry::DriverRegistry;
 
+#[cfg(feature = "mssql")]
+pub mod mssql;
 #[cfg(feature = "mysql")]
 pub mod mysql;
 #[cfg(feature = "postgres")]
@@ -22,6 +24,8 @@ pub fn registry() -> DriverRegistry {
     #[allow(unused_mut)]
     let mut reg = DriverRegistry::new();
 
+    #[cfg(feature = "mssql")]
+    reg.register(std::sync::Arc::new(mssql::MssqlDriver::new()));
     #[cfg(feature = "mysql")]
     reg.register(std::sync::Arc::new(mysql::MysqlDriver::new()));
     #[cfg(feature = "postgres")]
