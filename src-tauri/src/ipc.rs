@@ -57,15 +57,20 @@ pub async fn open_connections(state: tauri::State<'_, AppState>) -> IpcResult<Ve
 
 /// Create or update a saved connection.
 ///
-/// The secret is passed separately and never travels inside the config, so it
+/// Secrets are passed separately and never travel inside the config, so they
 /// cannot end up in the JSON file by accident. Passing `None` leaves any existing
 /// keychain entry untouched, which is what lets the UI save an edited connection
-/// without re-prompting for the password.
+/// without re-prompting for a password it never displayed; passing `Some("")`
+/// explicitly clears it.
+///
+/// The database credential and the SSH credential are stored under separate
+/// keychain entries, so saving one never overwrites the other.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn save_connection(
     state: tauri::State<'_, AppState>,
     config: ConnectionConfig,
     secret: Option<String>,
+    ssh_secret: Option<String>,
 ) -> IpcResult<()> {
     if config.id.trim().is_empty() {
         return Err(tablex_core::Error::Config("connection id is required".into()).into());
@@ -74,13 +79,8 @@ pub async fn save_connection(
         return Err(tablex_core::Error::UnknownDriver(config.driver.clone()).into());
     }
 
-    if let Some(secret) = secret {
-        if secret.is_empty() {
-            secrets::delete(&config.keychain_key())?;
-        } else {
-            secrets::set(&config.keychain_key(), &secret)?;
-        }
-    }
+    store_secret(&config.keychain_key(), secret)?;
+    store_secret(&config.ssh_keychain_key(), ssh_secret)?;
 
     let mut connections = state.connections.lock().await;
     match connections.iter_mut().find(|c| c.id == config.id) {
@@ -89,6 +89,87 @@ pub async fn save_connection(
     }
     state.store.save(&connections)?;
     Ok(())
+}
+
+/// What a submitted secret field means for the stored credential.
+///
+/// The three-way distinction is what stops an edit dialog from destroying a
+/// password it never displayed: the field starts empty either way, so "empty"
+/// alone cannot tell us whether the user wants it cleared or left alone.
+#[derive(Debug, PartialEq, Eq)]
+enum SecretAction {
+    /// The field was not touched — keep whatever is in the keychain.
+    Leave,
+    /// The field was explicitly emptied — remove the stored credential.
+    Clear,
+    /// The field holds a new value.
+    Replace,
+}
+
+fn secret_action(value: Option<&str>) -> SecretAction {
+    match value {
+        None => SecretAction::Leave,
+        Some("") => SecretAction::Clear,
+        Some(_) => SecretAction::Replace,
+    }
+}
+
+/// Apply a secret update to one keychain entry.
+fn store_secret(key: &str, value: Option<String>) -> IpcResult<()> {
+    match secret_action(value.as_deref()) {
+        SecretAction::Leave => Ok(()),
+        SecretAction::Clear => Ok(secrets::delete(key)?),
+        SecretAction::Replace => Ok(secrets::set(key, value.as_deref().unwrap_or_default())?),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_untouched_field_leaves_the_stored_secret_alone() {
+        // The edit dialog never receives the stored password, so its field is
+        // always empty on open. Treating that as "clear it" would silently
+        // destroy the credential every time a user renamed a connection.
+        assert_eq!(secret_action(None), SecretAction::Leave);
+    }
+
+    #[test]
+    fn an_explicitly_emptied_field_clears_the_stored_secret() {
+        assert_eq!(secret_action(Some("")), SecretAction::Clear);
+    }
+
+    #[test]
+    fn a_filled_field_replaces_the_stored_secret() {
+        assert_eq!(secret_action(Some("hunter2")), SecretAction::Replace);
+        // Whitespace is a legitimate secret, not an empty one.
+        assert_eq!(secret_action(Some(" ")), SecretAction::Replace);
+    }
+
+    #[test]
+    fn database_and_ssh_secrets_target_different_entries() {
+        use indexmap::IndexMap;
+        use tablex_core::config::TlsConfig;
+
+        let config = ConnectionConfig {
+            id: "abc".into(),
+            name: "n".into(),
+            driver: "postgres".into(),
+            host: None,
+            port: None,
+            database: None,
+            username: None,
+            file_path: None,
+            tls: TlsConfig::default(),
+            ssh: None,
+            color: None,
+            read_only: false,
+            options: IndexMap::new(),
+        };
+        // Saving a database password must never overwrite a key passphrase.
+        assert_ne!(config.keychain_key(), config.ssh_keychain_key());
+    }
 }
 
 /// Delete a saved connection, its credentials, and any live session.
@@ -139,6 +220,16 @@ pub async fn connect(state: tauri::State<'_, AppState>, id: String) -> IpcResult
 async fn establish_tunnel(
     config: &ConnectionConfig,
 ) -> IpcResult<(ConnectionConfig, Option<tablex_tunnel::Tunnel>)> {
+    establish_tunnel_with(config, None).await
+}
+
+/// As [`establish_tunnel`], but an explicit SSH secret takes priority over the
+/// stored one — used by "Test connection", where the credential may have been
+/// typed into the form and not saved yet.
+async fn establish_tunnel_with(
+    config: &ConnectionConfig,
+    ssh_secret: Option<String>,
+) -> IpcResult<(ConnectionConfig, Option<tablex_tunnel::Tunnel>)> {
     let Some(ssh) = &config.ssh else {
         return Ok((config.clone(), None));
     };
@@ -148,11 +239,18 @@ async fn establish_tunnel(
         tablex_core::Error::Config("a tunnelled connection needs a target port".into())
     })?;
 
-    // The SSH credential is stored separately from the database password, so a
-    // key passphrase and a database password never overwrite each other.
-    let ssh_secret = secrets::get(&config.ssh_keychain_key())?;
-    let tunnel =
-        tablex_tunnel::open(ssh, &target_host, target_port, ssh_secret.as_deref()).await?;
+    // The SSH credential lives under its own keychain entry, so a key passphrase
+    // and a database password never overwrite each other.
+    let stored;
+    let secret = match ssh_secret {
+        Some(ref s) if !s.is_empty() => Some(s.as_str()),
+        _ => {
+            stored = secrets::get(&config.ssh_keychain_key())?;
+            stored.as_deref()
+        }
+    };
+
+    let tunnel = tablex_tunnel::open(ssh, &target_host, target_port, secret).await?;
 
     let mut tunnelled = config.clone();
     tunnelled.host = Some("127.0.0.1".into());
@@ -178,6 +276,7 @@ pub async fn test_connection(
     state: tauri::State<'_, AppState>,
     config: ConnectionConfig,
     secret: Option<String>,
+    ssh_secret: Option<String>,
 ) -> IpcResult<()> {
     let driver = state.drivers.get(&config.driver)?;
 
@@ -194,8 +293,9 @@ pub async fn test_connection(
     };
 
     // Tunnel too, so "Test connection" exercises the same path a real connect
-    // takes rather than reporting success on a route that will not be used.
-    let (config, tunnel) = establish_tunnel(&config).await?;
+    // takes rather than reporting success on a route that will not be used —
+    // including the SSH credential typed into the form but not yet saved.
+    let (config, tunnel) = establish_tunnel_with(&config, ssh_secret).await?;
 
     let mut connection = driver.connect(&config, secret).await?;
     let result = connection.ping().await;

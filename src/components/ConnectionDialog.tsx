@@ -8,6 +8,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Dialog } from "./ui/Dialog";
+import { SshSection } from "./SshSection";
 import { Banner, Button, Checkbox, Field, Input, Select } from "./ui/primitives";
 import { ipc, IpcError } from "@/lib/ipc";
 import type { ConnectionConfig, DriverInfo, TlsMode } from "@/lib/types";
@@ -53,12 +54,13 @@ export function ConnectionDialog({
   drivers: DriverInfo[];
   /** `null` creates a new connection. */
   editing: ConnectionConfig | null;
-  onSaved: (config: ConnectionConfig, secret?: string) => Promise<void>;
+  onSaved: (config: ConnectionConfig, secret?: string, sshSecret?: string) => Promise<void>;
 }) {
   const [config, setConfig] = useState<ConnectionConfig | null>(null);
   // `KEEP_EXISTING` distinguishes "the user did not touch the password field"
   // from "the user cleared it", which must delete the keychain entry.
   const [secret, setSecret] = useState<string | typeof KEEP_EXISTING>("");
+  const [sshSecret, setSshSecret] = useState<string | typeof KEEP_EXISTING>("");
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<{ tone: "error" | "success"; text: string } | null>(null);
@@ -71,9 +73,11 @@ export function ConnectionDialog({
     if (editing) {
       setConfig({ ...editing });
       setSecret(KEEP_EXISTING);
+      setSshSecret(KEEP_EXISTING);
     } else if (first) {
       setConfig(blankConfig(first));
       setSecret("");
+      setSshSecret("");
     }
     setResult(null);
   }, [open, editing, drivers]);
@@ -116,12 +120,13 @@ export function ConnectionDialog({
   const invalid = Boolean(nameError || targetError);
 
   const secretArg = () => (secret === KEEP_EXISTING ? undefined : secret);
+  const sshSecretArg = () => (sshSecret === KEEP_EXISTING ? undefined : sshSecret);
 
   const handleTest = async () => {
     setTesting(true);
     setResult(null);
     try {
-      await ipc.testConnection(config, secretArg());
+      await ipc.testConnection(config, secretArg(), sshSecretArg());
       setResult({ tone: "success", text: "Connected successfully." });
     } catch (e) {
       const err = e as IpcError;
@@ -140,7 +145,7 @@ export function ConnectionDialog({
     setSaving(true);
     setResult(null);
     try {
-      await onSaved({ ...config, name: config.name.trim() }, secretArg());
+      await onSaved({ ...config, name: config.name.trim() }, secretArg(), sshSecretArg());
       onClose();
     } catch (e) {
       // Stay open on failure so the user's input is not thrown away.
@@ -300,6 +305,17 @@ export function ConnectionDialog({
               </Select>
             </Field>
           </>
+        )}
+
+        {/* An embedded database is a local file — there is nothing to tunnel to. */}
+        {!driver.file_based && (
+          <SshSection
+            ssh={config.ssh}
+            onChange={(ssh) => patch({ ssh })}
+            secret={sshSecret === KEEP_EXISTING ? undefined : sshSecret}
+            onSecret={setSshSecret}
+            secretIsStored={Boolean(editing)}
+          />
         )}
 
         <div className="grid grid-cols-2 gap-3 border-t border-border pt-3">

@@ -76,21 +76,32 @@ export const ipc = {
   /**
    * Create or update a saved connection.
    *
-   * Pass `secret: undefined` to leave any existing keychain entry alone — that is
-   * what lets an edit dialog save without forcing the user to retype a password
-   * it never displayed. Pass `""` to explicitly clear the stored secret.
+   * Pass a secret as `undefined` to leave its existing keychain entry alone —
+   * that is what lets an edit dialog save without forcing the user to retype a
+   * password it never displayed. Pass `""` to explicitly clear it.
+   *
+   * `ssh_secret` is the SSH password or key passphrase, stored under a separate
+   * keychain entry so saving one credential never overwrites the other.
    */
-  saveConnection: (config: ConnectionConfig, secret?: string) =>
-    call<void>("save_connection", { config, secret: secret ?? null }),
+  saveConnection: (config: ConnectionConfig, secret?: string, sshSecret?: string) =>
+    call<void>("save_connection", {
+      config,
+      secret: secret ?? null,
+      ssh_secret: sshSecret ?? null,
+    }),
 
   deleteConnection: (id: string) => call<void>("delete_connection", { id }),
 
   connect: (id: string) => call<void>("connect", { id }),
   disconnect: (id: string) => call<void>("disconnect", { id }),
 
-  /** Validate a config that may not be saved yet. */
-  testConnection: (config: ConnectionConfig, secret?: string) =>
-    call<void>("test_connection", { config, secret: secret ?? null }),
+  /** Validate a config that may not be saved yet, tunnel included. */
+  testConnection: (config: ConnectionConfig, secret?: string, sshSecret?: string) =>
+    call<void>("test_connection", {
+      config,
+      secret: secret ?? null,
+      ssh_secret: sshSecret ?? null,
+    }),
 
   execute: (request: {
     connection_id: string;
