@@ -8,9 +8,11 @@
 import { useEffect, useState } from "react";
 import { ConnectionList } from "./components/ConnectionList";
 import { ConnectionDialog } from "./components/ConnectionDialog";
+import { SettingsDialog } from "./components/SettingsDialog";
 import { Workspace } from "./components/workspace/Workspace";
 import { Banner, Button, Spinner } from "./components/ui/primitives";
 import { useConnections } from "./store/connections";
+import { useSettings } from "./store/settings";
 import type { ConnectionConfig } from "./lib/types";
 
 export default function App() {
@@ -29,11 +31,30 @@ export default function App() {
   } = useConnections();
 
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [editing, setEditing] = useState<ConnectionConfig | null>(null);
+
+  const initSettings = useSettings((s) => s.init);
 
   useEffect(() => {
     void init();
-  }, [init]);
+    // Appearance is loaded alongside the connections rather than after them:
+    // it decides what the first paint looks like.
+    void initSettings();
+  }, [init, initSettings]);
+
+  // Ctrl+, is the settings shortcut everywhere else; there is no reason for
+  // this app to be the exception.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === ",") {
+        e.preventDefault();
+        setSettingsOpen((was) => !was);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const selected = connections.find((c) => c.id === selectedId) ?? null;
 
@@ -44,6 +65,17 @@ export default function App() {
         <span className="text-[11px] text-text-muted">
           {open.size > 0 && `${open.size} connected`}
         </span>
+
+        <div className="flex-1" />
+
+        <button
+          onClick={() => setSettingsOpen(true)}
+          title="Appearance (Ctrl+,)"
+          aria-label="Appearance settings"
+          className="no-drag flex size-6 items-center justify-center rounded text-[13px] text-text-muted hover:bg-surface-2 hover:text-text"
+        >
+          ⚙
+        </button>
       </header>
 
       <div className="flex min-h-0 flex-1">
@@ -131,6 +163,8 @@ export default function App() {
         editing={editing}
         onSaved={save}
       />
+
+      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   );
 }
