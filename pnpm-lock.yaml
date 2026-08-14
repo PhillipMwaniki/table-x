@@ -17,6 +17,9 @@ importers:
       '@codemirror/lang-sql':
         specifier: ^6.10.0
         version: 6.10.0
+      '@codemirror/language':
+        specifier: ^6.12.4
+        version: 6.12.4
       '@codemirror/search':
         specifier: ^6.5.11
         version: 6.7.1
@@ -26,6 +29,9 @@ importers:
       '@codemirror/view':
         specifier: ^6.38.6
         version: 6.43.8
+      '@lezer/highlight':
+        specifier: ^1.2.3
+        version: 1.2.3
       '@tanstack/react-virtual':
         specifier: ^3.14.9
         version: 3.14.9(react-dom@19.2.8(react@19.2.8))(react@19.2.8)

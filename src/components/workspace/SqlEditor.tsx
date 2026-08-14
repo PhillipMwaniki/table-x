@@ -25,6 +25,8 @@ import {
 import type { CompletionContext, CompletionResult } from "@codemirror/autocomplete";
 import { sql, PostgreSQL, MySQL, SQLite, StandardSQL } from "@codemirror/lang-sql";
 import type { SQLDialect } from "@codemirror/lang-sql";
+import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { tags } from "@lezer/highlight";
 import type { CompletionScope } from "@/lib/types";
 
 /** Map a driver id to its CodeMirror dialect, defaulting to standard SQL. */
@@ -40,6 +42,40 @@ function dialectFor(driver: string): SQLDialect {
       return StandardSQL;
   }
 }
+
+/**
+ * Syntax colours, drawn from the same tokens as the rest of the app so they
+ * follow whichever theme is active.
+ *
+ * Written against the design tokens rather than fixed hex values, and kept
+ * deliberately small: SQL has few lexical categories that matter, and colouring
+ * each one differently produces a rainbow that is harder to read than the plain
+ * text was. Keywords carry the structure, literals need to be distinguishable
+ * from identifiers at a glance, and comments recede.
+ */
+const highlighting = HighlightStyle.define([
+  { tag: tags.keyword, color: "var(--color-accent)", fontWeight: "600" },
+  // Operators and punctuation stay in body text: they are structure, but
+  // colouring them competes with the keywords for attention.
+  { tag: [tags.operator, tags.punctuation, tags.separator], color: "var(--color-text)" },
+  {
+    tag: [tags.string, tags.special(tags.string)],
+    // The same colour the grid tints text values with, so a literal in the
+    // editor and a value in the results read as the same kind of thing.
+    color: "var(--color-ok)",
+  },
+  { tag: [tags.number, tags.bool, tags.null], color: "var(--color-warn)" },
+  { tag: [tags.comment, tags.lineComment, tags.blockComment], color: "var(--color-text-muted)", fontStyle: "italic" },
+  { tag: [tags.function(tags.variableName), tags.function(tags.propertyName)], color: "var(--color-null)" },
+  // Type names appear in casts and DDL, which is exactly where you are checking
+  // them, so they get their own weight rather than their own colour.
+  { tag: [tags.typeName, tags.standard(tags.typeName)], color: "var(--color-text)", fontWeight: "600" },
+  // A quoted identifier is a name, not a string — colouring it as one would
+  // suggest "users" and 'users' mean the same thing, which is the single most
+  // expensive confusion in SQL.
+  { tag: [tags.quote, tags.escape], color: "var(--color-text)" },
+  { tag: tags.invalid, color: "var(--color-danger)" },
+]);
 
 /** Theme wired to the CSS custom properties, so it follows light/dark. */
 const theme = EditorView.theme({
@@ -183,6 +219,7 @@ export function SqlEditor({
           indentWithTab,
         ]),
         langCompartment.current.of(sql({ dialect: dialectFor(driver), upperCaseKeywords: true })),
+        syntaxHighlighting(highlighting),
         completionCompartment.current.of([]),
         theme,
         EditorView.lineWrapping,
