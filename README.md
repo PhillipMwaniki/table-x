@@ -112,7 +112,7 @@ Milestone 1 ("core + power features") is the current target.
 | ✅ | **Core type system** | Dynamic value model, error taxonomy, schema types, connection config. 26 unit tests. |
 | ✅ | **Driver contract** | `Driver`/`Connection` traits, capability negotiation, driver registry. |
 | ✅ | **App scaffold** | Tauri 2.11 + React 19 + Vite 8 + Tailwind 4, icons for all 5 platforms. |
-| ✅ | **SQLite driver** | Dynamic decoding by declared type, catalog introspection, guarded inline edits. 38 tests against a real engine. |
+| ✅ | **SQLite driver** | Dynamic decoding by declared type, catalog introspection, column provenance, guarded inline edits. 47 tests against a real engine. |
 | ✅ | **PostgreSQL driver** | Exact `NUMERIC`, column provenance, `pg_catalog` introspection, TLS via rustls. 45 tests, 18 against a live server. |
 | ✅ | **MySQL / MariaDB driver** | Exact `DECIMAL`, column provenance, `information_schema` introspection, TLS via rustls. 21 tests. |
 | ✅ | **SQL Server driver** | Exact `DECIMAL`, `sys.*` introspection, escaped-literal edits. Read-only results — tiberius exposes no column provenance. 24 tests. |

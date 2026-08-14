@@ -441,13 +441,156 @@ async fn apply_edit_matches_null_keys_with_is_null() {
 }
 
 #[tokio::test]
-async fn arbitrary_query_results_are_not_editable() {
+async fn a_plain_table_query_is_editable() {
     let mut conn = seeded().await;
-    // SQLite gives no column provenance, so the grid must stay read-only for
-    // ad-hoc SQL rather than guessing a target table.
     let rs = query(&mut conn, "SELECT id, email FROM users").await;
+
+    assert!(rs.editable);
+    assert_eq!(rs.key_columns, vec!["id".to_string()]);
+    let source = rs.columns[1].source.as_ref().expect("email has an origin");
+    assert_eq!(source.table, "users");
+    assert_eq!(source.column, "email");
+}
+
+#[tokio::test]
+async fn an_alias_does_not_hide_the_underlying_column() {
+    let mut conn = seeded().await;
+    // The label changes; the origin does not. Without this the UPDATE would set
+    // a column called `address`, which does not exist.
+    let rs = query(&mut conn, "SELECT id, email AS address FROM users").await;
+
+    assert!(rs.editable);
+    assert_eq!(rs.columns[1].name, "address");
+    assert_eq!(rs.columns[1].source.as_ref().expect("origin").column, "email");
+}
+
+#[tokio::test]
+async fn computed_columns_carry_no_origin() {
+    let mut conn = seeded().await;
+    let rs = query(&mut conn, "SELECT id, email, length(email) AS n FROM users").await;
+
+    // The stored columns stay editable; the expression is not something an
+    // UPDATE could ever target, and SQLite says so by reporting no origin.
+    assert!(rs.editable);
+    assert!(rs.columns[2].source.is_none());
+}
+
+#[tokio::test]
+async fn a_join_is_not_editable() {
+    let mut conn = seeded().await;
+    exec(
+        &mut conn,
+        "CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER REFERENCES users(id))",
+    )
+    .await;
+
+    // Two source tables means no single target for an UPDATE, so any edit would
+    // be a guess about which row the user meant.
+    let rs = query(
+        &mut conn,
+        "SELECT users.id, users.email, orders.id FROM users JOIN orders ON orders.user_id = users.id",
+    )
+    .await;
     assert!(!rs.editable);
     assert!(rs.key_columns.is_empty());
+}
+
+#[tokio::test]
+async fn an_aggregate_is_not_editable() {
+    let mut conn = seeded().await;
+    let rs = query(&mut conn, "SELECT count(*) AS n FROM users").await;
+    assert!(!rs.editable);
+    assert!(rs.key_columns.is_empty());
+}
+
+#[tokio::test]
+async fn a_projection_without_the_key_is_not_editable() {
+    let mut conn = seeded().await;
+    // The WHERE clause is built from key values the user can see. `id` was not
+    // selected, so there is nothing to address the row with.
+    let rs = query(&mut conn, "SELECT email FROM users").await;
+    assert!(!rs.editable);
+    assert!(rs.key_columns.is_empty());
+}
+
+#[tokio::test]
+async fn a_key_hidden_behind_an_alias_is_not_usable() {
+    let mut conn = seeded().await;
+    // `id` is in the projection but under another label, and the grid looks the
+    // key up by the name it displays. Treating `ident` as the key would build a
+    // WHERE clause naming a column the table does not have.
+    let rs = query(&mut conn, "SELECT id AS ident, email FROM users").await;
+    assert!(!rs.editable);
+}
+
+#[tokio::test]
+async fn a_table_without_a_primary_key_is_not_editable() {
+    let mut conn = seeded().await;
+    exec(&mut conn, "CREATE TABLE notes (body TEXT)").await;
+    exec(&mut conn, "INSERT INTO notes (body) VALUES ('hello')").await;
+
+    // SQLite would still have a rowid here, but it is not in the projection.
+    // Selecting it behind the user's back would key an UPDATE on a value they
+    // never saw and cannot check.
+    let rs = query(&mut conn, "SELECT body FROM notes").await;
+    assert!(!rs.editable);
+    assert!(rs.key_columns.is_empty());
+}
+
+#[tokio::test]
+async fn a_query_result_carries_everything_an_edit_needs() {
+    let mut conn = seeded().await;
+    let rs = query(&mut conn, "SELECT id, email FROM users ORDER BY id").await;
+
+    // Build the edit the way the grid does: the SET column from the origin, the
+    // WHERE values from the row on screen.
+    let source = rs.columns[1].source.clone().expect("origin");
+    let key_index = rs
+        .columns
+        .iter()
+        .position(|c| c.name == rs.key_columns[0])
+        .expect("key column is displayed");
+
+    conn.apply_edit(&RowEdit {
+        schema: source.schema,
+        table: source.table,
+        changes: vec![("email".into(), Value::Text("edited@example.com".into()))],
+        key: vec![(rs.key_columns[0].clone(), rs.rows[0][key_index].clone())],
+    })
+    .await
+    .expect("edit applies");
+
+    let after = query(&mut conn, "SELECT email FROM users WHERE id = 1").await;
+    assert_eq!(after.rows[0][0], Value::Text("edited@example.com".into()));
+}
+
+#[tokio::test]
+async fn a_view_reports_the_base_table_it_reads_from() {
+    let mut conn = seeded().await;
+    exec(
+        &mut conn,
+        "CREATE VIEW active_users AS SELECT id, email FROM users WHERE active = 1",
+    )
+    .await;
+
+    // The value lives in `users`, and that is the row an edit has to reach.
+    // Naming the view instead would produce an UPDATE against something that
+    // stores nothing.
+    let rs = query(&mut conn, "SELECT id, email FROM active_users").await;
+    assert!(rs.editable);
+    assert_eq!(rs.columns[1].source.as_ref().expect("origin").table, "users");
+
+    conn.apply_edit(&RowEdit {
+        schema: None,
+        table: "users".into(),
+        changes: vec![("email".into(), Value::Text("via-view@example.com".into()))],
+        key: vec![("id".into(), Value::Int(1))],
+    })
+    .await
+    .expect("edit through the view's base table applies");
+
+    let after = query(&mut conn, "SELECT email FROM users WHERE id = 1").await;
+    assert_eq!(after.rows[0][0], Value::Text("via-view@example.com".into()));
 }
 
 #[tokio::test]
@@ -528,8 +671,11 @@ fn driver_advertises_only_what_it_implements() {
     assert_eq!(info.id, "sqlite");
     assert!(info.file_based);
     assert!(info.capabilities.transactions);
+    // Requires SQLITE_ENABLE_COLUMN_METADATA, which this build compiles in. If
+    // the rusqlite `column_metadata` feature is ever dropped, every result
+    // silently becomes read-only, so the claim is pinned here.
+    assert!(info.capabilities.column_provenance);
     // Deliberately unsupported — see the comment on `info()`.
-    assert!(!info.capabilities.column_provenance);
     assert!(!info.capabilities.schemas);
     assert!(!info.capabilities.cancel);
 }

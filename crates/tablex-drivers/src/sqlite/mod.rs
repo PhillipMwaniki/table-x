@@ -15,7 +15,7 @@ use tablex_core::{
         PlaceholderStyle, RowEdit,
     },
     error::{Error, Result},
-    result::{Column, QueryOutcome, ResultSet, StatementResult},
+    result::{Column, ColumnSource, QueryOutcome, ResultSet, StatementResult},
     schema::{ColumnDef, ForeignKeyDef, IndexDef, NodeKind, SchemaNode, TableDetail},
     sql::{quote_ident, split_statements},
 };
@@ -51,13 +51,14 @@ impl Driver for SqliteDriver {
                 explain: true,
                 foreign_keys: true,
                 views: true,
-                // SQLite has no schemas (attached databases are a different concept),
-                // and rusqlite does not expose per-column origin metadata without
-                // SQLITE_ENABLE_COLUMN_METADATA, so arbitrary queries carry no
-                // provenance and are not inline-editable. Browsing a table is,
-                // because that path knows the table it asked for.
+                // SQLite has no schemas; attached databases are a different
+                // concept and are not modelled as one.
                 schemas: false,
-                column_provenance: false,
+                // Available because this build compiles in
+                // SQLITE_ENABLE_COLUMN_METADATA — see the rusqlite features in
+                // Cargo.toml. Columns that are expressions rather than stored
+                // values still report no origin, which is exactly right.
+                column_provenance: true,
                 stored_procedures: false,
                 cancel: false,
                 streaming: false,
@@ -215,13 +216,7 @@ impl Connection for SqliteConnection {
         let table = table.to_string();
         self.with_conn(move |conn| {
             let columns = table_columns(conn, &table)?;
-            let primary_key = columns
-                .iter()
-                .filter(|c| c.ordinal > 0)
-                .filter_map(|c| pk_position(conn, &table, &c.name).map(|pos| (pos, c.name.clone())))
-                .collect::<std::collections::BTreeMap<_, _>>()
-                .into_values()
-                .collect::<Vec<_>>();
+            let primary_key = primary_key(conn, &table);
 
             Ok(TableDetail {
                 schema: None,
@@ -381,17 +376,45 @@ fn run_one(
         });
     }
 
-    let columns: Vec<Column> = stmt
-        .columns()
-        .iter()
-        .map(|c| Column {
-            name: c.name().to_string(),
-            type_name: c.decl_type().unwrap_or("").to_string(),
-            nullable: None,
-            // See `Capabilities::column_provenance` — not available here.
-            source: None,
-        })
-        .collect();
+    // Declared types and origins come from two different rusqlite calls over the
+    // same prepared statement, zipped by column position.
+    let columns: Vec<Column> = {
+        let decls = stmt.columns();
+        stmt.columns_with_metadata()
+            .into_iter()
+            .enumerate()
+            .map(|(i, meta)| Column {
+                name: meta.name().to_string(),
+                type_name: decls
+                    .get(i)
+                    .and_then(|c| c.decl_type())
+                    .unwrap_or("")
+                    .to_string(),
+                nullable: None,
+                // SQLite reports an origin only for columns that are stored
+                // values. An expression, a literal, or an aggregate has none,
+                // which is what keeps computed columns out of an UPDATE.
+                //
+                // Through a view this is the *base* table, which is the honest
+                // answer: that is where the value actually lives, and it is the
+                // row an edit has to reach. A view over a join reports several
+                // tables and so stays read-only.
+                source: meta.table_name().zip(meta.origin_name()).map(|(t, c)| {
+                    ColumnSource {
+                        // Attached databases are not modelled as schemas here,
+                        // so the database name is deliberately dropped.
+                        schema: None,
+                        table: t.to_string(),
+                        column: c.to_string(),
+                    }
+                }),
+            })
+            .collect()
+    };
+
+    // An edit needs a key as well as an origin: without one the UPDATE's WHERE
+    // clause cannot address exactly one row.
+    let key_columns = edit_key_for(conn, &columns);
 
     // Precompute affinities once rather than per cell.
     let affinities: Vec<Affinity> = columns
@@ -437,10 +460,58 @@ fn run_one(
         rows: rows_out,
         truncated,
         editable: false,
-        key_columns: Vec::new(),
+        key_columns,
     };
     rs.recompute_editable();
     Ok(StatementResult::Rows(rs))
+}
+
+/// The key an inline edit would use, or empty when the result cannot be edited.
+///
+/// Two conditions, both necessary. Every column that has an origin must share
+/// one source table, since an UPDATE has a single target. And the whole primary
+/// key must appear in the projection under its own name: the WHERE clause is
+/// built from the key values the user can see, so a key that was aliased away or
+/// never selected cannot be sent back.
+fn edit_key_for(conn: &rusqlite::Connection, columns: &[Column]) -> Vec<String> {
+    let mut sources = columns.iter().filter_map(|c| c.source.as_ref());
+    let Some(first) = sources.next() else {
+        return Vec::new();
+    };
+    if !sources.all(|s| s.table == first.table) {
+        return Vec::new();
+    }
+
+    let pk = primary_key(conn, &first.table);
+    if !pk.is_empty() && pk.iter().all(|k| columns.iter().any(|c| &c.name == k)) {
+        pk
+    } else {
+        // No declared primary key. SQLite would still have a rowid for most
+        // tables, but it is not in the projection and selecting it behind the
+        // user's back would key an UPDATE on a value they never saw.
+        Vec::new()
+    }
+}
+
+/// Primary key column names in key order, empty when the table declares none.
+fn primary_key(conn: &rusqlite::Connection, table: &str) -> Vec<String> {
+    let sql = format!("PRAGMA table_info({})", quote_ident(table, QUOTE));
+    let Ok(mut stmt) = conn.prepare(&sql) else {
+        return Vec::new();
+    };
+    let Ok(rows) = stmt.query_map([], |r| {
+        // Column 5 is the 1-based position within the primary key, 0 when the
+        // column is not part of one.
+        Ok((r.get::<_, i32>(5)?, r.get::<_, String>(1)?))
+    }) else {
+        return Vec::new();
+    };
+
+    rows.filter_map(|r| r.ok())
+        .filter(|(position, _)| *position > 0)
+        .collect::<std::collections::BTreeMap<_, _>>()
+        .into_values()
+        .collect()
 }
 
 fn table_columns(conn: &rusqlite::Connection, table: &str) -> Result<Vec<ColumnDef>> {
@@ -463,21 +534,6 @@ fn table_columns(conn: &rusqlite::Connection, table: &str) -> Result<Vec<ColumnD
         })
         .map_err(map_err)?;
     rows.collect::<std::result::Result<_, _>>().map_err(map_err)
-}
-
-/// Position of a column in the primary key, or `None` if it is not part of one.
-fn pk_position(conn: &rusqlite::Connection, table: &str, column: &str) -> Option<i32> {
-    let sql = format!("PRAGMA table_info({})", quote_ident(table, QUOTE));
-    let mut stmt = conn.prepare(&sql).ok()?;
-    let mut rows = stmt.query([]).ok()?;
-    while let Ok(Some(row)) = rows.next() {
-        let name: String = row.get(1).ok()?;
-        let pk: i32 = row.get(5).ok()?;
-        if name == column && pk > 0 {
-            return Some(pk);
-        }
-    }
-    None
 }
 
 fn table_indexes(conn: &rusqlite::Connection, table: &str) -> Result<Vec<IndexDef>> {

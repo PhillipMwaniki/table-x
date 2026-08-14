@@ -23,7 +23,16 @@ futures-util.workspace = true
 # `bundled` compiles SQLite from source rather than linking the system copy.
 # That keeps behaviour identical across Windows, Linux, macOS, iOS, and Android,
 # where the system SQLite versions differ by years.
-rusqlite = { version = "0.40", features = ["bundled", "column_decltype"], optional = true }
+#
+# `column_metadata` compiles in SQLITE_ENABLE_COLUMN_METADATA, which is what
+# makes `sqlite3_column_table_name` and `sqlite3_column_origin_name` available.
+# Without it a result set cannot be traced back to its source table and every
+# result has to stay read-only.
+rusqlite = { version = "0.40", features = [
+    "bundled",
+    "column_decltype",
+    "column_metadata",
+], optional = true }
 
 tokio-postgres = { version = "0.7", optional = true, features = [
     "with-chrono-0_4",
