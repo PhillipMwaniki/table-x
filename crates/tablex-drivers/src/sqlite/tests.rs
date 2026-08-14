@@ -810,3 +810,147 @@ fn driver_advertises_only_what_it_implements() {
     assert!(!info.capabilities.schemas);
     assert!(!info.capabilities.cancel);
 }
+
+/// Collects what a stream hands over, so tests can assert on the pieces.
+#[derive(Default)]
+struct Collector {
+    columns: Vec<String>,
+    batches: Vec<usize>,
+    rows: Vec<Vec<Value>>,
+    /// Stop after this many rows, standing in for a cancelled export.
+    stop_after: Option<usize>,
+}
+
+impl tablex_core::driver::RowSink for Collector {
+    fn columns(&mut self, columns: &[tablex_core::result::Column]) -> Result<()> {
+        self.columns = columns.iter().map(|c| c.name.clone()).collect();
+        Ok(())
+    }
+
+    fn rows(&mut self, rows: &[Vec<Value>]) -> Result<()> {
+        if let Some(limit) = self.stop_after {
+            if self.rows.len() >= limit {
+                return Err(Error::Cancelled);
+            }
+        }
+        self.batches.push(rows.len());
+        self.rows.extend(rows.iter().cloned());
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn streaming_delivers_rows_in_batches_rather_than_all_at_once() {
+    let mut conn = connect().await;
+    exec(&mut conn, "CREATE TABLE nums (n INTEGER)").await;
+    // More than one batch, and not a multiple of it, so the last batch is short.
+    let count = tablex_core::driver::STREAM_BATCH * 2 + 3;
+    exec(
+        &mut conn,
+        &format!(
+            "WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n < {count}) \
+             INSERT INTO nums SELECT n FROM seq"
+        ),
+    )
+    .await;
+
+    let mut sink = Collector::default();
+    let opts = FetchOptions {
+        max_rows: None,
+        offset: 0,
+        timeout_secs: None,
+    };
+    let total = conn
+        .stream("SELECT n FROM nums ORDER BY n", &opts, &mut sink)
+        .await
+        .expect("stream");
+
+    assert_eq!(total, count as u64);
+    assert_eq!(sink.rows.len(), count);
+    assert_eq!(sink.columns, vec!["n".to_string()]);
+
+    // The point of the exercise: the rows arrived in pieces. One batch would
+    // mean the whole table was in memory at once, which is what streaming is
+    // for avoiding.
+    assert_eq!(sink.batches.len(), 3, "{:?}", sink.batches);
+    assert_eq!(sink.batches[0], tablex_core::driver::STREAM_BATCH);
+    assert_eq!(sink.batches[2], 3);
+
+    // In order, and every row present exactly once.
+    assert_eq!(sink.rows[0][0], Value::Int(1));
+    assert_eq!(sink.rows[count - 1][0], Value::Int(count as i64));
+}
+
+#[tokio::test]
+async fn a_sink_that_stops_stops_the_stream() {
+    let mut conn = connect().await;
+    exec(&mut conn, "CREATE TABLE nums (n INTEGER)").await;
+    let count = tablex_core::driver::STREAM_BATCH * 4;
+    exec(
+        &mut conn,
+        &format!(
+            "WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n < {count}) \
+             INSERT INTO nums SELECT n FROM seq"
+        ),
+    )
+    .await;
+
+    let mut sink = Collector {
+        stop_after: Some(tablex_core::driver::STREAM_BATCH),
+        ..Collector::default()
+    };
+    let opts = FetchOptions {
+        max_rows: None,
+        offset: 0,
+        timeout_secs: None,
+    };
+
+    let err = conn
+        .stream("SELECT n FROM nums ORDER BY n", &opts, &mut sink)
+        .await
+        .expect_err("the sink asked to stop");
+
+    // The sink's own error comes back, not a channel-closed error from the
+    // reader: a cancelled export must report cancellation, not plumbing.
+    assert!(matches!(err, Error::Cancelled), "{err}");
+    // And it stopped early rather than reading the rest of the table.
+    assert!(
+        sink.rows.len() < count,
+        "read {} of {count}",
+        sink.rows.len()
+    );
+}
+
+#[tokio::test]
+async fn streaming_honours_a_row_cap() {
+    let mut conn = seeded().await;
+    let mut sink = Collector::default();
+    let opts = FetchOptions {
+        max_rows: Some(1),
+        offset: 0,
+        timeout_secs: None,
+    };
+
+    let total = conn
+        .stream("SELECT id FROM users ORDER BY id", &opts, &mut sink)
+        .await
+        .expect("stream");
+
+    assert_eq!(total, 1);
+    assert_eq!(sink.rows.len(), 1);
+}
+
+#[tokio::test]
+async fn streaming_a_write_statement_is_refused() {
+    let mut conn = seeded().await;
+    let mut sink = Collector::default();
+    let err = conn
+        .stream(
+            "UPDATE users SET active = 1",
+            &FetchOptions::default(),
+            &mut sink,
+        )
+        .await
+        .expect_err("a write has no rows to stream");
+    assert!(err.to_string().contains("no rows"), "{err}");
+}

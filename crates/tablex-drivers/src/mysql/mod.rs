@@ -15,7 +15,7 @@ use tablex_core::{
     config::{ConnectionConfig, TlsMode},
     driver::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
-        PlaceholderStyle, RowEdit,
+        PlaceholderStyle, RowEdit, RowSink, STREAM_BATCH,
     },
     error::{is_connection_refused, root_cause, Error, Result},
     result::{Column, ColumnSource, QueryOutcome, ResultSet, StatementResult},
@@ -70,6 +70,41 @@ fn qualify(db: &str, name: &str) -> String {
     format!("{}.{}", quote_ident(db, QUOTE), quote_ident(name, QUOTE))
 }
 
+/// Column metadata as the protocol reports it.
+fn describe(meta: &[mysql_async::Column]) -> Vec<Column> {
+    meta.iter()
+        .map(|c| {
+            let table = c.org_table_str().to_string();
+            Column {
+                name: c.name_str().to_string(),
+                type_name: type_name(c),
+                nullable: Some(
+                    !c.flags()
+                        .contains(mysql_async::consts::ColumnFlags::NOT_NULL_FLAG),
+                ),
+                // An empty org_table means the column is computed, so there is
+                // nothing to edit.
+                source: (!table.is_empty()).then(|| ColumnSource {
+                    schema: Some(c.schema_str().to_string()).filter(|s| !s.is_empty()),
+                    table,
+                    column: c.org_name_str().to_string(),
+                }),
+            }
+        })
+        .collect()
+}
+
+/// One row, decoded against its column metadata.
+fn decode_row(row: &mysql_async::Row, meta: &[mysql_async::Column]) -> Vec<tablex_core::Value> {
+    meta.iter()
+        .enumerate()
+        .map(|(i, column)| {
+            let raw = row.as_ref(i).cloned().unwrap_or(mysql_async::Value::NULL);
+            types::decode(&raw, column)
+        })
+        .collect()
+}
+
 /// Catalogs that exist on every server and are noise for the user.
 const HIDDEN_SCHEMAS: &str = "'information_schema', 'performance_schema', 'mysql', 'sys'";
 
@@ -113,7 +148,8 @@ impl Driver for MysqlDriver {
                 // packet, so results can be traced to their source.
                 column_provenance: true,
                 cancel: false,
-                streaming: false,
+                // query_iter is a cursor over the wire, not a materialized set.
+                streaming: true,
                 placeholder_style: PlaceholderStyle::Question,
                 identifier_quote: QUOTE,
             },
@@ -206,6 +242,66 @@ impl Connection for MysqlConnection {
 
     async fn current_database(&mut self) -> Result<Option<String>> {
         Ok(self.default_db.clone())
+    }
+
+    /// Stream rows as the server sends them.
+    ///
+    /// `query_iter` hands back a cursor over the wire rather than a materialized
+    /// result, so rows are decoded and passed on in batches and nothing holds
+    /// the whole table. This is the path an export takes over a tunnel, where
+    /// the difference is the difference between working and not.
+    async fn stream(
+        &mut self,
+        sql: &str,
+        opts: &FetchOptions,
+        sink: &mut dyn RowSink,
+    ) -> Result<u64> {
+        let mut result = self.conn.query_iter(sql).await.map_err(map_err)?;
+
+        let Some(meta) = result.columns() else {
+            return Err(Error::Unsupported(
+                "that statement returns no rows to stream".into(),
+            ));
+        };
+        let meta = meta.to_vec();
+        let columns = describe(&meta);
+        sink.columns(&columns)?;
+
+        let cap = opts.max_rows.unwrap_or(usize::MAX);
+        let mut batch: Vec<Vec<tablex_core::Value>> = Vec::with_capacity(STREAM_BATCH);
+        let mut total = 0u64;
+        let mut failure: Option<Error> = None;
+
+        // `for_each` is the only consumer mysql_async offers that does not
+        // collect; the closure is synchronous, which is exactly why RowSink is
+        // synchronous too.
+        let outcome = result
+            .for_each(|row| {
+                if failure.is_some() || total as usize >= cap {
+                    return;
+                }
+                batch.push(decode_row(&row, &meta));
+                total += 1;
+                if batch.len() >= STREAM_BATCH {
+                    if let Err(e) = sink.rows(&batch) {
+                        failure = Some(e);
+                    }
+                    batch.clear();
+                }
+            })
+            .await;
+
+        // The stream is drained before any error is reported: leaving rows on
+        // the wire poisons the session for the next statement.
+        outcome.map_err(map_err)?;
+
+        if let Some(e) = failure {
+            return Err(e);
+        }
+        if !batch.is_empty() {
+            sink.rows(&batch)?;
+        }
+        Ok(total)
     }
 
     /// `SHOW CREATE ...`, which returns the statement as the server stored it.
@@ -481,27 +577,7 @@ impl MysqlConnection {
         };
         let meta = meta.to_vec();
 
-        let columns: Vec<Column> = meta
-            .iter()
-            .map(|c| {
-                let table = c.org_table_str().to_string();
-                Column {
-                    name: c.name_str().to_string(),
-                    type_name: type_name(c),
-                    nullable: Some(
-                        !c.flags()
-                            .contains(mysql_async::consts::ColumnFlags::NOT_NULL_FLAG),
-                    ),
-                    // An empty org_table means the column is computed, so there
-                    // is nothing to edit.
-                    source: (!table.is_empty()).then(|| ColumnSource {
-                        schema: Some(c.schema_str().to_string()).filter(|s| !s.is_empty()),
-                        table,
-                        column: c.org_name_str().to_string(),
-                    }),
-                }
-            })
-            .collect();
+        let columns = describe(&meta);
 
         let rows: Vec<mysql_async::Row> = result.collect().await.map_err(map_err)?;
 
@@ -512,15 +588,7 @@ impl MysqlConnection {
             .iter()
             .skip(opts.offset)
             .take(cap)
-            .map(|row| {
-                meta.iter()
-                    .enumerate()
-                    .map(|(i, column)| {
-                        let raw = row.as_ref(i).cloned().unwrap_or(mysql_async::Value::NULL);
-                        types::decode(&raw, column)
-                    })
-                    .collect()
-            })
+            .map(|row| decode_row(row, &meta))
             .collect();
 
         let key_columns = self.edit_key_for(&columns).await;

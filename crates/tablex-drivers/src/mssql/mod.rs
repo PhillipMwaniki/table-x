@@ -19,7 +19,7 @@ use tablex_core::{
     config::{ConnectionConfig, TlsMode},
     driver::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
-        PlaceholderStyle, RowEdit,
+        PlaceholderStyle, RowEdit, RowSink, STREAM_BATCH,
     },
     error::{Error, Result},
     result::{Column, QueryOutcome, ResultSet, StatementResult},
@@ -75,6 +75,22 @@ const FOLDERS: &[Folder] = &[
     },
 ];
 
+/// Column metadata as TDS reports it.
+///
+/// No source table: see the module docs — tiberius does not surface the one the
+/// protocol carries, which is why results here are read-only.
+fn describe(meta: &tiberius::ResultMetadata) -> Vec<Column> {
+    meta.columns()
+        .iter()
+        .map(|c| Column {
+            name: c.name().to_string(),
+            type_name: types::type_name(c.column_type()),
+            nullable: None,
+            source: None,
+        })
+        .collect()
+}
+
 /// `[db].[schema].[name]` — the three-part name that also works from another
 /// database, which is exactly the case the tree makes reachable.
 fn qualify(db: &str, schema: &str, name: &str) -> String {
@@ -122,7 +138,8 @@ impl Driver for MssqlDriver {
                 table_scripts: false,
                 column_provenance: false,
                 cancel: false,
-                streaming: false,
+                // QueryItems arrive as the server sends them.
+                streaming: true,
                 placeholder_style: PlaceholderStyle::AtP,
                 identifier_quote: QUOTE,
             },
@@ -236,6 +253,59 @@ impl Connection for MssqlConnection {
 
     async fn current_database(&mut self) -> Result<Option<String>> {
         Ok(Some(self.database.clone()))
+    }
+
+    /// Stream rows off the TDS stream.
+    ///
+    /// tiberius already yields `QueryItem`s as they arrive; the buffered path
+    /// collects them only because the grid wants a whole page at once. Here
+    /// they are decoded and handed on in batches, so nothing accumulates.
+    async fn stream(
+        &mut self,
+        sql: &str,
+        opts: &FetchOptions,
+        sink: &mut dyn RowSink,
+    ) -> Result<u64> {
+        let mut stream = self.client.simple_query(sql).await.map_err(map_err)?;
+
+        let cap = opts.max_rows.unwrap_or(usize::MAX);
+        let mut described = false;
+        let mut batch: Vec<Vec<tablex_core::Value>> = Vec::with_capacity(STREAM_BATCH);
+        let mut total = 0u64;
+
+        while let Some(item) = stream.next().await {
+            match item.map_err(map_err)? {
+                QueryItem::Metadata(meta) => {
+                    // A batch of statements can carry several metadata tokens;
+                    // the first describes the result being streamed.
+                    if !described {
+                        sink.columns(&describe(&meta))?;
+                        described = true;
+                    }
+                }
+                QueryItem::Row(row) => {
+                    if total as usize >= cap {
+                        break;
+                    }
+                    batch.push(row.cells().map(|(_, data)| types::decode(data)).collect());
+                    total += 1;
+                    if batch.len() >= STREAM_BATCH {
+                        sink.rows(&batch)?;
+                        batch.clear();
+                    }
+                }
+            }
+        }
+
+        if !described {
+            return Err(Error::Unsupported(
+                "that statement returns no rows to stream".into(),
+            ));
+        }
+        if !batch.is_empty() {
+            sink.rows(&batch)?;
+        }
+        Ok(total)
     }
 
     /// `OBJECT_DEFINITION` returns the module text as it was submitted.
@@ -450,18 +520,7 @@ impl MssqlConnection {
             match item.map_err(map_err)? {
                 QueryItem::Metadata(meta) => {
                     if columns.is_none() {
-                        columns = Some(
-                            meta.columns()
-                                .iter()
-                                .map(|c| Column {
-                                    name: c.name().to_string(),
-                                    type_name: types::type_name(c.column_type()),
-                                    nullable: None,
-                                    // See the module docs — not available.
-                                    source: None,
-                                })
-                                .collect(),
-                        );
+                        columns = Some(describe(&meta));
                     }
                 }
                 QueryItem::Row(row) => rows.push(row),

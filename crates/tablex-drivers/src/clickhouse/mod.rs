@@ -21,11 +21,12 @@
 mod types;
 
 use async_trait::async_trait;
+use futures_util::StreamExt;
 use tablex_core::{
     config::{ConnectionConfig, TlsMode},
     driver::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
-        PlaceholderStyle, RowEdit,
+        PlaceholderStyle, RowEdit, RowSink, STREAM_BATCH,
     },
     error::{Error, Result},
     result::{Column, QueryOutcome, ResultSet, StatementResult},
@@ -67,6 +68,11 @@ const FOLDERS: &[Folder] = &[
 /// `` `db`.`name` ``.
 fn qualify(db: &str, name: &str) -> String {
     format!("{}.{}", quote_ident(db, QUOTE), quote_ident(name, QUOTE))
+}
+
+/// A JSON string as text, for the name and type header lines.
+fn json_text(value: &serde_json::Value) -> String {
+    value.as_str().map(str::to_string).unwrap_or_default()
 }
 
 /// Databases that ship with every server and are noise for the user.
@@ -113,7 +119,9 @@ impl Driver for ClickhouseDriver {
                 // Each statement is its own HTTP request; the driver splits them.
                 multi_statement: true,
                 cancel: false,
-                streaming: false,
+                // JSONCompactEachRow is line-delimited, so rows decode as the
+                // response body arrives.
+                streaming: true,
                 placeholder_style: PlaceholderStyle::Question,
                 identifier_quote: QUOTE,
             },
@@ -231,6 +239,113 @@ impl Connection for ClickhouseConnection {
 
     async fn current_database(&mut self) -> Result<Option<String>> {
         Ok(Some(self.database.clone()))
+    }
+
+    /// Stream rows over the HTTP response body.
+    ///
+    /// The buffered path asks for `JSONCompact`, which is one JSON document:
+    /// the whole result has to arrive before any of it can be parsed. This asks
+    /// for `JSONCompactEachRowWithNamesAndTypes` instead, where the names are
+    /// the first line, the types the second, and every row a line of its own —
+    /// so rows decode as the bytes arrive and nothing accumulates.
+    async fn stream(
+        &mut self,
+        sql: &str,
+        opts: &FetchOptions,
+        sink: &mut dyn RowSink,
+    ) -> Result<u64> {
+        let response = self
+            .request(
+                sql,
+                opts.timeout_secs,
+                "JSONCompactEachRowWithNamesAndTypes",
+            )
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(map_http_error(status, &body));
+        }
+
+        let mut body = response.bytes_stream();
+        // A line can straddle a chunk boundary, so bytes accumulate until a
+        // newline appears rather than assuming one chunk is one line.
+        let mut pending: Vec<u8> = Vec::new();
+        let mut names: Option<Vec<String>> = None;
+        let mut types_of: Option<Vec<String>> = None;
+        let mut batch: Vec<Vec<tablex_core::Value>> = Vec::with_capacity(STREAM_BATCH);
+        let mut total = 0u64;
+        let cap = opts.max_rows.unwrap_or(usize::MAX);
+
+        while let Some(chunk) = body.next().await {
+            let chunk = chunk.map_err(|e| Error::Network(e.to_string()))?;
+            pending.extend_from_slice(&chunk);
+
+            while let Some(at) = pending.iter().position(|b| *b == b'\n') {
+                let line: Vec<u8> = pending.drain(..=at).collect();
+                let text = String::from_utf8_lossy(&line[..line.len() - 1]);
+                let text = text.trim();
+                if text.is_empty() {
+                    continue;
+                }
+
+                let parsed: Vec<serde_json::Value> = serde_json::from_str(text)
+                    .map_err(|e| Error::Other(format!("malformed row from ClickHouse: {e}")))?;
+
+                if names.is_none() {
+                    names = Some(parsed.iter().map(json_text).collect());
+                    continue;
+                }
+                if types_of.is_none() {
+                    let type_names: Vec<String> = parsed.iter().map(json_text).collect();
+                    let described: Vec<Column> = names
+                        .as_ref()
+                        .expect("names precede types")
+                        .iter()
+                        .zip(type_names.iter())
+                        .map(|(name, type_name)| Column {
+                            name: name.clone(),
+                            type_name: type_name.clone(),
+                            nullable: Some(type_name.starts_with("Nullable(")),
+                            // See the module docs: the metadata carries no
+                            // source table, which is why results are read-only.
+                            source: None,
+                        })
+                        .collect();
+                    sink.columns(&described)?;
+                    types_of = Some(type_names);
+                    continue;
+                }
+
+                if total as usize >= cap {
+                    break;
+                }
+                let type_names = types_of.as_ref().expect("types precede rows");
+                batch.push(
+                    parsed
+                        .iter()
+                        .zip(type_names.iter())
+                        .map(|(cell, ty)| types::decode(cell, ty))
+                        .collect(),
+                );
+                total += 1;
+                if batch.len() >= STREAM_BATCH {
+                    sink.rows(&batch)?;
+                    batch.clear();
+                }
+            }
+        }
+
+        if types_of.is_none() {
+            return Err(Error::Unsupported(
+                "that statement returns no rows to stream".into(),
+            ));
+        }
+        if !batch.is_empty() {
+            sink.rows(&batch)?;
+        }
+        Ok(total)
     }
 
     /// `SHOW CREATE`, which ClickHouse answers for both tables and functions.
@@ -469,6 +584,27 @@ impl ClickhouseConnection {
         sql: &str,
         timeout_secs: Option<u64>,
     ) -> Result<(String, types::Summary)> {
+        let response = self.request(sql, timeout_secs, "JSONCompact").await?;
+        let status = response.status();
+        let summary = types::Summary::from_headers(response.headers());
+        let body = response
+            .text()
+            .await
+            .map_err(|e| Error::Network(e.to_string()))?;
+
+        if !status.is_success() {
+            return Err(map_http_error(status, &body));
+        }
+        Ok((body, summary))
+    }
+
+    /// POST a statement, asking for `format` back.
+    async fn request(
+        &self,
+        sql: &str,
+        timeout_secs: Option<u64>,
+        format: &str,
+    ) -> Result<reqwest::Response> {
         let mut url = reqwest::Url::parse(&self.base)
             .map_err(|e| Error::Config(format!("invalid ClickHouse URL {}: {e}", self.base)))?;
         {
@@ -476,7 +612,7 @@ impl ClickhouseConnection {
             q.append_pair("database", &self.database);
             // Set as a parameter rather than appended to the SQL, so DDL and
             // INSERT — which reject a FORMAT clause — still work.
-            q.append_pair("default_format", "JSONCompact");
+            q.append_pair("default_format", format);
             // A JSON number is an IEEE double, so anything past 2^53 would lose
             // its low bits in transit. Asking the server to quote wide integers
             // is what keeps them exact.
@@ -494,7 +630,7 @@ impl ClickhouseConnection {
             .header("X-ClickHouse-Key", &self.password)
             .body(sql.to_string());
 
-        let response = request.send().await.map_err(|e| {
+        request.send().await.map_err(|e| {
             if e.is_timeout() {
                 Error::Timeout(timeout_secs.unwrap_or(0))
             } else if e.is_connect() {
@@ -502,19 +638,7 @@ impl ClickhouseConnection {
             } else {
                 Error::Network(e.to_string())
             }
-        })?;
-
-        let status = response.status();
-        let summary = types::Summary::from_headers(response.headers());
-        let body = response
-            .text()
-            .await
-            .map_err(|e| Error::Network(e.to_string()))?;
-
-        if !status.is_success() {
-            return Err(map_http_error(status, &body));
-        }
-        Ok((body, summary))
+        })
     }
 
     /// Run a query and return its first column as strings.

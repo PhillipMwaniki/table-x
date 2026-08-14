@@ -77,11 +77,14 @@ tokio-util = { workspace = true, optional = true, features = ["compat"] }
 # provider to the `rustls` dependency above, which is pinned to ring.
 # No `http2`: ClickHouse's HTTP interface is a plain request/response endpoint
 # with no multiplexing to gain from, and dropping it removes the whole h2 tree.
+# `stream` gives `bytes_stream()`, which is what lets an export decode rows as
+# the response body arrives rather than after all of it has.
 reqwest = { version = "0.13", optional = true, default-features = false, features = [
     "rustls-no-provider",
     "json",
     "gzip",
     "charset",
+    "stream",
 ] }
 
 [features]

@@ -540,6 +540,24 @@ pub async fn browse(
     Ok(nodes)
 }
 
+/// What the frontend asks for when exporting.
+///
+/// One struct rather than eight arguments: the command surface is already wide,
+/// and a positional list this long is a mis-ordering waiting to happen.
+#[derive(Deserialize)]
+pub struct ExportArgs {
+    /// Identifies this export in progress events and to `cancel_export`.
+    pub id: String,
+    pub connection_id: String,
+    /// The table's name as SQL should refer to it, quoted by the driver.
+    pub qualified: String,
+    #[serde(default)]
+    pub schema: Option<String>,
+    pub table: String,
+    pub format: tablex_core::export::Format,
+    pub path: String,
+}
+
 /// Write a table to a file as CSV, JSON, or SQL.
 ///
 /// The path comes from the frontend's save dialog; the writing happens here,
@@ -551,14 +569,17 @@ pub async fn browse(
 pub async fn export_table(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
-    id: String,
-    connection_id: String,
-    qualified: String,
-    schema: Option<String>,
-    table: String,
-    format: tablex_core::export::Format,
-    path: String,
+    request: ExportArgs,
 ) -> IpcResult<u64> {
+    let ExportArgs {
+        id,
+        connection_id,
+        qualified,
+        schema,
+        table,
+        format,
+        path,
+    } = request;
     let started = std::time::Instant::now();
     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     state

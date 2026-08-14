@@ -13,7 +13,7 @@ use tablex_core::{
     config::ConnectionConfig,
     driver::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
-        PlaceholderStyle, RowEdit,
+        PlaceholderStyle, RowEdit, RowSink, STREAM_BATCH,
     },
     error::{Error, Result},
     result::{Column, ColumnSource, QueryOutcome, ResultSet, StatementResult},
@@ -65,10 +65,12 @@ impl Driver for SqliteDriver {
                 // values still report no origin, which is exactly right.
                 // sqlite_master keeps the original CREATE text for every object.
                 table_scripts: true,
+                // The cursor is stepped a row at a time; nothing here holds a
+                // whole result set.
+                streaming: true,
                 column_provenance: true,
                 stored_procedures: false,
                 cancel: false,
-                streaming: false,
                 placeholder_style: PlaceholderStyle::Question,
                 identifier_quote: QUOTE,
             },
@@ -204,6 +206,67 @@ impl Connection for SqliteConnection {
         // The file path is the closest thing to a database name here, and the
         // UI already shows it. Reporting none keeps the database switcher off.
         Ok(None)
+    }
+
+    /// Stream rows straight off the statement.
+    ///
+    /// SQLite steps a cursor one row at a time, so the only thing that ever
+    /// held a whole result set in memory was this driver collecting it.
+    ///
+    /// rusqlite is synchronous, so the stepping happens on a blocking thread
+    /// and batches come back over a channel of capacity one. That capacity is
+    /// the point: the reader cannot run ahead of the writer, so a fast database
+    /// and a slow disk cannot pile rows up in between — which is the unbounded
+    /// buffer this whole exercise exists to remove.
+    async fn stream(
+        &mut self,
+        sql: &str,
+        opts: &FetchOptions,
+        sink: &mut dyn RowSink,
+    ) -> Result<u64> {
+        let conn = Arc::clone(&self.conn);
+        let sql = sql.to_string();
+        let max_rows = opts.max_rows;
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Chunk>(1);
+
+        let worker = tokio::task::spawn_blocking(move || {
+            let guard = conn
+                .lock()
+                .map_err(|_| Error::Other("SQLite connection mutex poisoned".into()))?;
+            stream_rows(&guard, &sql, max_rows, &tx)
+        });
+
+        let mut total = 0u64;
+        let mut failure: Option<Error> = None;
+        while let Some(chunk) = rx.recv().await {
+            let result = match chunk {
+                Chunk::Columns(columns) => sink.columns(&columns),
+                Chunk::Rows(rows) => {
+                    total += rows.len() as u64;
+                    sink.rows(&rows)
+                }
+            };
+            if let Err(e) = result {
+                // Dropping the receiver makes the next send fail, which is how
+                // the worker learns to stop reading a table nobody wants.
+                failure = Some(e);
+                break;
+            }
+        }
+        drop(rx);
+
+        let worker = worker
+            .await
+            .map_err(|e| Error::Other(format!("sqlite worker failed: {e}")))?;
+
+        match failure {
+            // The sink's failure is the real one: the worker's is only ever
+            // "the receiver went away", which is what the sink caused.
+            Some(e) => Err(e),
+            // The count the sink accepted, not the count the worker sent —
+            // they agree, and this is the one the caller can act on.
+            None => worker.map(|_| total),
+        }
     }
 
     /// SQLite stores the original text of every object in `sqlite_master`, so
@@ -381,6 +444,108 @@ impl Connection for SqliteConnection {
         })
         .await
     }
+}
+
+/// What the blocking reader sends back.
+enum Chunk {
+    Columns(Vec<Column>),
+    Rows(Vec<Vec<tablex_core::Value>>),
+}
+
+/// Step a statement, sending a batch at a time.
+///
+/// A failed send means the receiver is gone — the consumer stopped, or errored
+/// — so reading stops there rather than finishing a table nobody is reading.
+fn stream_rows(
+    conn: &rusqlite::Connection,
+    sql: &str,
+    max_rows: Option<usize>,
+    tx: &tokio::sync::mpsc::Sender<Chunk>,
+) -> Result<u64> {
+    let mut stmt = conn.prepare(sql).map_err(map_err)?;
+    if stmt.column_count() == 0 {
+        return Err(Error::Unsupported(
+            "that statement returns no rows to stream".into(),
+        ));
+    }
+
+    let columns = describe(&stmt);
+    let affinities = affinities_of(&columns);
+    if tx.blocking_send(Chunk::Columns(columns.clone())).is_err() {
+        return Ok(0);
+    }
+
+    let mut rows = stmt.query([]).map_err(map_err)?;
+    let mut batch: Vec<Vec<tablex_core::Value>> = Vec::with_capacity(STREAM_BATCH);
+    let mut total = 0u64;
+
+    while let Some(row) = rows.next().map_err(map_err)? {
+        if max_rows.is_some_and(|cap| total as usize >= cap) {
+            break;
+        }
+        let mut values = Vec::with_capacity(columns.len());
+        for (i, col) in columns.iter().enumerate() {
+            let raw = row.get_ref(i).map_err(map_err)?;
+            values.push(types::decode(raw, affinities[i], &col.type_name));
+        }
+        batch.push(values);
+        total += 1;
+
+        if batch.len() >= STREAM_BATCH {
+            if tx
+                .blocking_send(Chunk::Rows(std::mem::take(&mut batch)))
+                .is_err()
+            {
+                return Ok(total);
+            }
+            batch = Vec::with_capacity(STREAM_BATCH);
+        }
+    }
+
+    if !batch.is_empty() {
+        let _ = tx.blocking_send(Chunk::Rows(batch));
+    }
+    Ok(total)
+}
+
+/// Column metadata for a prepared statement.
+fn describe(stmt: &rusqlite::Statement<'_>) -> Vec<Column> {
+    let decls = stmt.columns();
+    stmt.columns_with_metadata()
+        .into_iter()
+        .enumerate()
+        .map(|(i, meta)| Column {
+            name: meta.name().to_string(),
+            type_name: decls
+                .get(i)
+                .and_then(|c| c.decl_type())
+                .unwrap_or("")
+                .to_string(),
+            nullable: None,
+            source: meta
+                .table_name()
+                .zip(meta.origin_name())
+                .map(|(t, c)| ColumnSource {
+                    schema: None,
+                    table: t.to_string(),
+                    column: c.to_string(),
+                }),
+        })
+        .collect()
+}
+
+/// Type affinities, computed once rather than per cell.
+fn affinities_of(columns: &[Column]) -> Vec<Affinity> {
+    columns
+        .iter()
+        .map(|c| {
+            Affinity::from_decltype(if c.type_name.is_empty() {
+                None
+            } else {
+                Some(&c.type_name)
+            })
+        })
+        .collect()
 }
 
 /// Execute one statement and shape its result.

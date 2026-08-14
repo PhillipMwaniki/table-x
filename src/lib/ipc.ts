@@ -147,13 +147,15 @@ export const ipc = {
     path: string;
   }) =>
     call<number>("export_table", {
-      id: args.id,
-      connection_id: args.connection_id,
-      qualified: args.qualified,
-      schema: args.schema ?? null,
-      table: args.table,
-      format: args.format,
-      path: args.path,
+      request: {
+        id: args.id,
+        connection_id: args.connection_id,
+        qualified: args.qualified,
+        schema: args.schema ?? null,
+        table: args.table,
+        format: args.format,
+        path: args.path,
+      },
     }),
 
   /** Ask a running export to stop at its next batch boundary. */

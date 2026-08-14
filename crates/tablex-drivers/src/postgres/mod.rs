@@ -11,11 +11,12 @@ mod types;
 use async_trait::async_trait;
 use std::collections::HashMap;
 
+use futures_util::StreamExt;
 use tablex_core::{
     config::{ConnectionConfig, TlsMode},
     driver::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
-        PlaceholderStyle, RowEdit,
+        PlaceholderStyle, RowEdit, RowSink, STREAM_BATCH,
     },
     error::{Error, Result},
     result::{Column, ColumnSource, QueryOutcome, ResultSet, StatementResult},
@@ -67,7 +68,8 @@ impl Driver for PostgresDriver {
                 // that belongs with the connection registry, so it is not
                 // advertised until it is actually wired up.
                 cancel: false,
-                streaming: false,
+                // query_raw yields rows as the server sends them.
+                streaming: true,
                 placeholder_style: PlaceholderStyle::Dollar,
                 identifier_quote: QUOTE,
             },
@@ -220,6 +222,82 @@ impl Connection for PostgresConnection {
         introspect::definition(&self.client, node_id).await
     }
 
+    /// Stream rows off a portal.
+    ///
+    /// `query_raw` returns a `RowStream` rather than a Vec, and — given a
+    /// portal-backed statement — the server sends rows in chunks as the client
+    /// consumes them. The buffered path calls `query`, which is the same thing
+    /// with a `collect()` on the end; that is right for the grid and wrong for
+    /// an export.
+    async fn stream(
+        &mut self,
+        sql: &str,
+        opts: &FetchOptions,
+        sink: &mut dyn RowSink,
+    ) -> Result<u64> {
+        let stmt = self.client.prepare(sql).await.map_err(map_err)?;
+        if stmt.columns().is_empty() {
+            return Err(Error::Unsupported(
+                "that statement returns no rows to stream".into(),
+            ));
+        }
+
+        // Provenance is resolved before streaming starts: the lookup is a query
+        // of its own, and running one while a row stream is open would need a
+        // second connection.
+        let oids: Vec<u32> = stmt
+            .columns()
+            .iter()
+            .filter_map(|c| c.table_oid())
+            .filter(|oid| !self.type_cache.contains_key(oid))
+            .collect();
+        if !oids.is_empty() {
+            let resolved = introspect::resolve_table_oids(&self.client, &oids).await?;
+            self.type_cache.extend(resolved);
+        }
+        sink.columns(&self.describe(&stmt))?;
+
+        let params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
+        let stream = self
+            .client
+            .query_raw(&stmt, params)
+            .await
+            .map_err(map_err)?;
+        futures_util::pin_mut!(stream);
+
+        let cap = opts.max_rows.unwrap_or(usize::MAX);
+        let mut batch: Vec<Vec<tablex_core::Value>> = Vec::with_capacity(STREAM_BATCH);
+        let mut total = 0u64;
+
+        while let Some(row) = stream.next().await {
+            let row = row.map_err(map_err)?;
+            if total as usize >= cap {
+                break;
+            }
+            batch.push(
+                stmt.columns()
+                    .iter()
+                    .enumerate()
+                    .map(|(i, col)| {
+                        let raw: types::Raw = row.get(i);
+                        types::decode(raw.0.as_deref(), col.type_())
+                    })
+                    .collect(),
+            );
+            total += 1;
+
+            if batch.len() >= STREAM_BATCH {
+                sink.rows(&batch)?;
+                batch.clear();
+            }
+        }
+
+        if !batch.is_empty() {
+            sink.rows(&batch)?;
+        }
+        Ok(total)
+    }
+
     // `use_database` is deliberately left at its default error. A PostgreSQL
     // connection is bound to one database by the startup packet and there is no
     // in-session equivalent of `USE`; the app layer reconnects instead.
@@ -340,6 +418,30 @@ impl Connection for PostgresConnection {
 }
 
 impl PostgresConnection {
+    /// Column metadata, with provenance resolved from the OID cache.
+    ///
+    /// `name()` is the output label, which respects aliases; for editing we want
+    /// the underlying column, and for a plain projection they are the same.
+    fn describe(&self, stmt: &tokio_postgres::Statement) -> Vec<Column> {
+        stmt.columns()
+            .iter()
+            .map(|c| Column {
+                name: c.name().to_string(),
+                type_name: c.type_().name().to_string(),
+                nullable: None,
+                source: c.table_oid().and_then(|oid| {
+                    self.type_cache
+                        .get(&oid)
+                        .map(|(schema, table)| ColumnSource {
+                            schema: Some(schema.clone()),
+                            table: table.clone(),
+                            column: c.name().to_string(),
+                        })
+                }),
+            })
+            .collect()
+    }
+
     async fn run_one(&mut self, sql: &str, opts: &FetchOptions) -> Result<StatementResult> {
         // Preparing first gives column metadata (including provenance) and tells
         // us whether the statement returns rows at all. Sniffing the leading
@@ -366,27 +468,7 @@ impl PostgresConnection {
             self.type_cache.extend(resolved);
         }
 
-        let columns: Vec<Column> = stmt
-            .columns()
-            .iter()
-            .map(|c| Column {
-                name: c.name().to_string(),
-                type_name: c.type_().name().to_string(),
-                nullable: None,
-                source: c.table_oid().and_then(|oid| {
-                    self.type_cache
-                        .get(&oid)
-                        .map(|(schema, table)| ColumnSource {
-                            schema: Some(schema.clone()),
-                            table: table.clone(),
-                            // `name()` is the output label, which respects aliases;
-                            // for editing we want the underlying column, and for a
-                            // plain projection they are the same.
-                            column: c.name().to_string(),
-                        })
-                }),
-            })
-            .collect();
+        let columns = self.describe(&stmt);
 
         let rows = self.client.query(&stmt, &[]).await.map_err(map_err)?;
 

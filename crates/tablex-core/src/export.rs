@@ -66,7 +66,7 @@ impl<W: Write> Writer<W> {
                     .join(",");
                 writeln!(self.sink, "{header}")
             }
-            Format::Json => write!(self.sink, "[\n"),
+            Format::Json => writeln!(self.sink, "["),
             // The SQL writer names its columns on every statement instead, so
             // the file survives a table whose column order later changes.
             Format::Sql => Ok(()),
@@ -85,7 +85,7 @@ impl<W: Write> Writer<W> {
                     // valid the moment the last batch is written — no rewinding
                     // to remove a trailing comma.
                     if self.rows_written > 0 {
-                        write!(self.sink, ",\n")?;
+                        writeln!(self.sink, ",")?;
                     }
                     let fields = self
                         .columns

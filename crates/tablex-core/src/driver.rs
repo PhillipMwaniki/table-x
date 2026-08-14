@@ -7,7 +7,7 @@
 use crate::{
     config::ConnectionConfig,
     error::Result,
-    result::QueryOutcome,
+    result::{Column, QueryOutcome},
     schema::{SchemaNode, TableDetail},
     value::Value,
 };
@@ -98,6 +98,27 @@ pub struct DriverInfo {
     pub capabilities: Capabilities,
 }
 
+/// Receives a result set in pieces as a driver reads it.
+///
+/// Both methods return [`Result`], and that is the point: returning an error
+/// stops the stream at the next batch. It is how an export that the user
+/// cancelled stops without the driver knowing anything about cancellation, and
+/// how a full disk stops one without reading the rest of the table first.
+pub trait RowSink: Send {
+    /// Called once, before any rows. A driver knows its columns only after the
+    /// server has answered, which is why this is not a constructor argument.
+    fn columns(&mut self, columns: &[Column]) -> Result<()>;
+
+    /// Called repeatedly, with whatever the driver has read since last time.
+    fn rows(&mut self, rows: &[Vec<Value>]) -> Result<()>;
+}
+
+/// Rows a streaming driver gathers before handing them over.
+///
+/// Small enough that memory stays flat and progress moves visibly; large enough
+/// that the per-batch overhead disappears against the cost of reading rows.
+pub const STREAM_BATCH: usize = 1_000;
+
 /// How many rows to fetch, and from where. The row cap is what keeps a careless
 /// `SELECT * FROM events` from pulling 40 million rows into memory.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -185,6 +206,36 @@ pub trait Connection: Send + Sync {
     /// such a concept.
     async fn current_database(&mut self) -> Result<Option<String>> {
         Ok(None)
+    }
+
+    /// Read a result set in pieces, handing each piece to `sink` as it arrives.
+    ///
+    /// This is what an export uses. `execute` materializes a whole result set,
+    /// which is right for the grid — it shows a capped page and needs it all at
+    /// once — and wrong for writing a hundred million rows to a file.
+    ///
+    /// The default implementation calls `execute` and pushes the result as a
+    /// single batch, so a driver that has not implemented streaming still works,
+    /// just without the memory bound. `Capabilities::streaming` says which is
+    /// which.
+    ///
+    /// Returns the number of rows handed to the sink.
+    async fn stream(
+        &mut self,
+        sql: &str,
+        opts: &FetchOptions,
+        sink: &mut dyn RowSink,
+    ) -> Result<u64> {
+        let outcome = self.execute(sql, opts).await?;
+        let Some(crate::result::StatementResult::Rows(set)) = outcome.statements.into_iter().next()
+        else {
+            return Err(crate::error::Error::Unsupported(
+                "that statement returned no rows to stream".into(),
+            ));
+        };
+        sink.columns(&set.columns)?;
+        sink.rows(&set.rows)?;
+        Ok(set.rows.len() as u64)
     }
 
     /// The statement that would recreate the object at `node_id`.
