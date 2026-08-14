@@ -103,6 +103,40 @@ impl Error {
     }
 }
 
+/// The message at the bottom of an error chain.
+///
+/// Driver crates wrap their errors in layers that each print their own prefix,
+/// so `to_string()` on the outermost produces things like "Input/output error:
+/// Input/output error: connection refused". Only the innermost message says what
+/// actually happened; the layers above it name the crate's own plumbing, which
+/// the person reading the dialog cannot act on.
+pub fn root_cause(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut deepest = error;
+    while let Some(source) = deepest.source() {
+        deepest = source;
+    }
+    deepest.to_string()
+}
+
+/// Whether an error chain bottoms out in "nothing is listening there".
+///
+/// Worth singling out because it is the most common connection failure and the
+/// one with the most actionable cause: the address is right but the server is
+/// not running, or it is running somewhere else.
+pub fn is_connection_refused(error: &(dyn std::error::Error + 'static)) -> bool {
+    let mut current = Some(error);
+    while let Some(e) = current {
+        if let Some(io) = e.downcast_ref::<std::io::Error>() {
+            return matches!(
+                io.kind(),
+                std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::AddrNotAvailable
+            );
+        }
+        current = e.source();
+    }
+    false
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCategory {
