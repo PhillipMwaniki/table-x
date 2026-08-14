@@ -6,10 +6,20 @@
 
 @theme {
   /* Type: a UI face for chrome, a mono face for everything that is data.
-     Column values, SQL, and type names must align vertically to be scannable. */
+     Column values, SQL, and type names must align vertically to be scannable.
+     Both are overridden at runtime by the settings store, which writes the
+     chosen stack onto <html> as an inline custom property. */
   --font-sans: "Inter var", "Segoe UI Variable", "Segoe UI", system-ui, -apple-system,
     "Helvetica Neue", sans-serif;
   --font-mono: "JetBrains Mono", "Cascadia Code", "SF Mono", "Consolas", ui-monospace, monospace;
+
+  /* Size of everything that is data: SQL, cell values, column types. Chrome
+     keeps its own fixed sizes, so raising this enlarges what you are reading
+     without reflowing the toolbars around it. */
+  --text-data: 12px;
+  /* Grid rows scale with the data size, or a larger font clips its own
+     descenders inside a fixed-height row. */
+  --row-height: 24px;
 
   /* Neutral ramp */
   --color-surface-0: oklch(100% 0 0);
@@ -52,6 +62,100 @@
   --color-warn: oklch(78.0% 0.150 75);
   --color-danger: oklch(66.0% 0.185 25);
   --color-null: oklch(64.0% 0.040 290);
+}
+
+/* ---------------------------------------------------------------------------
+   Additional themes.
+
+   Each redefines the same token names, so no component ever branches on which
+   theme is active — the rule the light/dark pair already followed, extended.
+
+   `data-theme` is set on <html> by the settings store, alongside the `dark`
+   class that Tailwind's `dark:` variant keys on. Table X Light and Table X Dark
+   need no block of their own: they are the tokens above.
+
+   These blocks are attribute selectors, so they share specificity with `.dark`
+   and win by coming later in the file. Borrowed palettes keep their published
+   hex values rather than being reinterpreted in oklch, so they can be checked
+   against the original.
+   --------------------------------------------------------------------------- */
+
+/* Nord — https://www.nordtheme.com (MIT). Polar Night through Frost. */
+[data-theme="nord"] {
+  --color-surface-0: #2e3440; /* nord0  */
+  --color-surface-1: #333a47; /* between nord0 and nord1 */
+  --color-surface-2: #3b4252; /* nord1  */
+  --color-surface-3: #434c5e; /* nord2  */
+  --color-border: #4c566a; /* nord3  */
+  --color-text: #eceff4; /* nord6  */
+  --color-text-muted: #a9b3c4; /* between nord4 and nord3 */
+
+  --color-accent: #88c0d0; /* nord8  */
+  --color-accent-fg: #2e3440;
+
+  --color-ok: #a3be8c; /* nord14 */
+  --color-warn: #ebcb8b; /* nord13 */
+  --color-danger: #bf616a; /* nord11 */
+  --color-null: #b48ead; /* nord15 */
+}
+
+/* Solarized — Ethan Schoonover (MIT). The palette's defining property is that
+   both modes share one set of accent colours; only the base ramp inverts. */
+[data-theme="solarized-dark"] {
+  --color-surface-0: #002b36; /* base03 */
+  --color-surface-1: #04313d;
+  --color-surface-2: #073642; /* base02 */
+  --color-surface-3: #0b4553;
+  --color-border: #14505f;
+  --color-text: #93a1a1; /* base1  */
+  --color-text-muted: #7c9298; /* toward base0 */
+
+  --color-accent: #268bd2; /* blue   */
+  --color-accent-fg: #002b36;
+
+  --color-ok: #859900; /* green  */
+  --color-warn: #b58900; /* yellow */
+  --color-danger: #dc322f; /* red    */
+  --color-null: #6c71c4; /* violet */
+}
+
+[data-theme="solarized-light"] {
+  --color-surface-0: #fdf6e3; /* base3  */
+  --color-surface-1: #f7f0dc;
+  --color-surface-2: #eee8d5; /* base2  */
+  --color-surface-3: #e3dcc6;
+  --color-border: #d3cbb3;
+  --color-text: #073642; /* base02 */
+  --color-text-muted: #657b83; /* base00 */
+
+  --color-accent: #268bd2;
+  --color-accent-fg: #fdf6e3;
+
+  --color-ok: #859900;
+  --color-warn: #b58900;
+  --color-danger: #dc322f;
+  --color-null: #6c71c4;
+}
+
+/* High contrast — for bright rooms and for anyone who finds the low-contrast
+   greys hard to read. Borders are visible rather than implied, which is the
+   point: in a grid, the cell boundaries carry meaning. */
+[data-theme="high-contrast"] {
+  --color-surface-0: #000000;
+  --color-surface-1: #0d0d0d;
+  --color-surface-2: #1a1a1a;
+  --color-surface-3: #2b2b2b;
+  --color-border: #6f6f6f;
+  --color-text: #ffffff;
+  --color-text-muted: #d4d4d4;
+
+  --color-accent: #3fb6ff;
+  --color-accent-fg: #000000;
+
+  --color-ok: #3ff7a5;
+  --color-warn: #ffd400;
+  --color-danger: #ff6b6b;
+  --color-null: #d9a6ff;
 }
 
 @layer base {
