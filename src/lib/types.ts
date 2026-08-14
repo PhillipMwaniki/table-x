@@ -279,6 +279,38 @@ export interface RowEdit {
   key: [string, Value][];
 }
 
+// ---------------------------------------------------------------------------
+// History
+// ---------------------------------------------------------------------------
+
+/**
+ * One executed submission. The connection's name and driver are copied in at
+ * record time, so an entry still says where it ran after the connection itself
+ * has been deleted.
+ */
+export interface HistoryEntry {
+  id: string;
+  connection_id: string;
+  connection_name: string;
+  driver: string;
+  sql: string;
+  /** RFC 3339, UTC. */
+  ran_at: string;
+  elapsed_ms: number;
+  /** Rows returned or affected. Absent when the statement failed. */
+  rows?: number | undefined;
+  succeeded: boolean;
+  error?: string | undefined;
+}
+
+export interface HistoryQuery {
+  /** Omit to search every connection. */
+  connection_id?: string | undefined;
+  /** Whitespace-separated terms; an entry must contain all of them. */
+  text?: string | undefined;
+  limit?: number | undefined;
+}
+
 export interface BackendInfo {
   version: string;
   drivers: string[];

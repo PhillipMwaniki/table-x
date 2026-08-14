@@ -14,6 +14,8 @@ import type {
   DriverInfo,
   ErrorCategory,
   ErrorPayload,
+  HistoryEntry,
+  HistoryQuery,
   QueryOutcome,
   RowEdit,
   SchemaNode,
@@ -130,4 +132,18 @@ export const ipc = {
    * to tunnel to a host whose key is not already known.
    */
   sshHostFingerprint: (ssh: SshConfig) => call<string>("ssh_host_fingerprint", { ssh }),
+
+  /** Search executed statements, newest first. */
+  queryHistory: (query: HistoryQuery) =>
+    call<HistoryEntry[]>("query_history", {
+      query: {
+        connection_id: query.connection_id ?? null,
+        text: query.text ?? null,
+        limit: query.limit ?? null,
+      },
+    }),
+
+  /** Forget history for one connection, or all of it when `id` is omitted. */
+  clearQueryHistory: (connectionId?: string) =>
+    call<void>("clear_query_history", { connection_id: connectionId ?? null }),
 };

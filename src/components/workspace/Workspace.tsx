@@ -7,7 +7,9 @@ import { useEffect, useMemo } from "react";
 import { SchemaTree, selectFor } from "./SchemaTree";
 import { SqlEditor } from "./SqlEditor";
 import { ResultGrid } from "./ResultGrid";
+import { HistoryPanel } from "./HistoryPanel";
 import { Button, Spinner, cx } from "../ui/primitives";
+import { useHistory } from "@/store/history";
 import { useWorkspace } from "@/store/workspace";
 import type { ConnectionConfig, DriverInfo, StatementResult } from "@/lib/types";
 
@@ -28,6 +30,9 @@ export function Workspace({
     undo,
     redo,
   } = useWorkspace();
+
+  const historyOpen = useHistory((s) => s.open);
+  const setHistoryOpen = useHistory((s) => s.setOpen);
 
   const state = pane(connection.id);
   const quote = driver?.capabilities.identifier_quote ?? '"';
@@ -52,6 +57,19 @@ export function Workspace({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [connection.id, undo, redo]);
+
+  // History gets its own handler rather than joining the one above, because it
+  // must work while the caret is in the editor — that is where you are when you
+  // want a previous statement back.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== "h") return;
+      e.preventDefault();
+      setHistoryOpen(!useHistory.getState().open);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [setHistoryOpen]);
 
   const active = state.outcome?.statements[state.activeStatement];
 
@@ -97,6 +115,15 @@ export function Workspace({
 
           <div className="flex-1" />
 
+          <Button
+            variant="ghost"
+            className={cx("h-6", historyOpen && "bg-surface-3 text-text")}
+            onClick={() => setHistoryOpen(!historyOpen)}
+            aria-pressed={historyOpen}
+            title="Query history (Ctrl+H)"
+          >
+            History
+          </Button>
           <Button
             variant="ghost"
             className="h-6"
@@ -191,6 +218,15 @@ export function Workspace({
           )}
         </div>
       </div>
+
+      <HistoryPanel
+        connectionId={connection.id}
+        onPick={(sql) => setSql(connection.id, sql)}
+        onRun={(sql) => {
+          setSql(connection.id, sql);
+          void run(connection.id, sql);
+        }}
+      />
     </div>
   );
 }
