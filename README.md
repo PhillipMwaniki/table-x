@@ -123,6 +123,7 @@ Milestone 1 ("core + power features") is the current target.
 | ✅ | **Result grid** | Virtualized rows, inline editing, sorting, filtering, undo/redo. |
 | ✅ | **SSH tunnels** | Password / private key / agent auth, mandatory host key verification with a confirmation flow. |
 | ✅ | **Query history** | Every run persisted with its timing and outcome, searchable across connections. 10 tests. |
+| ✅ | **Appearance** | Six themes plus follow-system, data and interface fonts, adjustable data size. 12 tests. |
 | ⬜ | **Multi-tab workspace** | Tabs, split panes, session restore. |
 | ⬜ | **CSV/JSON import-export** | Streaming, so file size is not bounded by RAM. |
 | ✅ | **ClickHouse driver** | HTTP + JSONCompact, exact wide integers and `Decimal`. Read-only — no row-level `UPDATE`. 23 tests. |
