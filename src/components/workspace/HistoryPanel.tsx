@@ -10,7 +10,7 @@ import { useEffect, useRef } from "react";
 import type { ReactNode } from "react";
 import { Button, Input, Spinner, cx } from "../ui/primitives";
 import { useHistory } from "@/store/history";
-import { useWorkspace } from "@/store/workspace";
+import { tabsOf, useWorkspace } from "@/store/workspace";
 import type { HistoryEntry } from "@/lib/types";
 
 /** Debounce for the search box, in ms. Long enough to skip intermediate
@@ -33,9 +33,7 @@ export function HistoryPanel({
 
   // A finished run is the one moment the list is certainly out of date. Any
   // tab's run counts: they all write to the same history.
-  const running = useWorkspace((s) =>
-    (s.tabs[connectionId] ?? []).some((t) => t.running),
-  );
+  const running = useWorkspace((s) => tabsOf(s, connectionId).some((t) => t.running));
   const wasRunning = useRef(running);
 
   useEffect(() => {

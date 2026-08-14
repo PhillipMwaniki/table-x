@@ -57,6 +57,21 @@ export interface Tab {
   redo: AppliedEdit[];
 }
 
+/**
+ * The tab list for a connection that has none yet.
+ *
+ * One shared instance, because a zustand selector's result is compared by
+ * identity: returning a fresh `[]` for a missing key makes every render look
+ * like a change, and React tears down the component with "Maximum update depth
+ * exceeded" rather than rendering it.
+ */
+const NO_TABS: readonly Tab[] = Object.freeze([]);
+
+/** Tabs for a connection, stable for connections with none. */
+export function tabsOf(state: { tabs: Record<string, Tab[]> }, connectionId: string): Tab[] {
+  return state.tabs[connectionId] ?? (NO_TABS as Tab[]);
+}
+
 let counter = 0;
 function nextId(): string {
   counter += 1;
@@ -150,14 +165,14 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   database: {},
   switching: {},
 
-  tabsFor: (id) => get().tabs[id] ?? [],
+  tabsFor: (id) => tabsOf(get(), id),
   activeTab: (id) => {
-    const list = get().tabs[id] ?? [];
+    const list = tabsOf(get(), id);
     return list.find((t) => t.id === get().active[id]) ?? list[0] ?? null;
   },
 
   openQuery: (id) => {
-    const list = get().tabs[id] ?? [];
+    const list = tabsOf(get(), id);
     // Numbered by how many query tabs exist rather than by total tabs, so the
     // names stay predictable when table tabs are opened and closed between them.
     const n = list.filter((t) => t.kind === "query").length + 1;
@@ -173,7 +188,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   },
 
   openTable: (id, object) => {
-    const list = get().tabs[id] ?? [];
+    const list = tabsOf(get(), id);
     const database = get().database[id] ?? null;
 
     // Opening the same table twice focuses the tab that is already there, the
@@ -204,7 +219,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   },
 
   closeTab: (id, tabId) => {
-    const list = get().tabs[id] ?? [];
+    const list = tabsOf(get(), id);
     const index = list.findIndex((t) => t.id === tabId);
     const remaining = list.filter((t) => t.id !== tabId);
 
@@ -226,7 +241,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
 
     // A tab belongs to the database it was opened in. Bringing it forward has
     // to bring its database with it, or its SQL would run somewhere else.
-    const tab = (get().tabs[id] ?? []).find((t) => t.id === tabId);
+    const tab = tabsOf(get(), id).find((t) => t.id === tabId);
     if (tab?.database && tab.database !== get().database[id]) {
       await get().useDatabase(id, tab.database);
     }
@@ -254,7 +269,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     }
 
     // Every connection starts with somewhere to type.
-    if ((get().tabs[id] ?? []).length === 0) get().openQuery(id);
+    if (tabsOf(get(), id).length === 0) get().openQuery(id);
   },
 
   useDatabase: async (id, database) => {
@@ -280,7 +295,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   },
 
   run: async (id, tabId, sqlOverride) => {
-    const tab = (get().tabs[id] ?? []).find((t) => t.id === tabId);
+    const tab = tabsOf(get(), id).find((t) => t.id === tabId);
     if (!tab) return;
     const sql = sqlOverride ?? tab.sql;
     if (!sql.trim()) return;
@@ -316,7 +331,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   },
 
   applyEdit: async (id, tabId, rowIndex, columnIndex, next) => {
-    const tab = (get().tabs[id] ?? []).find((t) => t.id === tabId);
+    const tab = tabsOf(get(), id).find((t) => t.id === tabId);
     if (!tab) return;
     const rows = activeRows(tab);
     if (!rows || !rows.editable) return;
@@ -376,7 +391,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   },
 
   undo: async (id, tabId) => {
-    const tab = (get().tabs[id] ?? []).find((t) => t.id === tabId);
+    const tab = tabsOf(get(), id).find((t) => t.id === tabId);
     if (!tab) return;
     const last = tab.undo[tab.undo.length - 1];
     if (!last) return;
@@ -405,7 +420,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   },
 
   redo: async (id, tabId) => {
-    const tab = (get().tabs[id] ?? []).find((t) => t.id === tabId);
+    const tab = tabsOf(get(), id).find((t) => t.id === tabId);
     if (!tab) return;
     const next = tab.redo[tab.redo.length - 1];
     if (!next) return;

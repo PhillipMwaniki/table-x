@@ -8,11 +8,11 @@
  */
 
 import { cx } from "../ui/primitives";
-import { useWorkspace } from "@/store/workspace";
+import { tabsOf, useWorkspace } from "@/store/workspace";
 import type { Tab } from "@/store/workspace";
 
 export function TabBar({ connectionId }: { connectionId: string }) {
-  const tabs = useWorkspace((s) => s.tabs[connectionId] ?? []);
+  const tabs = useWorkspace((s) => tabsOf(s, connectionId));
   const activeId = useWorkspace((s) => s.active[connectionId] ?? "");
   const { selectTab, closeTab, openQuery } = useWorkspace();
 
