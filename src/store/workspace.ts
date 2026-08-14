@@ -50,6 +50,8 @@ export interface Tab {
   sql: string;
   outcome: QueryOutcome | null;
   error: QueryError | null;
+  /** A one-off success message — an export that finished, say. */
+  notice?: string | undefined;
   running: boolean;
   /** Index of the statement whose results are shown. */
   activeStatement: number;
@@ -123,6 +125,8 @@ interface WorkspaceState {
   setSql: (connectionId: string, tabId: string, sql: string) => void;
   /** Show a failure that did not come from running this tab's own statement. */
   setTabError: (connectionId: string, tabId: string, message: string) => void;
+  /** Report something that worked, in the same place failures are reported. */
+  setTabNotice: (connectionId: string, tabId: string, message: string) => void;
   setActiveStatement: (connectionId: string, tabId: string, index: number) => void;
   run: (connectionId: string, tabId: string, sqlOverride?: string) => Promise<void>;
 
@@ -271,6 +275,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   setTabError: (id, tabId, message) =>
     set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { error: { message } }) })),
 
+  setTabNotice: (id, tabId, message) =>
+    set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { notice: message }) })),
+
   setActiveStatement: (id, tabId, index) =>
     set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { activeStatement: index }) })),
 
@@ -325,7 +332,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // anyway, so a second submission would only queue behind the first.
     if (tab.running) return;
 
-    set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { running: true, error: null }) }));
+    set((s) => ({
+      tabs: patchTab(s.tabs, id, tabId, { running: true, error: null, notice: undefined }),
+    }));
     try {
       const outcome = await ipc.execute({ connection_id: id, sql });
       set((s) => ({

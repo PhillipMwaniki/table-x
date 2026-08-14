@@ -19,6 +19,7 @@ const actions = {
   onScript: noop,
   onNewTab: noop,
   onCopy: noop,
+  onExport: noop,
   onRefresh: noop,
 };
 
@@ -35,6 +36,9 @@ describe("menuFor", () => {
     expect(items).toContain("Show CREATE statement");
     expect(items).toContain("Truncate table…");
     expect(items).toContain("Drop table…");
+    expect(items).toContain("Export as CSV…");
+    expect(items).toContain("Export as JSON…");
+    expect(items).toContain("Export as SQL inserts…");
   });
 
   it("hides the CREATE statement where the driver cannot produce one", () => {
@@ -51,6 +55,8 @@ describe("menuFor", () => {
     const items = labels(node("view"), { driver: "mysql", tableScripts: true }, actions);
     expect(items).not.toContain("Truncate table…");
     expect(items).toContain("Drop view…");
+    // A view's rows export exactly as well as a table's.
+    expect(items).toContain("Export as CSV…");
   });
 
   it("offers a routine its script and nothing about rows", () => {
@@ -58,6 +64,8 @@ describe("menuFor", () => {
     expect(items).toContain("Edit script");
     expect(items).not.toContain("Open rows");
     expect(items).not.toContain("Drop table…");
+    // Nothing to export: a routine has no rows.
+    expect(items).not.toContain("Export as CSV…");
   });
 
   it("omits refresh for a node with no children to re-fetch", () => {

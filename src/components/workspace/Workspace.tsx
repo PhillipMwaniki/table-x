@@ -20,10 +20,25 @@ import { ContextMenu } from "../ui/ContextMenu";
 import type { MenuItem } from "../ui/ContextMenu";
 import { ipc } from "@/lib/ipc";
 import { drop, selectFrom, truncate } from "@/lib/statements";
+import { save } from "@tauri-apps/plugin-dialog";
 import { useHistory } from "@/store/history";
 import { useSettings } from "@/store/settings";
 import { useWorkspace } from "@/store/workspace";
-import type { ConnectionConfig, DriverInfo, NodeKind, SchemaNode, StatementResult } from "@/lib/types";
+import type {
+  ConnectionConfig,
+  DriverInfo,
+  ExportFormat,
+  NodeKind,
+  SchemaNode,
+  StatementResult,
+} from "@/lib/types";
+
+/** Formats offered in the object menu, in the order they are listed. */
+const EXPORT_FORMATS: { format: ExportFormat; label: string; extension: string }[] = [
+  { format: "csv", label: "CSV", extension: "csv" },
+  { format: "json", label: "JSON", extension: "json" },
+  { format: "sql", label: "SQL inserts", extension: "sql" },
+];
 
 /**
  * Object kinds whose source is a statement worth editing.
@@ -52,6 +67,7 @@ export function Workspace({
     loadCompletionFor,
     openScript: openScriptTab,
     setTabError,
+    setTabNotice,
     useDatabase,
     applyEdit,
     undo,
@@ -68,7 +84,7 @@ export function Workspace({
   const setEditorRatio = useSettings((s) => s.setEditorRatio);
   const [dragRatio, setDragRatio] = useState<number | null>(null);
   const [menu, setMenu] = useState<{
-    node: SchemaNode;
+    node: SchemaNode & { schema?: string | undefined };
     x: number;
     y: number;
     /** Supplied by the tree, which owns the cache being refreshed. */
@@ -148,6 +164,42 @@ export function Workspace({
       if (current) {
         setTabError(connection.id, current.id, (e as Error).message);
       }
+    }
+  };
+
+  /**
+   * Ask where to write, then export.
+   *
+   * The dialog is the frontend's, the writing is the backend's: the webview has
+   * no filesystem access of its own, so it hands over a path and nothing else.
+   */
+  const exportTable = async (
+    node: SchemaNode & { schema?: string | undefined },
+    format: ExportFormat,
+    extension: string,
+  ) => {
+    const path = await save({
+      defaultPath: `${node.name}.${extension}`,
+      filters: [{ name: format.toUpperCase(), extensions: [extension] }],
+    });
+    // Cancelling the dialog is a decision, not a failure.
+    if (!path) return;
+
+    const current = activeTab(connection.id);
+    try {
+      const rows = await ipc.exportTable({
+        connection_id: connection.id,
+        qualified: node.qualified ?? node.name,
+        schema: node.schema,
+        table: node.name,
+        format,
+        path,
+      });
+      if (current) {
+        setTabNotice(connection.id, current.id, `Exported ${rows} rows to ${path}`);
+      }
+    } catch (e) {
+      if (current) setTabError(connection.id, current.id, (e as Error).message);
     }
   };
 
@@ -290,6 +342,16 @@ export function Workspace({
                 </div>
               )}
 
+              {tab.notice && (
+                <p
+                  role="status"
+                  className="shrink-0 border-b border-ok/30 bg-ok/10 px-2 py-1.5 text-[11px] text-ok"
+                  data-selectable
+                >
+                  {tab.notice}
+                </p>
+              )}
+
               {tab.outcome && tab.outcome.statements.length > 1 && (
                 <StatementTabs
                   statements={tab.outcome.statements}
@@ -365,6 +427,7 @@ export function Workspace({
               onScript: () => void openScript(menu.node),
               onNewTab: (title, sql) => openScriptTab(connection.id, { title, sql }),
               onCopy: (text) => void navigator.clipboard?.writeText(text),
+              onExport: (format, extension) => void exportTable(menu.node, format, extension),
               onRefresh: menu.refresh,
             },
           )}
@@ -406,6 +469,7 @@ export function menuFor(
     onScript: () => void;
     onNewTab: (title: string, sql: string) => void;
     onCopy: (text: string) => void;
+    onExport: (format: ExportFormat, extension: string) => void;
     onRefresh: (() => void) | null;
   },
 ): MenuItem[] {
@@ -438,6 +502,18 @@ export function menuFor(
   }
   if (node.kind !== "folder") {
     items.push({ label: "Copy name", onSelect: () => actions.onCopy(node.name) });
+  }
+
+  // Export reads rows, so it is offered wherever rows can be read — including
+  // views, which export exactly as well as tables do.
+  if (isRelation) {
+    for (const { format, label, extension } of EXPORT_FORMATS) {
+      items.push({
+        label: `Export as ${label}…`,
+        separated: format === EXPORT_FORMATS[0]!.format,
+        onSelect: () => actions.onExport(format, extension),
+      });
+    }
   }
 
   if (actions.onRefresh) {

@@ -238,6 +238,9 @@ export interface SchemaNode {
   qualified?: string | undefined;
 }
 
+/** File formats a table can be written out as. */
+export type ExportFormat = "csv" | "json" | "sql";
+
 /** What a live session is pointed at, beyond being open. */
 export interface SessionInfo {
   database?: string | undefined;

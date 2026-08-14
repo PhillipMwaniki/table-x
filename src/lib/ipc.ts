@@ -14,6 +14,7 @@ import type {
   DriverInfo,
   ErrorCategory,
   ErrorPayload,
+  ExportFormat,
   HistoryEntry,
   HistoryQuery,
   QueryOutcome,
@@ -128,6 +129,29 @@ export const ipc = {
    */
   objectDefinition: (connection_id: string, node_id: string) =>
     call<string>("object_definition", { connection_id, node_id }),
+
+  /**
+   * Write a table to a file, returning how many rows were written.
+   *
+   * The path is chosen by the frontend's save dialog and the file is written in
+   * Rust: the webview has no filesystem access of its own, and should not.
+   */
+  exportTable: (args: {
+    connection_id: string;
+    qualified: string;
+    schema?: string | undefined;
+    table: string;
+    format: ExportFormat;
+    path: string;
+  }) =>
+    call<number>("export_table", {
+      connection_id: args.connection_id,
+      qualified: args.qualified,
+      schema: args.schema ?? null,
+      table: args.table,
+      format: args.format,
+      path: args.path,
+    }),
 
   applyEdit: (connection_id: string, edit: RowEdit) =>
     call<void>("apply_edit", { connection_id, edit }),
