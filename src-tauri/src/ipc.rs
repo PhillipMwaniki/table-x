@@ -445,6 +445,74 @@ pub async fn clear_query_history(
     Ok(())
 }
 
+/// What the UI needs to know about a live session beyond "it is open".
+#[derive(Serialize)]
+pub struct SessionInfo {
+    /// The database this session is pointed at, when the engine has databases.
+    pub database: Option<String>,
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn session_info(
+    state: tauri::State<'_, AppState>,
+    connection_id: String,
+) -> IpcResult<SessionInfo> {
+    let session = state.sessions.get(&connection_id).await?;
+    let mut guard = session.connection.lock().await;
+    Ok(SessionInfo {
+        database: guard.current_database().await?,
+    })
+}
+
+/// Point a session at another database on the same server.
+///
+/// Two paths, and which one runs is the driver's decision rather than a check
+/// on the driver's name. MySQL, SQL Server, and ClickHouse switch in place. A
+/// PostgreSQL connection is bound to one database for its lifetime, so its
+/// driver reports the operation unsupported and this reconnects instead —
+/// through the same tunnel, so a tunnelled connection does not authenticate a
+/// second SSH session just to change database.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn use_database(
+    state: tauri::State<'_, AppState>,
+    connection_id: String,
+    database: String,
+) -> IpcResult<String> {
+    let session = state.sessions.get(&connection_id).await?;
+
+    {
+        let mut guard = session.connection.lock().await;
+        match guard.use_database(&database).await {
+            Ok(()) => return Ok(database),
+            // Fall through to the reconnect below. Any other failure is real —
+            // a database that does not exist, or one this login cannot open —
+            // and reconnecting would only produce the same error less clearly.
+            Err(tablex_core::Error::Unsupported(_)) => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+
+    let config = state.config_for(&connection_id).await?;
+    let driver = state.drivers.get(&config.driver)?;
+    let secret = secrets::get(&config.keychain_key())?;
+
+    let mut target = config.clone();
+    target.database = Some(database.clone());
+    // Point at the existing tunnel's local end rather than the real host, which
+    // is what the original connection did too.
+    if let Some(port) = session.tunnel_port() {
+        target.host = Some("127.0.0.1".into());
+        target.port = Some(port);
+    }
+
+    // Opened before the old one is dropped: if the new database cannot be
+    // reached, the user keeps the session they had rather than being left with
+    // none at all.
+    let connection = driver.connect(&target, secret.as_deref()).await?;
+    session.replace(connection).await;
+    Ok(database)
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub async fn browse(
     state: tauri::State<'_, AppState>,

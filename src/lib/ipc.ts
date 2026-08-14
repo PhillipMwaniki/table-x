@@ -19,6 +19,7 @@ import type {
   QueryOutcome,
   RowEdit,
   SchemaNode,
+  SessionInfo,
   SshConfig,
   TableDetail,
 } from "./types";
@@ -124,6 +125,18 @@ export const ipc = {
 
   completionScope: (connection_id: string) =>
     call<CompletionScope>("completion_scope", { connection_id }),
+
+  /** What database a live session is pointed at. */
+  sessionInfo: (connection_id: string) => call<SessionInfo>("session_info", { connection_id }),
+
+  /**
+   * Point a session at another database, returning the one now in force.
+   *
+   * PostgreSQL reconnects behind this call, since a connection there is bound
+   * to one database for its lifetime; the other engines switch in place.
+   */
+  useDatabase: (connection_id: string, database: string) =>
+    call<string>("use_database", { connection_id, database }),
 
   /**
    * Read an SSH server's host key fingerprint for the user to confirm.

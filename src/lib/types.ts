@@ -91,6 +91,8 @@ export interface Capabilities {
   multi_statement: boolean;
   explain: boolean;
   schemas: boolean;
+  /** Whether one server holds several databases the user can move between. */
+  databases: boolean;
   foreign_keys: boolean;
   views: boolean;
   stored_procedures: boolean;
@@ -201,6 +203,8 @@ export interface QueryOutcome {
 export type NodeKind =
   | "database"
   | "schema"
+  /** A grouping level in the tree — "Tables", "Views" — not a database object. */
+  | "folder"
   | "table"
   | "view"
   | "materialized_view"
@@ -215,6 +219,7 @@ export type NodeKind =
   | "collection";
 
 export interface SchemaNode {
+  /** Encoded path; opaque to the frontend, and the argument for browsing deeper. */
   id: string;
   name: string;
   kind: NodeKind;
@@ -222,6 +227,16 @@ export interface SchemaNode {
   expandable: boolean;
   children?: SchemaNode[] | undefined;
   detail?: string | undefined;
+  /**
+   * The object's name as SQL should refer to it, quoted and qualified by the
+   * driver. Present on objects that can be queried; absent on folders.
+   */
+  qualified?: string | undefined;
+}
+
+/** What a live session is pointed at, beyond being open. */
+export interface SessionInfo {
+  database?: string | undefined;
 }
 
 export interface ColumnDef {

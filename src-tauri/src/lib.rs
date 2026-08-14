@@ -62,6 +62,8 @@ pub fn run() {
             ipc::ssh_host_fingerprint,
             ipc::query_history,
             ipc::clear_query_history,
+            ipc::session_info,
+            ipc::use_database,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Table X");

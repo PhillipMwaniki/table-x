@@ -19,17 +19,38 @@ use tokio::sync::Mutex;
 /// One live session, plus the SSH tunnel it travels over if there is one.
 pub struct LiveSession {
     pub connection: Mutex<Box<dyn Connection>>,
-    /// Held only so it stays alive: the tunnel shuts down when this is dropped,
-    /// which ties its lifetime to the session that needs it.
-    _tunnel: Option<Tunnel>,
+    /// Kept alive with the session: the tunnel shuts down when this is dropped.
+    tunnel: Option<Tunnel>,
 }
 
 impl LiveSession {
     pub fn new(connection: Box<dyn Connection>, tunnel: Option<Tunnel>) -> Self {
         LiveSession {
             connection: Mutex::new(connection),
-            _tunnel: tunnel,
+            tunnel,
         }
+    }
+
+    /// The loopback port the tunnel listens on, if this session travels over one.
+    ///
+    /// Needed to reconnect *through the same tunnel*: PostgreSQL cannot change
+    /// database on an open connection, and opening a second tunnel to do it
+    /// would mean a second SSH session and another authentication.
+    pub fn tunnel_port(&self) -> Option<u16> {
+        self.tunnel.as_ref().map(|t| t.local_port())
+    }
+
+    /// Swap in a new connection, closing the old one.
+    ///
+    /// The tunnel and the session's identity survive, so everything holding this
+    /// `Arc` keeps working — the connection underneath simply points somewhere
+    /// else now.
+    pub async fn replace(&self, connection: Box<dyn Connection>) {
+        let mut guard = self.connection.lock().await;
+        let mut previous = std::mem::replace(&mut *guard, connection);
+        // Best effort: a socket that will not close cleanly must not stop the
+        // user from working in the database they just switched to.
+        let _ = previous.close().await;
     }
 }
 
