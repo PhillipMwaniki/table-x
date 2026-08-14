@@ -12,6 +12,8 @@
 /// - `--` line comments and `/* */` block comments, which nest in PostgreSQL
 /// - PostgreSQL dollar-quoted bodies (`$$ ... $$`, `$tag$ ... $tag$`), which is
 ///   how virtually every stored procedure is written
+/// - `BEGIN ... END` routine bodies, which is how the engines *without* dollar
+///   quoting write a trigger or a procedure
 ///
 /// Trailing empty statements are dropped, so a trailing `;` does not produce a
 /// spurious empty execution.
@@ -20,6 +22,9 @@ pub fn split_statements(sql: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut start = 0usize;
     let mut i = 0usize;
+    // Nesting inside a `BEGIN ... END` routine body, where `;` separates the
+    // body's own statements rather than the submission's.
+    let mut depth = 0usize;
 
     while i < bytes.len() {
         let c = bytes[i];
@@ -98,10 +103,27 @@ pub fn split_statements(sql: &str) -> Vec<String> {
                     i += 1;
                 }
             }
-            b';' => {
+            b';' if depth == 0 => {
                 push_statement(&mut out, &sql[start..i]);
                 i += 1;
                 start = i;
+            }
+            c if c.is_ascii_alphabetic() || c == b'_' => {
+                let word_start = i;
+                while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                    i += 1;
+                }
+                let word = &sql[word_start..i];
+
+                if depth > 0 {
+                    if word.eq_ignore_ascii_case("BEGIN") || word.eq_ignore_ascii_case("CASE") {
+                        depth += 1;
+                    } else if word.eq_ignore_ascii_case("END") && closes_a_block(sql, i) {
+                        depth -= 1;
+                    }
+                } else if opens_a_routine_body(&sql[start..word_start], word) {
+                    depth = 1;
+                }
             }
             _ => i += 1,
         }
@@ -109,6 +131,64 @@ pub fn split_statements(sql: &str) -> Vec<String> {
 
     push_statement(&mut out, &sql[start..]);
     out
+}
+
+/// Whether `BEGIN` at this point opens a routine body rather than a transaction.
+///
+/// `BEGIN;` on its own starts a transaction and is a statement in itself. The
+/// same keyword inside `CREATE TRIGGER ... BEGIN` opens a body whose semicolons
+/// belong to the body. The difference is entirely in what came before it.
+fn opens_a_routine_body(prefix: &str, word: &str) -> bool {
+    if !word.eq_ignore_ascii_case("BEGIN") {
+        return false;
+    }
+    let upper = prefix.to_ascii_uppercase();
+    let starts_a_definition = upper.trim_start().starts_with("CREATE")
+        || upper.trim_start().starts_with("ALTER")
+        || upper.trim_start().starts_with("REPLACE");
+    starts_a_definition
+        && (contains_word(&upper, "TRIGGER")
+            || contains_word(&upper, "PROCEDURE")
+            || contains_word(&upper, "FUNCTION"))
+}
+
+/// Whether an `END` closes a counted block.
+///
+/// `END IF`, `END LOOP`, `END WHILE`, and `END REPEAT` close constructs whose
+/// openers are not counted — `IF` is also a MySQL function, so counting it would
+/// break on `IF(a, b, c)`. Skipping their `END`s keeps the count balanced;
+/// `END CASE` is not in the list because `CASE` *is* counted.
+fn closes_a_block(sql: &str, after_end: usize) -> bool {
+    let rest = sql[after_end..].trim_start();
+    !["IF", "LOOP", "WHILE", "REPEAT"]
+        .iter()
+        .any(|kw| starts_with_word(rest, kw))
+}
+
+fn starts_with_word(text: &str, word: &str) -> bool {
+    text.len() >= word.len()
+        && text[..word.len()].eq_ignore_ascii_case(word)
+        && !text[word.len()..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_')
+}
+
+/// Whole-word search in already-uppercased text.
+fn contains_word(upper: &str, word: &str) -> bool {
+    upper.match_indices(word).any(|(at, _)| {
+        let before_ok = at == 0
+            || !upper[..at]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_');
+        let after = at + word.len();
+        let after_ok = !upper[after..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_');
+        before_ok && after_ok
+    })
 }
 
 /// If a dollar-quote tag starts at `i`, return the index just past it.
@@ -347,6 +427,63 @@ mod tests {
         assert_eq!(parts.len(), 2, "got {parts:?}");
         assert!(parts[0].contains("RETURN 1;"));
         assert_eq!(parts[1], "SELECT 2");
+    }
+
+    #[test]
+    fn a_trigger_body_is_one_statement() {
+        // SQLite, MySQL, and SQL Server all write bodies this way, with no
+        // dollar quoting to lean on. Splitting inside the body sends `END` to
+        // the server on its own, which is a syntax error and leaves a
+        // half-created trigger behind.
+        let sql = "CREATE TRIGGER t AFTER UPDATE ON users BEGIN \
+                   UPDATE audit SET n = n + 1; DELETE FROM tmp; END; SELECT 1";
+        let parts = split_statements(sql);
+        assert_eq!(parts.len(), 2, "got {parts:?}");
+        assert!(parts[0].ends_with("END"), "got {:?}", parts[0]);
+        assert_eq!(parts[1], "SELECT 1");
+    }
+
+    #[test]
+    fn a_case_expression_inside_a_body_does_not_end_it_early() {
+        // CASE ... END is counted, or its END would close the body and the rest
+        // of the trigger would be sent as separate statements.
+        let sql = "CREATE TRIGGER t AFTER INSERT ON users BEGIN \
+                   UPDATE a SET x = CASE WHEN 1 THEN 2 ELSE 3 END; DELETE FROM b; END; SELECT 1";
+        let parts = split_statements(sql);
+        assert_eq!(parts.len(), 2, "got {parts:?}");
+        assert!(parts[0].contains("DELETE FROM b"), "got {:?}", parts[0]);
+    }
+
+    #[test]
+    fn end_if_does_not_close_the_body() {
+        // MySQL's IF block closes with `END IF`, and its opener is not counted —
+        // `IF(a,b,c)` is also a function call, so counting `IF` would break far
+        // more than it fixed.
+        let sql = "CREATE PROCEDURE p() BEGIN IF 1 THEN SELECT 1; END IF; SELECT 2; END; SELECT 3";
+        let parts = split_statements(sql);
+        assert_eq!(parts.len(), 2, "got {parts:?}");
+        assert!(parts[0].contains("SELECT 2"), "got {:?}", parts[0]);
+        assert_eq!(parts[1], "SELECT 3");
+    }
+
+    #[test]
+    fn a_bare_begin_still_starts_a_transaction_statement() {
+        // `BEGIN;` on its own is a statement, not the start of a body. Treating
+        // it as one would swallow the entire rest of the submission.
+        let sql = "BEGIN; UPDATE t SET a = 1; COMMIT;";
+        assert_eq!(
+            split_statements(sql),
+            vec!["BEGIN", "UPDATE t SET a = 1", "COMMIT"]
+        );
+    }
+
+    #[test]
+    fn a_column_named_begin_does_not_open_a_body() {
+        let sql = "SELECT begin_at FROM t; SELECT 2";
+        assert_eq!(
+            split_statements(sql),
+            vec!["SELECT begin_at FROM t", "SELECT 2"]
+        );
     }
 
     #[test]

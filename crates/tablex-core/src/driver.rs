@@ -26,6 +26,9 @@ pub struct Capabilities {
     /// `EXPLAIN` or equivalent.
     pub explain: bool,
     pub schemas: bool,
+    /// Whether one server holds several databases the user can move between.
+    /// False for file-backed engines, where the connection *is* the database.
+    pub databases: bool,
     pub foreign_keys: bool,
     pub views: bool,
     pub stored_procedures: bool,
@@ -49,6 +52,7 @@ impl Default for Capabilities {
             multi_statement: false,
             explain: false,
             schemas: false,
+            databases: false,
             foreign_keys: false,
             views: false,
             stored_procedures: false,
@@ -166,6 +170,25 @@ pub trait Connection: Send + Sync {
     /// Identifiers for autocomplete, gathered once per connection.
     async fn completion_scope(&mut self) -> Result<CompletionScope> {
         Ok(CompletionScope::default())
+    }
+
+    /// The database this session is currently pointed at, when the engine has
+    /// such a concept.
+    async fn current_database(&mut self) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    /// Point this session at another database on the same server.
+    ///
+    /// Engines that can do it in-session (`USE`, or a default that is just a
+    /// request parameter) implement this. PostgreSQL cannot: a connection is
+    /// bound to one database for its lifetime, so its driver leaves this
+    /// unsupported and the app layer reconnects instead. Returning an error
+    /// here is what tells it to.
+    async fn use_database(&mut self, _database: &str) -> Result<()> {
+        Err(crate::error::Error::Unsupported(
+            "this driver cannot switch database on an open connection".into(),
+        ))
     }
 }
 

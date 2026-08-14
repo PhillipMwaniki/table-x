@@ -15,6 +15,10 @@ use serde::{Deserialize, Serialize};
 pub enum NodeKind {
     Database,
     Schema,
+    /// A grouping level that exists only in the tree — "Tables", "Views",
+    /// "Functions". Databases have no such object; it is how a schema with
+    /// three hundred tables and four triggers stays navigable.
+    Folder,
     Table,
     View,
     MaterializedView,
@@ -33,8 +37,11 @@ pub enum NodeKind {
 /// A node in the lazily-expanded object tree.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SchemaNode {
-    /// Stable path-like identifier, e.g. `mydb.public.users`. Used as the React
-    /// key and as the argument when requesting children.
+    /// Stable identifier, and the argument for requesting this node's children.
+    ///
+    /// Built with [`encode_path`] rather than joined with dots: object names may
+    /// contain the separator, and a tree that mis-parses `my.table` addresses
+    /// the wrong object.
     pub id: String,
     pub name: String,
     pub kind: NodeKind,
@@ -47,6 +54,84 @@ pub struct SchemaNode {
     /// Extra display detail: a column's type, a table's estimated row count.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// The object's name as SQL should refer to it, already quoted and qualified
+    /// by the driver — `"public"."users"`, `` `app`.`orders` ``.
+    ///
+    /// The driver builds it because only the driver knows how many levels its
+    /// engine qualifies by and which quote character it uses. The alternative,
+    /// reassembling it in the frontend from a path, means teaching the UI five
+    /// dialects' quoting rules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qualified: Option<String>,
+}
+
+impl SchemaNode {
+    /// A leaf node whose id is the encoding of `path`.
+    ///
+    /// Builders rather than struct literals: a driver builds these in a dozen
+    /// places, and six fields of which four are usually defaults buries the two
+    /// that matter.
+    pub fn new(path: &[&str], name: impl Into<String>, kind: NodeKind) -> Self {
+        SchemaNode {
+            id: encode_path(path),
+            name: name.into(),
+            kind,
+            expandable: false,
+            children: None,
+            detail: None,
+            qualified: None,
+        }
+    }
+
+    pub fn expandable(mut self) -> Self {
+        self.expandable = true;
+        self
+    }
+
+    pub fn detail(mut self, detail: impl Into<String>) -> Self {
+        self.detail = Some(detail.into());
+        self
+    }
+
+    /// Attach the name SQL should use for this object, already quoted.
+    pub fn qualified(mut self, qualified: impl Into<String>) -> Self {
+        self.qualified = Some(qualified.into());
+        self
+    }
+}
+
+/// Join path segments into a [`SchemaNode::id`].
+///
+/// `/` separates, `\` escapes both itself and the separator. Object names really
+/// do contain slashes and dots — PostgreSQL and MySQL permit any character in a
+/// quoted identifier — so the encoding has to survive them rather than assume
+/// they are rare.
+pub fn encode_path(segments: &[&str]) -> String {
+    segments
+        .iter()
+        .map(|s| s.replace('\\', "\\\\").replace('/', "\\/"))
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Split a [`SchemaNode::id`] back into its segments.
+pub fn decode_path(id: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut escaped = false;
+    for ch in id.chars() {
+        match (escaped, ch) {
+            (true, c) => {
+                current.push(c);
+                escaped = false;
+            }
+            (false, '\\') => escaped = true,
+            (false, '/') => out.push(std::mem::take(&mut current)),
+            (false, c) => current.push(c),
+        }
+    }
+    out.push(current);
+    out
 }
 
 /// Full detail for a single table, loaded when the user opens its structure tab.
@@ -202,5 +287,45 @@ mod tests {
     fn table_with_no_key_is_not_editable() {
         let t = table(vec![column("note", true)], vec![], vec![]);
         assert!(t.edit_key().is_empty());
+    }
+
+    #[test]
+    fn a_path_round_trips() {
+        let path = ["app", "public", "tables", "users"];
+        assert_eq!(decode_path(&encode_path(&path)), path);
+    }
+
+    #[test]
+    fn separators_inside_names_survive() {
+        // Quoted identifiers accept any character, so a table really can be
+        // called `a/b`. Splitting on a raw separator would address `a` instead,
+        // and the user would be shown the wrong object's columns.
+        let path = ["my/db", "schema\\weird", "tables", "a/b"];
+        assert_eq!(decode_path(&encode_path(&path)), path);
+    }
+
+    #[test]
+    fn a_single_segment_needs_no_separator() {
+        assert_eq!(encode_path(&["users"]), "users");
+        assert_eq!(decode_path("users"), vec!["users".to_string()]);
+    }
+
+    #[test]
+    fn an_empty_segment_is_preserved() {
+        // PostgreSQL's default schema arrives as an empty string in some paths;
+        // dropping it would shift every later segment one position left.
+        assert_eq!(decode_path(&encode_path(&["", "users"])), vec!["", "users"]);
+    }
+
+    #[test]
+    fn builders_default_to_a_plain_leaf() {
+        let node = SchemaNode::new(&["app", "users"], "users", NodeKind::Table);
+        assert!(!node.expandable);
+        assert!(node.qualified.is_none());
+
+        let node = node.expandable().qualified("\"app\".\"users\"").detail("120 rows");
+        assert!(node.expandable);
+        assert_eq!(node.qualified.as_deref(), Some("\"app\".\"users\""));
+        assert_eq!(node.detail.as_deref(), Some("120 rows"));
     }
 }
