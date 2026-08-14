@@ -1,7 +1,10 @@
 //! Process-wide application state.
 
 use crate::{history::QueryHistory, sessions::SessionRegistry, store::ConnectionStore};
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use tablex_core::{
     error::{Error, Result},
     registry::DriverRegistry,
@@ -19,6 +22,12 @@ pub struct AppState {
     pub store: ConnectionStore,
     /// Executed statements, appended to disk as they run.
     pub history: Mutex<QueryHistory>,
+    /// Cancellation flags for exports currently running, by export id.
+    ///
+    /// A flag rather than an abort: the export is inside a database round trip
+    /// most of the time, and dropping the task mid-statement would leave the
+    /// session's protocol stream in a state the next query would trip over.
+    pub exports: Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 
 impl AppState {
@@ -38,6 +47,7 @@ impl AppState {
             connections: Mutex::new(connections),
             store,
             history: Mutex::new(QueryHistory::load(config_dir)),
+            exports: Mutex::new(HashMap::new()),
         }
     }
 

@@ -14,15 +14,17 @@ import { SqlEditor } from "./SqlEditor";
 import { ResultGrid } from "./ResultGrid";
 import { HistoryPanel } from "./HistoryPanel";
 import { TabBar } from "./TabBar";
+import { ExportProgress } from "./ExportProgress";
 import { SplitHandle } from "./SplitHandle";
 import { Button, Spinner, cx } from "../ui/primitives";
 import { ContextMenu } from "../ui/ContextMenu";
 import type { MenuItem } from "../ui/ContextMenu";
-import { ipc } from "@/lib/ipc";
+import { ipc, IpcError } from "@/lib/ipc";
 import { drop, selectFrom, truncate } from "@/lib/statements";
 import { save } from "@tauri-apps/plugin-dialog";
 import { useHistory } from "@/store/history";
 import { useSettings } from "@/store/settings";
+import { useExports } from "@/store/exports";
 import { useWorkspace } from "@/store/workspace";
 import type {
   ConnectionConfig,
@@ -83,6 +85,9 @@ export function Workspace({
   const storedRatio = useSettings((s) => s.editorRatio);
   const setEditorRatio = useSettings((s) => s.setEditorRatio);
   const [dragRatio, setDragRatio] = useState<number | null>(null);
+  const watchExports = useExports((s) => s.watch);
+  const beginExport = useExports((s) => s.begin);
+  const endExport = useExports((s) => s.end);
   const [menu, setMenu] = useState<{
     node: SchemaNode & { schema?: string | undefined };
     x: number;
@@ -107,6 +112,12 @@ export function Workspace({
   useEffect(() => {
     void loadSession(connection.id).then(() => loadCompletionFor(connection.id));
   }, [connection.id, loadSession, loadCompletionFor]);
+
+  // One subscription for the process, established the first time a workspace
+  // mounts; the store ignores repeat calls.
+  useEffect(() => {
+    void watchExports();
+  }, [watchExports]);
 
   // Undo/redo are global shortcuts while this pane is mounted. Bound on window
   // rather than the grid so they work regardless of which element has focus,
@@ -185,9 +196,14 @@ export function Workspace({
     // Cancelling the dialog is a decision, not a failure.
     if (!path) return;
 
+    const id = crypto.randomUUID();
     const current = activeTab(connection.id);
+    // Registered before the call so the bar appears immediately: the first
+    // query is often the slow part, and it emits nothing until it returns.
+    beginExport(id, node.name);
     try {
       const rows = await ipc.exportTable({
+        id,
         connection_id: connection.id,
         qualified: node.qualified ?? node.name,
         schema: node.schema,
@@ -196,10 +212,22 @@ export function Workspace({
         path,
       });
       if (current) {
-        setTabNotice(connection.id, current.id, `Exported ${rows} rows to ${path}`);
+        setTabNotice(
+          connection.id,
+          current.id,
+          `Exported ${rows.toLocaleString()} rows to ${path}`,
+        );
       }
     } catch (e) {
-      if (current) setTabError(connection.id, current.id, (e as Error).message);
+      const err = e as IpcError;
+      // Stopping something you asked to stop is not an error to report as one.
+      if (err.category !== "cancelled" && current) {
+        setTabError(connection.id, current.id, err.message);
+      } else if (current) {
+        setTabNotice(connection.id, current.id, `Export of ${node.name} cancelled.`);
+      }
+    } finally {
+      endExport(id);
     }
   };
 
@@ -238,6 +266,7 @@ export function Workspace({
 
       <div className="flex min-w-0 flex-1 flex-col">
         <TabBar connectionId={connection.id} />
+        <ExportProgress />
 
         {tab ? (
           <>

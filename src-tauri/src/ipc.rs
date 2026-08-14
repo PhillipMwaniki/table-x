@@ -544,9 +544,14 @@ pub async fn browse(
 ///
 /// The path comes from the frontend's save dialog; the writing happens here,
 /// because the webview has no filesystem access of its own and should not.
+///
+/// Progress arrives as events rather than as a return value, because the useful
+/// part of a slow export is what it is doing before it finishes.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn export_table(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
+    id: String,
     connection_id: String,
     qualified: String,
     schema: Option<String>,
@@ -555,9 +560,17 @@ pub async fn export_table(
     path: String,
 ) -> IpcResult<u64> {
     let started = std::time::Instant::now();
-    let rows = crate::export::run(
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    state
+        .exports
+        .lock()
+        .await
+        .insert(id.clone(), cancel.clone());
+
+    let result = crate::export::run(
         &state,
         crate::export::ExportRequest {
+            id: id.clone(),
             connection_id,
             qualified,
             schema,
@@ -565,8 +578,20 @@ pub async fn export_table(
             format,
             path: path.clone(),
         },
+        cancel,
+        |progress| {
+            // A failed emit means the window has gone; the export finishing is
+            // still worth doing, and its file is still worth having.
+            let _ = tauri::Emitter::emit(&app, crate::export::PROGRESS_EVENT, progress);
+        },
     )
-    .await?;
+    .await;
+
+    // Removed however it ended, so a cancelled or failed export does not leave
+    // a flag behind for an id that will never be used again.
+    state.exports.lock().await.remove(&id);
+
+    let rows = result?;
     tracing::debug!(
         rows,
         path,
@@ -574,6 +599,20 @@ pub async fn export_table(
         "export"
     );
     Ok(rows)
+}
+
+/// Ask a running export to stop.
+///
+/// Sets a flag rather than aborting the task: an export spends most of its time
+/// inside a database round trip, and dropping it there would leave the session's
+/// protocol stream mid-message for the next query to trip over. It stops at the
+/// next batch boundary and takes its half-written file with it.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn cancel_export(state: tauri::State<'_, AppState>, id: String) -> IpcResult<()> {
+    if let Some(flag) = state.exports.lock().await.get(&id) {
+        flag.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    Ok(())
 }
 
 /// The statement that would recreate an object, for viewing and editing.

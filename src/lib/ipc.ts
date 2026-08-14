@@ -137,6 +137,8 @@ export const ipc = {
    * Rust: the webview has no filesystem access of its own, and should not.
    */
   exportTable: (args: {
+    /** Identifies this export in progress events and to `cancelExport`. */
+    id: string;
     connection_id: string;
     qualified: string;
     schema?: string | undefined;
@@ -145,6 +147,7 @@ export const ipc = {
     path: string;
   }) =>
     call<number>("export_table", {
+      id: args.id,
       connection_id: args.connection_id,
       qualified: args.qualified,
       schema: args.schema ?? null,
@@ -152,6 +155,9 @@ export const ipc = {
       format: args.format,
       path: args.path,
     }),
+
+  /** Ask a running export to stop at its next batch boundary. */
+  cancelExport: (id: string) => call<void>("cancel_export", { id }),
 
   applyEdit: (connection_id: string, edit: RowEdit) =>
     call<void>("apply_edit", { connection_id, edit }),

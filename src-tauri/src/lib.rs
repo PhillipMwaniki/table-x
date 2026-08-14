@@ -60,6 +60,7 @@ pub fn run() {
             ipc::table_detail,
             ipc::object_definition,
             ipc::export_table,
+            ipc::cancel_export,
             ipc::apply_edit,
             ipc::completion_scope,
             ipc::ssh_host_fingerprint,
