@@ -19,6 +19,7 @@ import { Button, Spinner, cx } from "../ui/primitives";
 import { ContextMenu } from "../ui/ContextMenu";
 import type { MenuItem } from "../ui/ContextMenu";
 import { ipc } from "@/lib/ipc";
+import { drop, selectFrom, truncate } from "@/lib/statements";
 import { useHistory } from "@/store/history";
 import { useSettings } from "@/store/settings";
 import { useWorkspace } from "@/store/workspace";
@@ -66,7 +67,13 @@ export function Workspace({
   const storedRatio = useSettings((s) => s.editorRatio);
   const setEditorRatio = useSettings((s) => s.setEditorRatio);
   const [dragRatio, setDragRatio] = useState<number | null>(null);
-  const [menu, setMenu] = useState<{ node: SchemaNode; x: number; y: number } | null>(null);
+  const [menu, setMenu] = useState<{
+    node: SchemaNode;
+    x: number;
+    y: number;
+    /** Supplied by the tree, which owns the cache being refreshed. */
+    refresh: (() => void) | null;
+  } | null>(null);
   const ratio = dragRatio ?? storedRatio;
   const splitRef = useRef<HTMLDivElement>(null);
 
@@ -171,7 +178,9 @@ export function Workspace({
           }
           onSelectDatabase={(name) => void useDatabase(connection.id, name)}
           onOpenScript={(node) => void openScript(node)}
-          onContextMenu={(node, at) => setMenu({ node, x: at.x, y: at.y })}
+          onContextMenu={(node, at, refresh) =>
+            setMenu({ node, x: at.x, y: at.y, refresh })
+          }
         />
       </aside>
 
@@ -341,14 +350,24 @@ export function Workspace({
         <ContextMenu
           x={menu.x}
           y={menu.y}
-          items={menuFor(menu.node, {
-            onEditScript: () => void openScript(menu.node),
-            onOpen: () =>
-              openTable(connection.id, {
-                title: menu.node.name,
-                qualified: menu.node.qualified ?? menu.node.name,
-              }),
-          })}
+          items={menuFor(
+            menu.node,
+            {
+              driver: connection.driver,
+              tableScripts: driver?.capabilities.table_scripts ?? false,
+            },
+            {
+              onOpen: () =>
+                openTable(connection.id, {
+                  title: menu.node.name,
+                  qualified: menu.node.qualified ?? menu.node.name,
+                }),
+              onScript: () => void openScript(menu.node),
+              onNewTab: (title, sql) => openScriptTab(connection.id, { title, sql }),
+              onCopy: (text) => void navigator.clipboard?.writeText(text),
+              onRefresh: menu.refresh,
+            },
+          )}
           onClose={() => setMenu(null)}
         />
       )}
@@ -369,21 +388,84 @@ export function Workspace({
 /**
  * What right-clicking this node offers.
  *
- * Only actions that would actually work: a menu item that reports "not
- * supported" when clicked is a menu item that should not have been there.
+ * Only actions that would actually work: an item that reports "not supported"
+ * when clicked is an item that should not have been drawn. That is why the
+ * script entries are gated on the driver rather than shown everywhere and
+ * allowed to fail — PostgreSQL cannot render a table as a CREATE statement, and
+ * SQL Server's OBJECT_DEFINITION returns nothing for one.
+ *
+ * Destructive statements open in a tab rather than running. A confirmation
+ * dialog asks whether you meant it; showing you the statement asks the better
+ * question, which is whether it says what you meant.
  */
-function menuFor(
+export function menuFor(
   node: SchemaNode,
-  actions: { onEditScript: () => void; onOpen: () => void },
+  options: { driver: string; tableScripts: boolean },
+  actions: {
+    onOpen: () => void;
+    onScript: () => void;
+    onNewTab: (title: string, sql: string) => void;
+    onCopy: (text: string) => void;
+    onRefresh: (() => void) | null;
+  },
 ): MenuItem[] {
   const items: MenuItem[] = [];
+  const qualified = node.qualified ?? node.name;
+  const isRelation =
+    node.kind === "table" || node.kind === "view" || node.kind === "materialized_view";
 
-  if (node.kind === "table" || node.kind === "view" || node.kind === "materialized_view") {
+  if (isRelation) {
     items.push({ label: "Open rows", onSelect: actions.onOpen });
+    items.push({
+      label: "New tab: SELECT",
+      onSelect: () => actions.onNewTab(node.name, selectFrom(qualified, options.driver)),
+    });
+    if (options.tableScripts) {
+      items.push({ label: "Show CREATE statement", onSelect: actions.onScript });
+    }
   }
+
   if (SCRIPTED.includes(node.kind)) {
-    items.push({ label: "Edit script", onSelect: actions.onEditScript });
+    items.push({ label: "Edit script", onSelect: actions.onScript });
   }
+
+  if (node.qualified) {
+    items.push({
+      label: "Copy qualified name",
+      separated: items.length > 0,
+      onSelect: () => actions.onCopy(qualified),
+    });
+  }
+  if (node.kind !== "folder") {
+    items.push({ label: "Copy name", onSelect: () => actions.onCopy(node.name) });
+  }
+
+  if (actions.onRefresh) {
+    items.push({ label: "Refresh", separated: true, onSelect: actions.onRefresh });
+  }
+
+  // Emptying and dropping are last, separated, and phrased with an ellipsis
+  // because neither happens on click — both open the statement for review.
+  if (node.kind === "table") {
+    items.push({
+      label: "Truncate table…",
+      separated: true,
+      onSelect: () =>
+        actions.onNewTab(`Truncate ${node.name}`, truncate(qualified, options.driver)),
+    });
+  }
+  if (isRelation) {
+    items.push({
+      label: node.kind === "view" ? "Drop view…" : "Drop table…",
+      separated: node.kind !== "table",
+      onSelect: () =>
+        actions.onNewTab(
+          `Drop ${node.name}`,
+          drop(qualified, options.driver, node.kind === "view" ? "view" : "table"),
+        ),
+    });
+  }
+
   return items;
 }
 

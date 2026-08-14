@@ -58,8 +58,16 @@ export function SchemaTree({
   onSelectDatabase: (name: string) => void;
   /** Clicking an object whose script *is* the object opens that script. */
   onOpenScript: (node: SchemaNode & NodeContext) => void;
-  /** Right-clicking an object asks for a menu at that point. */
-  onContextMenu: (node: SchemaNode & NodeContext, at: { x: number; y: number }) => void;
+  /**
+   * Right-clicking asks for a menu at that point. The third argument reloads
+   * this node's children, which only the tree can do — it owns the cache — and
+   * is null for a node that has none.
+   */
+  onContextMenu: (
+    node: SchemaNode & NodeContext,
+    at: { x: number; y: number },
+    refresh: (() => void) | null,
+  ) => void;
 }) {
   const [roots, setRoots] = useState<SchemaNode[] | null>(null);
   const [rootError, setRootError] = useState<string | null>(null);
@@ -90,6 +98,40 @@ export function SchemaTree({
       cancelled = true;
     };
   }, [connectionId]);
+
+  /** Forget a node's children and fetch them again. */
+  const reload = useCallback(
+    async (node: SchemaNode) => {
+      setTree((t) => {
+        const children = { ...t.children };
+        delete children[node.id];
+        return { ...t, children, loading: new Set(t.loading).add(node.id) };
+      });
+      try {
+        const children = await ipc.browse(connectionId, node.id);
+        setTree((t) => {
+          const loading = new Set(t.loading);
+          loading.delete(node.id);
+          const failed = { ...t.failed };
+          delete failed[node.id];
+          return {
+            ...t,
+            children: { ...t.children, [node.id]: children },
+            expanded: new Set(t.expanded).add(node.id),
+            loading,
+            failed,
+          };
+        });
+      } catch (e) {
+        setTree((t) => {
+          const loading = new Set(t.loading);
+          loading.delete(node.id);
+          return { ...t, loading, failed: { ...t.failed, [node.id]: (e as Error).message } };
+        });
+      }
+    },
+    [connectionId],
+  );
 
   const toggle = useCallback(
     async (node: SchemaNode) => {
@@ -164,6 +206,7 @@ export function SchemaTree({
           onSelectDatabase={onSelectDatabase}
           onOpenScript={onOpenScript}
           onContextMenu={onContextMenu}
+          onReload={reload}
         />
       ))}
     </ul>
@@ -181,6 +224,7 @@ function TreeNode({
   onSelectDatabase,
   onOpenScript,
   onContextMenu,
+  onReload,
 }: {
   node: SchemaNode;
   depth: number;
@@ -192,7 +236,12 @@ function TreeNode({
   onOpenTable: (node: SchemaNode & NodeContext) => void;
   onSelectDatabase: (name: string) => void;
   onOpenScript: (node: SchemaNode & NodeContext) => void;
-  onContextMenu: (node: SchemaNode & NodeContext, at: { x: number; y: number }) => void;
+  onContextMenu: (
+    node: SchemaNode & NodeContext,
+    at: { x: number; y: number },
+    refresh: (() => void) | null,
+  ) => void;
+  onReload: (node: SchemaNode) => void;
 }) {
   const expanded = tree.expanded.has(node.id);
   const loading = tree.loading.has(node.id);
@@ -242,7 +291,12 @@ function TreeNode({
         onClick={activate}
         onContextMenu={(e) => {
           e.preventDefault();
-          onContextMenu({ ...node, ...context }, { x: e.clientX, y: e.clientY });
+          onContextMenu(
+            { ...node, ...context },
+            { x: e.clientX, y: e.clientY },
+            // Only a node with children has anything to re-fetch.
+            node.expandable ? () => onReload(node) : null,
+          );
         }}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
@@ -325,6 +379,7 @@ function TreeNode({
                 onSelectDatabase={onSelectDatabase}
                 onOpenScript={onOpenScript}
                 onContextMenu={onContextMenu}
+                onReload={onReload}
               />
             ))
           )}
