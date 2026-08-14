@@ -6,6 +6,7 @@
 
 mod export;
 mod history;
+mod import;
 mod ipc;
 mod secrets;
 mod sessions;
@@ -60,6 +61,8 @@ pub fn run() {
             ipc::table_detail,
             ipc::object_definition,
             ipc::export_table,
+            ipc::export_database,
+            ipc::import_sql,
             ipc::cancel_export,
             ipc::apply_edit,
             ipc::completion_scope,

@@ -33,7 +33,11 @@ pub const PROGRESS_EVENT: &str = "export-progress";
 #[derive(Clone, Serialize)]
 pub struct Progress {
     pub id: String,
-    pub table: String,
+    /// What is being worked on, ready to show: a table, a database, a file.
+    pub label: String,
+    /// What `rows` counts. An import applies statements, not rows, and a bar
+    /// that says "rows" over a restore is simply wrong.
+    pub unit: String,
     pub rows: u64,
     pub total: Option<u64>,
     pub done: bool,
@@ -136,7 +140,8 @@ pub async fn run(
     let report = |rows: u64, done: bool| {
         on_progress(Progress {
             id: request.id.clone(),
-            table: request.table.clone(),
+            label: request.table.clone(),
+            unit: "rows".into(),
             rows,
             total,
             done,
@@ -195,6 +200,193 @@ pub async fn run(
             Err(e)
         }
     }
+}
+
+/// Everything needed to dump a whole database.
+pub struct DatabaseExportRequest {
+    pub id: String,
+    pub connection_id: String,
+    /// The database being dumped, for the header and the progress label.
+    pub database: String,
+    pub path: String,
+}
+
+/// Dump every table in a database to one SQL file.
+///
+/// Schema first, then data, table by table — the order a restore needs, since
+/// an INSERT into a table that does not exist yet is an error rather than a
+/// deferred write.
+///
+/// Only tables whose driver can render a CREATE statement get one; the rest are
+/// dumped as data alone, with a note in the file saying so. That is the honest
+/// position: PostgreSQL has no catalogue function that renders a table, and
+/// pretending otherwise would produce a file that restores into nothing.
+pub async fn run_database(
+    state: &AppState,
+    request: DatabaseExportRequest,
+    cancel: Arc<AtomicBool>,
+    on_progress: impl Fn(Progress) + Sync,
+) -> Result<u64> {
+    let config = state.config_for(&request.connection_id).await?;
+    let info = state.drivers.get(&config.driver)?.info();
+    let quote = info.capabilities.identifier_quote;
+    let scriptable = info.capabilities.table_scripts;
+
+    let session = state.sessions.get(&request.connection_id).await?;
+    let mut guard = session.connection.lock().await;
+
+    let tables = collect_tables(&mut **guard, &request.database).await?;
+    let total = Some(tables.len() as u64);
+
+    let report = |done_tables: u64, label: &str, done: bool| {
+        on_progress(Progress {
+            id: request.id.clone(),
+            label: label.to_string(),
+            unit: "tables".into(),
+            rows: done_tables,
+            total,
+            done,
+        });
+    };
+    report(0, &request.database, false);
+
+    let file = std::fs::File::create(&request.path)
+        .map_err(|e| Error::Io(format!("could not create {}: {}", request.path, e)))?;
+    let mut out = BufWriter::new(file);
+
+    let header = format!(
+        "-- Table X dump of {}\n-- {} tables\n\n",
+        request.database,
+        tables.len()
+    );
+    use std::io::Write as _;
+    out.write_all(header.as_bytes())
+        .map_err(|e| Error::Io(e.to_string()))?;
+
+    let mut written = 0u64;
+    for (index, table) in tables.iter().enumerate() {
+        if cancel.load(Ordering::Relaxed) {
+            drop(out);
+            let _ = std::fs::remove_file(&request.path);
+            return Err(Error::Cancelled);
+        }
+        report(index as u64, &table.name, false);
+
+        writeln!(out, "--\n-- {}\n--", table.name).map_err(|e| Error::Io(e.to_string()))?;
+
+        if scriptable {
+            match guard.definition(&table.id).await {
+                Ok(ddl) => {
+                    // Dumps end statements with a semicolon; SHOW CREATE and
+                    // friends do not include one.
+                    writeln!(out, "{};\n", ddl.trim_end_matches(';'))
+                        .map_err(|e| Error::Io(e.to_string()))?;
+                }
+                Err(e) => {
+                    writeln!(out, "-- no CREATE statement available: {e}\n")
+                        .map_err(|e| Error::Io(e.to_string()))?;
+                }
+            }
+        } else {
+            writeln!(
+                out,
+                "-- {} cannot render a CREATE statement for a table; data only\n",
+                info.name
+            )
+            .map_err(|e| Error::Io(e.to_string()))?;
+        }
+
+        let mut sink = FileSink {
+            writer: None,
+            sink: Some(&mut out),
+            format: Format::Sql,
+            table: table.name.clone(),
+            quote,
+            rows: 0,
+            cancel: &cancel,
+            report: &|_, _| {},
+        };
+
+        let sql = format!("SELECT * FROM {}", table.qualified);
+        let opts = FetchOptions {
+            max_rows: None,
+            offset: 0,
+            timeout_secs: None,
+        };
+        guard.stream(&sql, &opts, &mut sink).await?;
+        written += sink.rows;
+        // The writer borrows `out`; it has to be finished before the next table
+        // can write its own header through the same handle.
+        if let Some(w) = sink.writer.take() {
+            w.finish().map_err(|e| Error::Io(e.to_string()))?;
+        }
+        writeln!(out).map_err(|e| Error::Io(e.to_string()))?;
+    }
+
+    out.flush().map_err(|e| Error::Io(e.to_string()))?;
+    report(tables.len() as u64, &request.database, true);
+    Ok(written)
+}
+
+/// One table found in the tree.
+struct FoundTable {
+    /// Tree path, for asking the driver to script it.
+    id: String,
+    name: String,
+    /// Quoted and qualified by the driver.
+    qualified: String,
+}
+
+/// Walk the object tree and collect the tables of one database.
+///
+/// The tree is walked rather than queried directly because its shape differs by
+/// engine — PostgreSQL and SQL Server put schemas between a database and its
+/// tables, MySQL and ClickHouse do not — and the walk does not need to know
+/// which is which. It descends only into the named database, and stops at the
+/// tables themselves rather than expanding their columns.
+async fn collect_tables(
+    conn: &mut dyn tablex_core::driver::Connection,
+    database: &str,
+) -> Result<Vec<FoundTable>> {
+    use tablex_core::schema::NodeKind;
+
+    let mut found = Vec::new();
+    let roots = conn.browse(None).await?;
+
+    // A file-backed engine has no database level: its roots are already the
+    // folders of the one database there is.
+    let mut frontier: Vec<String> = if roots.iter().any(|n| matches!(n.kind, NodeKind::Database)) {
+        roots
+            .iter()
+            .filter(|n| matches!(n.kind, NodeKind::Database) && n.name == database)
+            .map(|n| n.id.clone())
+            .collect()
+    } else {
+        roots.iter().map(|n| n.id.clone()).collect()
+    };
+
+    while let Some(parent) = frontier.pop() {
+        for node in conn.browse(Some(&parent)).await? {
+            match node.kind {
+                NodeKind::Table | NodeKind::View | NodeKind::MaterializedView => {
+                    if let Some(qualified) = node.qualified.clone() {
+                        found.push(FoundTable {
+                            id: node.id,
+                            name: node.name,
+                            qualified,
+                        });
+                    }
+                }
+                // Schemas and folders are containers; anything else — a
+                // function, a trigger — has no rows to dump.
+                NodeKind::Schema | NodeKind::Folder => frontier.push(node.id),
+                _ => {}
+            }
+        }
+    }
+
+    found.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(found)
 }
 
 #[cfg(test)]

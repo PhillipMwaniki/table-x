@@ -622,6 +622,110 @@ pub async fn export_table(
     Ok(rows)
 }
 
+/// What the frontend asks for when dumping a database.
+#[derive(Deserialize)]
+pub struct DatabaseExportArgs {
+    pub id: String,
+    pub connection_id: String,
+    pub database: String,
+    pub path: String,
+}
+
+/// Dump a whole database to one SQL file.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn export_database(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    request: DatabaseExportArgs,
+) -> IpcResult<u64> {
+    let started = std::time::Instant::now();
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    state
+        .exports
+        .lock()
+        .await
+        .insert(request.id.clone(), cancel.clone());
+    let id = request.id.clone();
+    let path = request.path.clone();
+
+    let result = crate::export::run_database(
+        &state,
+        crate::export::DatabaseExportRequest {
+            id: request.id,
+            connection_id: request.connection_id,
+            database: request.database,
+            path: request.path,
+        },
+        cancel,
+        |progress| {
+            let _ = tauri::Emitter::emit(&app, crate::export::PROGRESS_EVENT, progress);
+        },
+    )
+    .await;
+
+    state.exports.lock().await.remove(&id);
+    let rows = result?;
+    tracing::debug!(
+        rows,
+        path,
+        elapsed_ms = started.elapsed().as_millis(),
+        "database export"
+    );
+    Ok(rows)
+}
+
+/// What the frontend asks for when running a SQL file.
+#[derive(Deserialize)]
+pub struct ImportArgs {
+    pub id: String,
+    pub connection_id: String,
+    pub path: String,
+}
+
+/// Run every statement in a SQL file against a connection.
+///
+/// Shares the cancellation registry with exports, so one command stops either.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn import_sql(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    request: ImportArgs,
+) -> IpcResult<u64> {
+    let started = std::time::Instant::now();
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    state
+        .exports
+        .lock()
+        .await
+        .insert(request.id.clone(), cancel.clone());
+    let id = request.id.clone();
+    let path = request.path.clone();
+
+    let result = crate::import::run(
+        &state,
+        crate::import::ImportRequest {
+            id: request.id,
+            connection_id: request.connection_id,
+            path: request.path,
+        },
+        cancel,
+        |progress| {
+            let _ = tauri::Emitter::emit(&app, crate::export::PROGRESS_EVENT, progress);
+        },
+    )
+    .await;
+
+    state.exports.lock().await.remove(&id);
+    let statements = result?;
+    tracing::debug!(
+        statements,
+        path,
+        elapsed_ms = started.elapsed().as_millis(),
+        "sql import"
+    );
+    Ok(statements)
+}
+
 /// Ask a running export to stop.
 ///
 /// Sets a flag rather than aborting the task: an export spends most of its time
