@@ -46,6 +46,7 @@ export function SchemaTree({
   activeDatabase,
   onOpenTable,
   onSelectDatabase,
+  onOpenScript,
   onContextMenu,
 }: {
   connectionId: string;
@@ -55,6 +56,8 @@ export function SchemaTree({
   onOpenTable: (node: SchemaNode & NodeContext) => void;
   /** Clicking a database asks the session to switch to it. */
   onSelectDatabase: (name: string) => void;
+  /** Clicking an object whose script *is* the object opens that script. */
+  onOpenScript: (node: SchemaNode & NodeContext) => void;
   /** Right-clicking an object asks for a menu at that point. */
   onContextMenu: (node: SchemaNode & NodeContext, at: { x: number; y: number }) => void;
 }) {
@@ -159,6 +162,7 @@ export function SchemaTree({
           onToggle={toggle}
           onOpenTable={onOpenTable}
           onSelectDatabase={onSelectDatabase}
+          onOpenScript={onOpenScript}
           onContextMenu={onContextMenu}
         />
       ))}
@@ -175,6 +179,7 @@ function TreeNode({
   onToggle,
   onOpenTable,
   onSelectDatabase,
+  onOpenScript,
   onContextMenu,
 }: {
   node: SchemaNode;
@@ -186,6 +191,7 @@ function TreeNode({
   onToggle: (node: SchemaNode) => void;
   onOpenTable: (node: SchemaNode & NodeContext) => void;
   onSelectDatabase: (name: string) => void;
+  onOpenScript: (node: SchemaNode & NodeContext) => void;
   onContextMenu: (node: SchemaNode & NodeContext, at: { x: number; y: number }) => void;
 }) {
   const expanded = tree.expanded.has(node.id);
@@ -197,6 +203,11 @@ function TreeNode({
   // sequences are listed but not opened: there is nothing to select from them.
   const opens =
     node.kind === "table" || node.kind === "view" || node.kind === "materialized_view";
+  // For a routine or a trigger the script *is* the object: there are no rows to
+  // show, so a click that did nothing would be the only thing this list does
+  // nothing for.
+  const scripted =
+    node.kind === "function" || node.kind === "procedure" || node.kind === "trigger";
   const isDatabase = node.kind === "database";
   const isActiveDatabase = isDatabase && node.name === activeDatabase;
 
@@ -209,6 +220,10 @@ function TreeNode({
   const activate = () => {
     if (opens) {
       onOpenTable({ ...node, ...context });
+      return;
+    }
+    if (scripted) {
+      onOpenScript({ ...node, ...context });
       return;
     }
     // Selecting a database points the session at it *and* opens it, because
@@ -308,6 +323,7 @@ function TreeNode({
                 onToggle={onToggle}
                 onOpenTable={onOpenTable}
                 onSelectDatabase={onSelectDatabase}
+                onOpenScript={onOpenScript}
                 onContextMenu={onContextMenu}
               />
             ))

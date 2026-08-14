@@ -170,6 +170,7 @@ export function Workspace({
             })
           }
           onSelectDatabase={(name) => void useDatabase(connection.id, name)}
+          onOpenScript={(node) => void openScript(node)}
           onContextMenu={(node, at) => setMenu({ node, x: at.x, y: at.y })}
         />
       </aside>

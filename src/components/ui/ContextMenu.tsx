@@ -46,17 +46,24 @@ export function ContextMenu({
 
   useEffect(() => {
     const close = () => onClose();
+    const closeIfOutside = (e: PointerEvent) => {
+      // A press *inside* the menu must not dismiss it. Pointerdown precedes
+      // click, so closing here would unmount the item before the click could
+      // land on it — the menu would open, then do nothing whatever you picked.
+      if (ref.current?.contains(e.target as Node)) return;
+      onClose();
+    };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
     // Capture, so a click that also does something else still dismisses this.
-    window.addEventListener("pointerdown", close, true);
+    window.addEventListener("pointerdown", closeIfOutside, true);
     window.addEventListener("keydown", onKey);
     // Any scroll moves the row this menu was opened against, leaving it
     // pointing at whatever slid underneath.
     window.addEventListener("scroll", close, true);
     return () => {
-      window.removeEventListener("pointerdown", close, true);
+      window.removeEventListener("pointerdown", closeIfOutside, true);
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("scroll", close, true);
     };
