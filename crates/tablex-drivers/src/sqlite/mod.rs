@@ -7,6 +7,7 @@
 mod types;
 
 use async_trait::async_trait;
+use rusqlite::OptionalExtension;
 use std::sync::{Arc, Mutex};
 use tablex_core::{
     config::ConnectionConfig,
@@ -201,6 +202,40 @@ impl Connection for SqliteConnection {
         // The file path is the closest thing to a database name here, and the
         // UI already shows it. Reporting none keeps the database switcher off.
         Ok(None)
+    }
+
+    /// SQLite stores the original text of every object in `sqlite_master`, so
+    /// this is the statement the user actually wrote, comments and all.
+    async fn definition(&mut self, node_id: &str) -> Result<String> {
+        let path = decode_path(node_id);
+        let [_folder, name] = path.as_slice() else {
+            return Err(Error::Unsupported(
+                "only an object has a definition to show".into(),
+            ));
+        };
+        let name = name.clone();
+
+        self.with_conn(move |conn| {
+            let sql: Option<Option<String>> = conn
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE name = ?1",
+                    [&name],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(map_err)?;
+
+            match sql.flatten() {
+                Some(text) => Ok(text),
+                // Auto-created indexes for UNIQUE and PRIMARY KEY constraints
+                // have a NULL sql: they are declared by the table, not by a
+                // statement of their own.
+                None => Err(Error::Unsupported(format!(
+                    "{name} has no statement of its own — it was created implicitly by its table"
+                ))),
+            }
+        })
+        .await
     }
 
     async fn table_detail(&mut self, _schema: Option<&str>, table: &str) -> Result<TableDetail> {

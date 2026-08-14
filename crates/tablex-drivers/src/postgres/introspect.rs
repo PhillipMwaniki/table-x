@@ -298,6 +298,54 @@ async fn browse_triggers(
         .collect())
 }
 
+/// The statement that would recreate the object at `path`.
+///
+/// Every one of these is a `pg_get_*def` call, which asks the server to render
+/// the object from the catalogue. PostgreSQL does not keep the original text —
+/// unlike SQLite and MySQL — so this is the server's own rendering, normalised
+/// and with comments dropped. That is worth saying once here: it is the closest
+/// thing to a source of truth PostgreSQL has, but it is not what the user typed.
+pub async fn definition(client: &Client, node_id: &str) -> Result<String> {
+    let path = decode_path(node_id);
+    let segments: Vec<&str> = path.iter().map(String::as_str).collect();
+
+    let (sql, params): (&str, Vec<&(dyn tokio_postgres::types::ToSql + Sync)>) =
+        match segments.as_slice() {
+            // A routine is addressed by name *and* argument list, because
+            // overloads share the name and only the arguments tell them apart.
+            [_db, schema, "functions" | "procedures", name, args] => (
+                "SELECT pg_catalog.pg_get_functiondef(p.oid)                  FROM pg_catalog.pg_proc p                  JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace                  WHERE n.nspname = $1 AND p.proname = $2                    AND pg_catalog.pg_get_function_identity_arguments(p.oid) = $3",
+                vec![schema, name, args],
+            ),
+
+            [_db, schema, "triggers", table, name] => (
+                "SELECT pg_catalog.pg_get_triggerdef(t.oid)                  FROM pg_catalog.pg_trigger t                  JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid                  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace                  WHERE n.nspname = $1 AND c.relname = $2 AND t.tgname = $3",
+                vec![schema, table, name],
+            ),
+
+            [_db, schema, "views" | "matviews", name] => (
+                "SELECT pg_catalog.pg_get_viewdef(c.oid, true)                  FROM pg_catalog.pg_class c                  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace                  WHERE n.nspname = $1 AND c.relname = $2",
+                vec![schema, name],
+            ),
+
+            _ => {
+                return Err(Error::Unsupported(
+                    "no definition available for this object".into(),
+                ))
+            }
+        };
+
+    let rows = client.query(sql, &params).await.map_err(|e| {
+        // An aggregate has no function body to render, and the server says so
+        // in a message worth passing through rather than replacing.
+        Error::Unsupported(format!("could not read the definition: {}", map_err(e)))
+    })?;
+
+    rows.first()
+        .and_then(|r| r.get::<_, Option<String>>(0))
+        .ok_or_else(|| Error::Unsupported("the object no longer exists".into()))
+}
+
 /// `"schema"."name"`, quoted so it can be pasted straight into a statement.
 fn qualify(schema: &str, name: &str) -> String {
     format!("{}.{}", quote_ident(schema, '"'), quote_ident(name, '"'))

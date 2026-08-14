@@ -178,6 +178,19 @@ pub trait Connection: Send + Sync {
         Ok(None)
     }
 
+    /// The statement that would recreate the object at `node_id`.
+    ///
+    /// Takes a tree path rather than a name and a kind: the driver built that
+    /// path, so it already knows which catalogue to ask and how many levels its
+    /// engine qualifies by. The text comes back as the server stores it, which
+    /// is what makes it worth editing rather than reading — a re-rendered
+    /// approximation of someone's procedure is not something to run.
+    async fn definition(&mut self, _node_id: &str) -> Result<String> {
+        Err(crate::error::Error::Unsupported(
+            "this driver cannot show object definitions".into(),
+        ))
+    }
+
     /// Point this session at another database on the same server.
     ///
     /// Engines that can do it in-session (`USE`, or a default that is just a

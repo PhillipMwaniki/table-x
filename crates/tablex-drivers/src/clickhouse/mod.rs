@@ -231,6 +231,34 @@ impl Connection for ClickhouseConnection {
         Ok(Some(self.database.clone()))
     }
 
+    /// `SHOW CREATE`, which ClickHouse answers for both tables and functions.
+    async fn definition(&mut self, node_id: &str) -> Result<String> {
+        let path = decode_path(node_id);
+        let [db, folder, name] = path.as_slice() else {
+            return Err(Error::Unsupported(
+                "only an object has a definition to show".into(),
+            ));
+        };
+
+        // A user-defined function is server-wide, so it is named on its own; a
+        // view or table is named with its database.
+        let statement = match folder.as_str() {
+            "functions" => format!("SHOW CREATE FUNCTION {}", quote_ident(name, QUOTE)),
+            "views" | "tables" => format!("SHOW CREATE TABLE {}", qualify(db, name)),
+            other => {
+                return Err(Error::Unsupported(format!(
+                    "no definition available for {other}"
+                )))
+            }
+        };
+
+        self.column_of(&statement)
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::Unsupported(format!("{name} reported no definition")))
+    }
+
     /// The database is a request parameter here, not session state, so
     /// switching is a local change that the next request carries with it.
     async fn use_database(&mut self, database: &str) -> Result<()> {

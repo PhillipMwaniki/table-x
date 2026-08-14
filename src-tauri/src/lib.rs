@@ -57,6 +57,7 @@ pub fn run() {
             ipc::execute,
             ipc::browse,
             ipc::table_detail,
+            ipc::object_definition,
             ipc::apply_edit,
             ipc::completion_scope,
             ipc::ssh_host_fingerprint,

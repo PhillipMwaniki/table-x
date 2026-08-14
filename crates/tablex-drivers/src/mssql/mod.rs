@@ -237,6 +237,39 @@ impl Connection for MssqlConnection {
         Ok(Some(self.database.clone()))
     }
 
+    /// `OBJECT_DEFINITION` returns the module text as it was submitted.
+    ///
+    /// Encrypted modules (`WITH ENCRYPTION`) return NULL rather than an error,
+    /// which is worth saying plainly: the text is not missing, the server is
+    /// refusing to hand it over.
+    async fn definition(&mut self, node_id: &str) -> Result<String> {
+        let path = decode_path(node_id);
+        let [db, schema, folder, name] = path.as_slice() else {
+            return Err(Error::Unsupported(
+                "only an object has a definition to show".into(),
+            ));
+        };
+        if !matches!(
+            folder.as_str(),
+            "functions" | "procedures" | "triggers" | "views"
+        ) {
+            return Err(Error::Unsupported(format!(
+                "no definition available for {folder}"
+            )));
+        }
+
+        // OBJECT_ID resolves a three-part name, so this reads another database's
+        // module without a USE — the same property the catalogue queries rely on.
+        let target = escape_literal(&qualify(db, schema, name));
+        let sql = format!("SELECT OBJECT_DEFINITION(OBJECT_ID('{target}'))");
+        match self.scalar_string(&sql).await? {
+            Some(text) => Ok(text),
+            None => Err(Error::Unsupported(format!(
+                "{name} has no readable definition — it may be encrypted, or a system object"
+            ))),
+        }
+    }
+
     /// `USE` switches the session, so no reconnection is needed.
     ///
     /// Browsing does not depend on this — the catalogue queries name their

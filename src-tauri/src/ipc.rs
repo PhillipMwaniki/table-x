@@ -540,6 +540,18 @@ pub async fn browse(
     Ok(nodes)
 }
 
+/// The statement that would recreate an object, for viewing and editing.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn object_definition(
+    state: tauri::State<'_, AppState>,
+    connection_id: String,
+    node_id: String,
+) -> IpcResult<String> {
+    let session = state.sessions.get(&connection_id).await?;
+    let mut guard = session.connection.lock().await;
+    Ok(guard.definition(&node_id).await?)
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub async fn table_detail(
     state: tauri::State<'_, AppState>,

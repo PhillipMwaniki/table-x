@@ -213,6 +213,10 @@ impl Connection for PostgresConnection {
         Ok(Some(self.database.clone()))
     }
 
+    async fn definition(&mut self, node_id: &str) -> Result<String> {
+        introspect::definition(&self.client, node_id).await
+    }
+
     // `use_database` is deliberately left at its default error. A PostgreSQL
     // connection is bound to one database by the startup packet and there is no
     // in-session equivalent of `USE`; the app layer reconnects instead.

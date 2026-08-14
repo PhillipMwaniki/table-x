@@ -206,6 +206,40 @@ impl Connection for MysqlConnection {
         Ok(self.default_db.clone())
     }
 
+    /// `SHOW CREATE ...`, which returns the statement as the server stored it.
+    ///
+    /// `information_schema.ROUTINES.ROUTINE_DEFINITION` holds only the body —
+    /// no `CREATE`, no parameter list, no `DETERMINISTIC` — so it cannot be run
+    /// back, which is the whole point of showing it.
+    async fn definition(&mut self, node_id: &str) -> Result<String> {
+        let path = decode_path(node_id);
+        let [db, folder, name] = path.as_slice() else {
+            return Err(Error::Unsupported(
+                "only an object has a definition to show".into(),
+            ));
+        };
+
+        // The statement text is not in the same column for every object type:
+        // routines and triggers report sql_mode first, views and tables do not.
+        let (keyword, column) = match folder.as_str() {
+            "functions" => ("FUNCTION", 2),
+            "procedures" => ("PROCEDURE", 2),
+            "triggers" => ("TRIGGER", 2),
+            "views" => ("VIEW", 1),
+            "tables" => ("TABLE", 1),
+            other => {
+                return Err(Error::Unsupported(format!(
+                    "no definition available for {other}"
+                )))
+            }
+        };
+
+        let sql = format!("SHOW CREATE {keyword} {}", qualify(db, name));
+        let row: Option<mysql_async::Row> = self.conn.query_first(sql).await.map_err(map_err)?;
+        row.and_then(|r| r.get::<String, _>(column))
+            .ok_or_else(|| Error::Unsupported(format!("{name} reported no definition")))
+    }
+
     /// MySQL switches in-session, so no reconnection is needed.
     ///
     /// The name is quoted rather than bound: `USE` takes an identifier, and

@@ -663,6 +663,68 @@ async fn a_view_reports_the_base_table_it_reads_from() {
 }
 
 #[tokio::test]
+async fn a_trigger_definition_comes_back_as_written() {
+    let mut conn = seeded().await;
+    exec(
+        &mut conn,
+        "CREATE TRIGGER users_touch AFTER UPDATE ON users BEGIN SELECT 1; END",
+    )
+    .await;
+
+    let roots = conn.browse(None).await.expect("browse");
+    let folder = roots.iter().find(|n| n.name == "Triggers").expect("folder");
+    let triggers = conn.browse(Some(&folder.id)).await.expect("triggers");
+
+    let sql = conn
+        .definition(&triggers[0].id)
+        .await
+        .expect("trigger definition");
+
+    // SQLite keeps the original text, so this is the statement as typed rather
+    // than a rendering of it — including the body, which is the part worth
+    // editing.
+    assert!(sql.starts_with("CREATE TRIGGER users_touch"), "{sql}");
+    assert!(sql.contains("SELECT 1"), "{sql}");
+}
+
+#[tokio::test]
+async fn indexes_list_only_the_ones_someone_wrote() {
+    let mut conn = seeded().await;
+    exec(
+        &mut conn,
+        "CREATE INDEX users_by_balance ON users (balance)",
+    )
+    .await;
+
+    let roots = conn.browse(None).await.expect("browse");
+    let folder = roots.iter().find(|n| n.name == "Indexes").expect("folder");
+    let indexes = conn.browse(Some(&folder.id)).await.expect("indexes");
+
+    // `users.email` is UNIQUE, so SQLite also made `sqlite_autoindex_users_1`.
+    // It is filtered out with the rest of the `sqlite_` internals, which is why
+    // every index in this list has a statement to show.
+    let names: Vec<_> = indexes.iter().map(|n| n.name.as_str()).collect();
+    assert_eq!(names, vec!["users_by_balance"]);
+
+    let sql = conn
+        .definition(&indexes[0].id)
+        .await
+        .expect("index definition");
+    assert!(sql.starts_with("CREATE INDEX users_by_balance"), "{sql}");
+}
+
+#[tokio::test]
+async fn a_folder_has_no_definition() {
+    let mut conn = seeded().await;
+    let roots = conn.browse(None).await.expect("browse");
+    let err = conn
+        .definition(&roots[0].id)
+        .await
+        .expect_err("a folder is not an object");
+    assert!(err.to_string().contains("object"), "{err}");
+}
+
+#[tokio::test]
 async fn foreign_keys_are_enforced() {
     let mut conn = seeded().await;
     exec(
