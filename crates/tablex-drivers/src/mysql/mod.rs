@@ -365,16 +365,38 @@ impl Connection for MysqlConnection {
             .await
             .map_err(map_err)?;
 
-        // One query for every column rather than one per table: on a server with
-        // thousands of tables the round trips dominate.
+        // Columns of the *current* database only.
+        //
+        // This used to read every column of every database on the server. On a
+        // development machine with a couple of dozen schemas that is hundreds of
+        // thousands of rows out of `information_schema.COLUMNS`, and because a
+        // session is serialized behind one mutex, the schema tree's own queries
+        // queued behind it — expanding a database appeared to take seconds when
+        // what it was actually doing was waiting for autocomplete.
+        //
+        // Scoping it is also the more correct answer: an unqualified name in the
+        // editor resolves in the current database, so those are the identifiers
+        // completion should offer first.
+        let Some(database) = self.default_db.clone() else {
+            // No database selected yet: the schema list is still useful, and
+            // there is no sensible set of tables to complete against.
+            return Ok(CompletionScope {
+                schemas,
+                tables: Vec::new(),
+                functions: MYSQL_FUNCTIONS.iter().map(|s| s.to_string()).collect(),
+                keywords: Vec::new(),
+            });
+        };
+
+        // One query for every column rather than one per table: within a
+        // database the round trips would still dominate.
         let rows: Vec<(String, String)> = self
             .conn
-            .query(format!(
-                "SELECT CONCAT(TABLE_SCHEMA, '.', TABLE_NAME), COLUMN_NAME \
-                 FROM information_schema.COLUMNS \
-                 WHERE TABLE_SCHEMA NOT IN ({HIDDEN_SCHEMAS}) \
-                 ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION"
-            ))
+            .exec(
+                "SELECT TABLE_NAME, COLUMN_NAME FROM information_schema.COLUMNS \
+                 WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME, ORDINAL_POSITION",
+                (&database,),
+            )
             .await
             .map_err(map_err)?;
 

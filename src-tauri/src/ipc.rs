@@ -520,8 +520,23 @@ pub async fn browse(
     parent: Option<String>,
 ) -> IpcResult<Vec<SchemaNode>> {
     let session = state.sessions.get(&connection_id).await?;
+    let queued = std::time::Instant::now();
     let mut guard = session.connection.lock().await;
-    Ok(guard.browse(parent.as_deref()).await?)
+
+    // Two timings, not one. A session is serialized behind this lock, so a slow
+    // browse is either a slow catalogue query or a fast one that waited for
+    // something else on the same connection — and those have opposite fixes.
+    let waited = queued.elapsed();
+    let started = std::time::Instant::now();
+    let nodes = guard.browse(parent.as_deref()).await?;
+    tracing::debug!(
+        parent = parent.as_deref().unwrap_or("<root>"),
+        nodes = nodes.len(),
+        waited_ms = waited.as_millis(),
+        query_ms = started.elapsed().as_millis(),
+        "browse"
+    );
+    Ok(nodes)
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -561,5 +576,15 @@ pub async fn completion_scope(
 ) -> IpcResult<tablex_core::driver::CompletionScope> {
     let session = state.sessions.get(&connection_id).await?;
     let mut guard = session.connection.lock().await;
-    Ok(guard.completion_scope().await?)
+    let started = std::time::Instant::now();
+    let scope = guard.completion_scope().await?;
+    // Worth timing because this one holds the session lock while the user is
+    // trying to use the tree, and its cost scales with the catalogue rather
+    // than with anything they asked for.
+    tracing::debug!(
+        tables = scope.tables.len(),
+        query_ms = started.elapsed().as_millis(),
+        "completion scope"
+    );
+    Ok(scope)
 }

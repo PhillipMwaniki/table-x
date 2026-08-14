@@ -337,11 +337,14 @@ impl Connection for ClickhouseConnection {
             ))
             .await?;
 
+        // The current database only, for the same reason as the other drivers:
+        // every column on the server is a great deal of data to fetch for a
+        // dropdown, and unqualified names resolve here anyway.
         let rows = self
             .rows_of(&format!(
-                "SELECT concat(database, '.', table), name FROM system.columns \
-                 WHERE database NOT IN ({HIDDEN_DATABASES}) \
-                 ORDER BY database, table, position"
+                "SELECT table, name FROM system.columns \
+                 WHERE database = {} ORDER BY table, position",
+                types::literal_str(&self.database)
             ))
             .await?;
 

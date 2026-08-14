@@ -50,9 +50,13 @@ export function Workspace({
 
   // The session's database and the first tab are established once per
   // connection; autocomplete is fetched once rather than per keystroke.
+  //
+  // Completion is chained rather than fired alongside, because everything on a
+  // connection is serialized behind one session lock: asking for it at the same
+  // moment as the tree's first query puts the catalogue scan in front of what
+  // the user is looking at.
   useEffect(() => {
-    void loadSession(connection.id);
-    void loadCompletionFor(connection.id);
+    void loadSession(connection.id).then(() => loadCompletionFor(connection.id));
   }, [connection.id, loadSession, loadCompletionFor]);
 
   // Undo/redo are global shortcuts while this pane is mounted. Bound on window
