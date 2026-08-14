@@ -199,7 +199,7 @@ export function Workspace({
             <div className="flex flex-1 items-center justify-center px-6 text-center text-[12px] text-text-muted">
               {state.error
                 ? "Fix the statement and run again."
-                : "Write a query and press Ctrl+Enter, or double-click a table in the sidebar."}
+                : "Write a query and press Ctrl+Enter, or click a table in the sidebar."}
             </div>
           )}
 

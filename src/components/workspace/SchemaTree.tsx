@@ -166,8 +166,12 @@ function TreeNode({
         role="treeitem"
         aria-expanded={node.expandable ? expanded : undefined}
         tabIndex={0}
-        onClick={() => node.expandable && onToggle(node)}
-        onDoubleClick={() => isTable && onOpenTable(node)}
+        // Clicking a table opens its rows. Anywhere else in the tree a click
+        // expands, which is what a folder-shaped thing should do — but a table
+        // is the thing you came for, and making the obvious gesture do nothing
+        // while hiding the data behind a double-click is not an affordance, it
+        // is a guess.
+        onClick={() => (isTable ? onOpenTable(node) : node.expandable && onToggle(node))}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
             e.preventDefault();
@@ -179,9 +183,25 @@ function TreeNode({
         className="flex cursor-default items-center gap-1.5 py-[3px] pr-2 hover:bg-surface-2"
         title={node.detail ? `${node.name} — ${node.detail}` : node.name}
       >
-        <span className="w-2.5 shrink-0 text-[8px] text-text-muted">
-          {node.expandable ? (expanded ? "▾" : "▸") : ""}
-        </span>
+        {/* A table's columns are behind the chevron, since its row is now the
+            open-data target. Rendered as a button so it takes the click without
+            also opening the table, and so it is reachable from the keyboard. */}
+        {node.expandable && isTable ? (
+          <button
+            aria-label={expanded ? `Collapse ${node.name}` : `Expand ${node.name}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggle(node);
+            }}
+            className="-my-1 w-2.5 shrink-0 py-1 text-[8px] text-text-muted hover:text-text"
+          >
+            {expanded ? "▾" : "▸"}
+          </button>
+        ) : (
+          <span className="w-2.5 shrink-0 text-[8px] text-text-muted">
+            {node.expandable ? (expanded ? "▾" : "▸") : ""}
+          </span>
+        )}
         <span className="shrink-0 text-[10px] text-text-muted">{GLYPH[node.kind] ?? "·"}</span>
         <span className="truncate text-[11.5px] text-text">{node.name}</span>
         {node.detail && (

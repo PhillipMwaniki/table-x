@@ -99,8 +99,13 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   reset: (id) => set((s) => ({ panes: patch(s.panes, id, blankPane()) })),
 
   run: async (id, sqlOverride) => {
-    const sql = sqlOverride ?? get().pane(id).sql;
+    const pane = get().pane(id);
+    const sql = sqlOverride ?? pane.sql;
     if (!sql.trim()) return;
+    // One query per pane at a time. The session is locked for the duration
+    // anyway, so a second submission would only queue behind the first - and
+    // an impatient double-click on a table should not run it twice.
+    if (pane.running) return;
 
     set((s) => ({ panes: patch(s.panes, id, { running: true, error: null }) }));
     try {
