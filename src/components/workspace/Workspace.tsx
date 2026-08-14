@@ -8,14 +8,16 @@
  * has more than one.
  */
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { SchemaTree } from "./SchemaTree";
 import { SqlEditor } from "./SqlEditor";
 import { ResultGrid } from "./ResultGrid";
 import { HistoryPanel } from "./HistoryPanel";
 import { TabBar } from "./TabBar";
+import { SplitHandle } from "./SplitHandle";
 import { Button, Spinner, cx } from "../ui/primitives";
 import { useHistory } from "@/store/history";
+import { useSettings } from "@/store/settings";
 import { useWorkspace } from "@/store/workspace";
 import type { ConnectionConfig, DriverInfo, StatementResult } from "@/lib/types";
 
@@ -43,6 +45,15 @@ export function Workspace({
 
   const historyOpen = useHistory((s) => s.open);
   const setHistoryOpen = useHistory((s) => s.setOpen);
+
+  // The stored split, and the live one while the divider is being dragged.
+  // Dragging keeps its position here rather than in the store so a drag does
+  // not write a preferences file sixty times a second.
+  const storedRatio = useSettings((s) => s.editorRatio);
+  const setEditorRatio = useSettings((s) => s.setEditorRatio);
+  const [dragRatio, setDragRatio] = useState<number | null>(null);
+  const ratio = dragRatio ?? storedRatio;
+  const splitRef = useRef<HTMLDivElement>(null);
 
   const tab = activeTab(connection.id);
   const completion = useWorkspace((s) => s.completion[connection.id] ?? null);
@@ -187,20 +198,36 @@ export function Workspace({
             {/* A table tab gives its whole height to the rows: there is no
                 statement to edit, and the SQL that produced them is one line
                 the tab's own context already describes. */}
-            {tab.kind === "query" && (
-              <div className="h-[38%] min-h-24 shrink-0 border-b border-border">
-                <SqlEditor
-                  value={tab.sql}
-                  onChange={(sql) => setSql(connection.id, tab.id, sql)}
-                  onRun={(text) => void run(connection.id, tab.id, text)}
-                  driver={connection.driver}
-                  completion={completion}
-                  errorPosition={tab.error?.position}
-                />
-              </div>
-            )}
+            <div ref={splitRef} className="flex min-h-0 flex-1 flex-col">
+              {tab.kind === "query" && (
+                <>
+                  <div
+                    style={{ height: `${ratio * 100}%` }}
+                    className="min-h-0 shrink-0 overflow-hidden"
+                  >
+                    <SqlEditor
+                      value={tab.sql}
+                      onChange={(sql) => setSql(connection.id, tab.id, sql)}
+                      onRun={(text) => void run(connection.id, tab.id, text)}
+                      driver={connection.driver}
+                      completion={completion}
+                      errorPosition={tab.error?.position}
+                    />
+                  </div>
 
-            <div className="flex min-h-0 flex-1 flex-col">
+                  <SplitHandle
+                    containerRef={splitRef}
+                    ratio={ratio}
+                    onPreview={setDragRatio}
+                    onCommit={(next) => {
+                      setEditorRatio(next);
+                      setDragRatio(null);
+                    }}
+                  />
+                </>
+              )}
+
+              <div className="flex min-h-0 flex-1 flex-col border-t border-border">
               {tab.error && (
                 <div
                   role="alert"
@@ -249,19 +276,20 @@ export function Workspace({
                 </div>
               )}
 
-              {tab.outcome && (
-                <div className="flex h-5 shrink-0 items-center gap-3 border-t border-border bg-surface-1 px-2 text-[10.5px] text-text-muted">
-                  <span>{tab.outcome.elapsed_ms} ms</span>
-                  {tab.outcome.statements.length > 1 && (
-                    <span>{tab.outcome.statements.length} statements</span>
-                  )}
-                  {tab.outcome.notices.map((n, i) => (
-                    <span key={i} className="truncate text-warn">
-                      {n}
-                    </span>
-                  ))}
-                </div>
-              )}
+                {tab.outcome && (
+                  <div className="flex h-5 shrink-0 items-center gap-3 border-t border-border bg-surface-1 px-2 text-[10.5px] text-text-muted">
+                    <span>{tab.outcome.elapsed_ms} ms</span>
+                    {tab.outcome.statements.length > 1 && (
+                      <span>{tab.outcome.statements.length} statements</span>
+                    )}
+                    {tab.outcome.notices.map((n, i) => (
+                      <span key={i} className="truncate text-warn">
+                        {n}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </>
         ) : (

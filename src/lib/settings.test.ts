@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   clampFontSize,
+  clampRatio,
   DEFAULT_SETTINGS,
+  MIN_EDITOR_RATIO,
+  MAX_EDITOR_RATIO,
   MAX_FONT_SIZE,
   MIN_FONT_SIZE,
   normalize,
@@ -51,6 +54,25 @@ describe("clampFontSize", () => {
   it("falls back to the default for a value that is not a number", () => {
     // A hand-edited settings file should not be able to blank the interface.
     expect(clampFontSize(Number.NaN)).toBe(DEFAULT_SETTINGS.dataFontSize);
+  });
+});
+
+describe("clampRatio", () => {
+  it("keeps both panes on screen", () => {
+    // Neither can be dragged shut: a pane collapsed to nothing looks like a
+    // bug, and the handle that would bring it back is what just vanished.
+    expect(clampRatio(0)).toBe(MIN_EDITOR_RATIO);
+    expect(clampRatio(1)).toBe(MAX_EDITOR_RATIO);
+    expect(clampRatio(-5)).toBe(MIN_EDITOR_RATIO);
+  });
+
+  it("passes through a position inside the range", () => {
+    expect(clampRatio(0.5)).toBe(0.5);
+  });
+
+  it("falls back to the default for a value that is not a number", () => {
+    // A hand-edited settings file should not be able to make the pane vanish.
+    expect(clampRatio(Number.NaN)).toBe(DEFAULT_SETTINGS.editorRatio);
   });
 });
 

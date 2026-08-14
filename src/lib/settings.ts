@@ -73,6 +73,14 @@ export interface Settings {
   dataFont: string;
   /** Pixel size of everything that is data. Chrome keeps its own sizes. */
   dataFontSize: number;
+  /**
+   * Share of the query pane given to the editor, as a fraction of its height.
+   *
+   * One setting for every tab and connection rather than one each: this is a
+   * preference about how you work — more room to write, or more room to read —
+   * not a property of any particular query.
+   */
+  editorRatio: number;
 }
 
 /** Empty string means "whatever `styles.css` already specifies". */
@@ -81,6 +89,7 @@ export const DEFAULT_SETTINGS: Settings = {
   uiFont: "",
   dataFont: "",
   dataFontSize: 12,
+  editorRatio: 0.38,
 };
 
 /**
@@ -118,6 +127,21 @@ export const UI_FONTS: { label: string; stack: string }[] = [
 
 export const MIN_FONT_SIZE = 9;
 export const MAX_FONT_SIZE = 24;
+
+/**
+ * How far the editor/results split can be dragged.
+ *
+ * Neither pane can be dragged shut. A pane collapsed to nothing looks like a
+ * bug rather than a choice, and the handle that would restore it is exactly
+ * what has just disappeared.
+ */
+export const MIN_EDITOR_RATIO = 0.12;
+export const MAX_EDITOR_RATIO = 0.85;
+
+export function clampRatio(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_SETTINGS.editorRatio;
+  return Math.min(MAX_EDITOR_RATIO, Math.max(MIN_EDITOR_RATIO, value));
+}
 
 /** Keep a stored or typed size inside what the grid can actually lay out. */
 export function clampFontSize(value: number): number {
@@ -161,5 +185,6 @@ export function normalize(stored: unknown): Settings {
     uiFont: typeof raw.uiFont === "string" ? raw.uiFont : DEFAULT_SETTINGS.uiFont,
     dataFont: typeof raw.dataFont === "string" ? raw.dataFont : DEFAULT_SETTINGS.dataFont,
     dataFontSize: clampFontSize(Number(raw.dataFontSize ?? DEFAULT_SETTINGS.dataFontSize)),
+    editorRatio: clampRatio(Number(raw.editorRatio ?? DEFAULT_SETTINGS.editorRatio)),
   };
 }

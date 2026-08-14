@@ -13,6 +13,7 @@ import { load as loadStore } from "@tauri-apps/plugin-store";
 import type { Store } from "@tauri-apps/plugin-store";
 import {
   clampFontSize,
+  clampRatio,
   DEFAULT_SETTINGS,
   normalize,
   resolveTheme,
@@ -32,6 +33,7 @@ interface SettingsState extends Settings {
   setUiFont: (stack: string) => void;
   setDataFont: (stack: string) => void;
   setDataFontSize: (size: number) => void;
+  setEditorRatio: (ratio: number) => void;
   reset: () => void;
 }
 
@@ -80,11 +82,16 @@ function setOrClear(root: HTMLElement, property: string, value: string) {
 export const useSettings = create<SettingsState>((set, get) => {
   /** Apply and persist in one step, so the two can never drift apart. */
   const commit = (changes: Partial<Settings>) => {
+    // Destructured rather than spread from `get()`, which also carries the
+    // actions: writing those into the persisted file would put function-shaped
+    // holes in it that `normalize` then has to throw away on the next launch.
+    const { theme, uiFont, dataFont, dataFontSize, editorRatio } = get();
     const next: Settings = {
-      theme: get().theme,
-      uiFont: get().uiFont,
-      dataFont: get().dataFont,
-      dataFontSize: get().dataFontSize,
+      theme,
+      uiFont,
+      dataFont,
+      dataFontSize,
+      editorRatio,
       ...changes,
     };
     set(next);
@@ -124,6 +131,10 @@ export const useSettings = create<SettingsState>((set, get) => {
     setUiFont: (uiFont) => commit({ uiFont }),
     setDataFont: (dataFont) => commit({ dataFont }),
     setDataFontSize: (dataFontSize) => commit({ dataFontSize: clampFontSize(dataFontSize) }),
+    // Called once when the drag ends rather than on every pointer move: the
+    // live position is the dragging component's own state, and a store write
+    // per frame would mean a file write per frame.
+    setEditorRatio: (editorRatio) => commit({ editorRatio: clampRatio(editorRatio) }),
     reset: () => commit(DEFAULT_SETTINGS),
   };
 });
