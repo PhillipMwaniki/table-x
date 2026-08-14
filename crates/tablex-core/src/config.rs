@@ -45,7 +45,11 @@ pub struct ConnectionConfig {
     pub read_only: bool,
 
     /// Driver-specific extras that do not warrant a first-class field.
-    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    ///
+    /// Always serialized, for the same reason as `QueryOutcome::notices`: the
+    /// frontend types this as a map, and a field that vanishes when empty makes
+    /// every consumer guard against a shape the type says cannot happen.
+    #[serde(default)]
     pub options: IndexMap<String, String>,
 }
 
@@ -176,6 +180,15 @@ mod tests {
             "secrets must stay in the keychain"
         );
         assert!(!json.contains("passphrase"));
+    }
+
+    #[test]
+    fn an_empty_option_map_still_crosses_the_wire() {
+        // Same contract as QueryOutcome::notices: the frontend types this as a
+        // map, so a field that disappears when empty forces every consumer to
+        // guard against a shape the type says cannot occur.
+        let json = serde_json::to_string(&base()).expect("serialize");
+        assert!(json.contains("\"options\":{}"), "{json}");
     }
 
     #[test]

@@ -67,7 +67,13 @@ pub struct QueryOutcome {
     /// Wall-clock execution time in milliseconds.
     pub elapsed_ms: u64,
     /// Non-fatal messages the server emitted (PostgreSQL `NOTICE`, MySQL warnings).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ///
+    /// Always serialized, even when empty. Skipping it saves a dozen bytes and
+    /// costs the frontend a field it is typed to rely on: an absent `notices`
+    /// arrives as `undefined`, and the first `.map` over it takes down the whole
+    /// pane. A collection that is sometimes a list and sometimes missing is a
+    /// worse contract than one that is sometimes empty.
+    #[serde(default)]
     pub notices: Vec<String>,
 }
 
@@ -161,5 +167,19 @@ mod tests {
         };
         rs.recompute_editable();
         assert!(!rs.editable);
+    }
+
+    #[test]
+    fn an_empty_notice_list_still_crosses_the_wire() {
+        // The frontend types `notices` as an array and maps over it directly.
+        // Omitting the field when empty made every successful query without a
+        // server notice — which is nearly all of them — blank the results pane.
+        let json = serde_json::to_string(&QueryOutcome {
+            statements: vec![],
+            elapsed_ms: 1,
+            notices: vec![],
+        })
+        .expect("serialize");
+        assert!(json.contains("\"notices\":[]"), "{json}");
     }
 }
