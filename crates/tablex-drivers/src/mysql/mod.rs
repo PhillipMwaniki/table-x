@@ -17,15 +17,60 @@ use tablex_core::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
         PlaceholderStyle, RowEdit,
     },
-    error::{Error, Result},
+    error::{is_connection_refused, root_cause, Error, Result},
     result::{Column, ColumnSource, QueryOutcome, ResultSet, StatementResult},
-    schema::{ColumnDef, ForeignKeyDef, IndexDef, NodeKind, SchemaNode, TableDetail},
+    schema::{
+        decode_path, ColumnDef, ForeignKeyDef, IndexDef, NodeKind, SchemaNode, TableDetail,
+    },
     sql::{quote_ident, split_statements},
 };
 
 use mysql_async::prelude::*;
 
 const QUOTE: char = '`';
+
+/// One folder in the object tree.
+struct Folder {
+    id: &'static str,
+    label: &'static str,
+    kind: NodeKind,
+}
+
+/// MySQL keeps functions and procedures in one `ROUTINES` view but they are
+/// different things to call, so they are listed apart. There are no sequences
+/// and no materialized views to offer.
+const FOLDERS: &[Folder] = &[
+    Folder {
+        id: "tables",
+        label: "Tables",
+        kind: NodeKind::Table,
+    },
+    Folder {
+        id: "views",
+        label: "Views",
+        kind: NodeKind::View,
+    },
+    Folder {
+        id: "functions",
+        label: "Functions",
+        kind: NodeKind::Function,
+    },
+    Folder {
+        id: "procedures",
+        label: "Procedures",
+        kind: NodeKind::Procedure,
+    },
+    Folder {
+        id: "triggers",
+        label: "Triggers",
+        kind: NodeKind::Trigger,
+    },
+];
+
+/// `` `db`.`name` `` — MySQL qualifies by database, since it has no schema level.
+fn qualify(db: &str, name: &str) -> String {
+    format!("{}.{}", quote_ident(db, QUOTE), quote_ident(name, QUOTE))
+}
 
 /// Catalogs that exist on every server and are noise for the user.
 const HIDDEN_SCHEMAS: &str = "'information_schema', 'performance_schema', 'mysql', 'sys'";
@@ -59,9 +104,11 @@ impl Driver for MysqlDriver {
                 foreign_keys: true,
                 views: true,
                 stored_procedures: true,
-                // MySQL calls them databases rather than schemas, but the tree
-                // shape is the same: a container above tables.
-                schemas: true,
+                // MySQL's "schema" *is* its database — `information_schema`
+                // exposes one `SCHEMATA` view for both — so there is no
+                // intermediate level between a database and its tables.
+                schemas: false,
+                databases: true,
                 // `org_table` and `org_name` come back in the column definition
                 // packet, so results can be traced to their source.
                 column_provenance: true,
@@ -136,14 +183,42 @@ impl Connection for MysqlConnection {
         })
     }
 
+    /// Paths are `[]`, `[database]`, `[database, folder]`, and
+    /// `[database, folder, table]` for that table's columns.
     async fn browse(&mut self, parent: Option<&str>) -> Result<Vec<SchemaNode>> {
-        match parent {
-            None => self.browse_databases().await,
-            Some(path) => match path.split_once('.') {
-                Some((db, table)) => self.browse_columns(db, table).await,
-                None => self.browse_tables(path).await,
+        let path = parent.map(decode_path).unwrap_or_default();
+        let segments: Vec<&str> = path.iter().map(String::as_str).collect();
+
+        match segments.as_slice() {
+            [] => self.browse_databases().await,
+            [db] => Ok(FOLDERS
+                .iter()
+                .map(|f| SchemaNode::new(&[db, f.id], f.label, NodeKind::Folder).expandable())
+                .collect()),
+            [db, folder] => match FOLDERS.iter().find(|f| f.id == *folder) {
+                Some(spec) => self.browse_folder(db, spec).await,
+                None => Ok(Vec::new()),
             },
+            [db, folder, table] => self.browse_columns(db, folder, table).await,
+            _ => Ok(Vec::new()),
         }
+    }
+
+    async fn current_database(&mut self) -> Result<Option<String>> {
+        Ok(self.default_db.clone())
+    }
+
+    /// MySQL switches in-session, so no reconnection is needed.
+    ///
+    /// The name is quoted rather than bound: `USE` takes an identifier, and
+    /// identifiers cannot be parameters in the protocol.
+    async fn use_database(&mut self, database: &str) -> Result<()> {
+        self.conn
+            .query_drop(format!("USE {}", quote_ident(database, QUOTE)))
+            .await
+            .map_err(map_err)?;
+        self.default_db = Some(database.to_string());
+        Ok(())
     }
 
     async fn table_detail(&mut self, schema: Option<&str>, table: &str) -> Result<TableDetail> {
@@ -442,32 +517,103 @@ impl MysqlConnection {
         let names: Vec<String> = self
             .conn
             .query(format!(
-                "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA \
-                 WHERE SCHEMA_NAME NOT IN ({HIDDEN_SCHEMAS}) ORDER BY SCHEMA_NAME"
+                "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA                  WHERE SCHEMA_NAME NOT IN ({HIDDEN_SCHEMAS}) ORDER BY SCHEMA_NAME"
             ))
             .await
             .map_err(map_err)?;
 
+        let current = self.default_db.clone();
         Ok(names
             .into_iter()
-            .map(|name| SchemaNode {
-                id: name.clone(),
-                name,
-                kind: NodeKind::Database,
-                expandable: true,
-                children: None,
-                detail: None,
+            .map(|name| {
+                let node = SchemaNode::new(&[&name], &name, NodeKind::Database)
+                    .expandable()
+                    .qualified(quote_ident(&name, QUOTE));
+                if current.as_deref() == Some(name.as_str()) {
+                    node.detail("in use")
+                } else {
+                    node
+                }
             })
             .collect())
     }
 
-    async fn browse_tables(&mut self, db: &str) -> Result<Vec<SchemaNode>> {
-        let rows: Vec<(String, String, Option<i64>)> = self
+    /// Objects of one kind within one database.
+    ///
+    /// MySQL has no level between database and table — its `SCHEMATA` view is
+    /// the database list — so folders hang directly off the database.
+    async fn browse_folder(&mut self, db: &str, spec: &Folder) -> Result<Vec<SchemaNode>> {
+        match spec.id {
+            "tables" | "views" => self.browse_tables(db, spec).await,
+            "functions" | "procedures" => self.browse_routines(db, spec).await,
+            "triggers" => self.browse_triggers(db, spec).await,
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    async fn browse_tables(&mut self, db: &str, spec: &Folder) -> Result<Vec<SchemaNode>> {
+        // BASE TABLE and VIEW are the two values that matter; SYSTEM VIEW
+        // appears only in the schemas already hidden from the database list.
+        let wanted = if spec.id == "views" { "VIEW" } else { "BASE TABLE" };
+        let rows: Vec<(String, Option<i64>)> = self
             .conn
             .exec(
-                "SELECT TABLE_NAME, TABLE_TYPE, TABLE_ROWS \
-                 FROM information_schema.TABLES \
-                 WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME",
+                "SELECT TABLE_NAME, TABLE_ROWS FROM information_schema.TABLES                  WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = ? ORDER BY TABLE_NAME",
+                (db, wanted),
+            )
+            .await
+            .map_err(map_err)?;
+
+        Ok(rows
+            .into_iter()
+            .map(|(name, count)| {
+                let node = SchemaNode::new(&[db, spec.id, &name], &name, spec.kind.clone())
+                    .expandable()
+                    .qualified(qualify(db, &name));
+                // An estimate from the engine, not a COUNT(*).
+                match count {
+                    Some(n) => node.detail(format!("~{n} rows")),
+                    None => node,
+                }
+            })
+            .collect())
+    }
+
+    async fn browse_routines(&mut self, db: &str, spec: &Folder) -> Result<Vec<SchemaNode>> {
+        let wanted = if spec.id == "procedures" {
+            "PROCEDURE"
+        } else {
+            "FUNCTION"
+        };
+        let rows: Vec<(String, Option<String>)> = self
+            .conn
+            .exec(
+                "SELECT ROUTINE_NAME, DTD_IDENTIFIER FROM information_schema.ROUTINES                  WHERE ROUTINE_SCHEMA = ? AND ROUTINE_TYPE = ? ORDER BY ROUTINE_NAME",
+                (db, wanted),
+            )
+            .await
+            .map_err(map_err)?;
+
+        Ok(rows
+            .into_iter()
+            .map(|(name, returns)| {
+                let node = SchemaNode::new(&[db, spec.id, &name], &name, spec.kind.clone())
+                    .qualified(qualify(db, &name));
+                // What a function gives back is the thing you need to know
+                // before calling it; a procedure returns nothing to report.
+                match returns {
+                    Some(ty) if spec.id == "functions" => node.detail(format!("returns {ty}")),
+                    _ => node,
+                }
+            })
+            .collect())
+    }
+
+    async fn browse_triggers(&mut self, db: &str, spec: &Folder) -> Result<Vec<SchemaNode>> {
+        let rows: Vec<(String, String, String, String)> = self
+            .conn
+            .exec(
+                "SELECT TRIGGER_NAME, EVENT_OBJECT_TABLE, ACTION_TIMING, EVENT_MANIPULATION                  FROM information_schema.TRIGGERS                  WHERE TRIGGER_SCHEMA = ? ORDER BY EVENT_OBJECT_TABLE, TRIGGER_NAME",
                 (db,),
             )
             .await
@@ -475,38 +621,28 @@ impl MysqlConnection {
 
         Ok(rows
             .into_iter()
-            .map(|(name, kind, rows)| SchemaNode {
-                id: format!("{db}.{name}"),
-                name,
-                kind: if kind == "VIEW" {
-                    NodeKind::View
-                } else {
-                    NodeKind::Table
-                },
-                expandable: true,
-                children: None,
-                // An estimate from the engine, not a COUNT(*).
-                detail: rows.map(|n| format!("~{n} rows")),
+            .map(|(name, table, timing, event)| {
+                // "BEFORE INSERT on orders" - when it fires and on what, which
+                // is the whole of what a trigger listing can usefully say.
+                SchemaNode::new(&[db, spec.id, &name], &name, spec.kind.clone())
+                    .detail(format!("{timing} {event} on {table}"))
             })
             .collect())
     }
 
-    async fn browse_columns(&mut self, db: &str, table: &str) -> Result<Vec<SchemaNode>> {
+    async fn browse_columns(&mut self, db: &str, folder: &str, table: &str) -> Result<Vec<SchemaNode>> {
         Ok(self
             .columns(db, table)
             .await?
             .into_iter()
-            .map(|c| SchemaNode {
-                id: format!("{db}.{table}.{}", c.name),
-                name: c.name.clone(),
-                kind: NodeKind::Column,
-                expandable: false,
-                children: None,
-                detail: Some(if c.nullable {
-                    c.type_name
-                } else {
-                    format!("{} NOT NULL", c.type_name)
-                }),
+            .map(|c| {
+                SchemaNode::new(&[db, folder, table, &c.name], &c.name, NodeKind::Column).detail(
+                    if c.nullable {
+                        c.type_name
+                    } else {
+                        format!("{} NOT NULL", c.type_name)
+                    },
+                )
             })
             .collect())
     }
@@ -665,9 +801,16 @@ pub(crate) fn map_err(e: mysql_async::Error) -> Error {
                 code: Some(server.state.clone()),
             }
         }
-        E::Io(_) => Error::Network(e.to_string()),
-        E::Driver(_) => Error::Connection(e.to_string()),
-        _ => Error::query(e.to_string()),
+        // Report what actually failed rather than the two layers of
+        // "Input/output error:" the crate wraps around it.
+        E::Io(_) if is_connection_refused(&e) => Error::Connection(
+            "nothing is listening on that host and port — check the server is \
+             running and that the port is the one it listens on"
+                .into(),
+        ),
+        E::Io(_) => Error::Network(root_cause(&e)),
+        E::Driver(_) => Error::Connection(root_cause(&e)),
+        _ => Error::query(root_cause(&e)),
     }
 }
 

@@ -98,7 +98,10 @@ fn driver_advertises_the_http_port_and_no_transactions() {
     // No source table in JSONCompact metadata, and no row-level UPDATE.
     assert!(!info.capabilities.column_provenance);
     assert!(!info.capabilities.foreign_keys);
-    assert!(info.capabilities.schemas);
+    // A ClickHouse database is its only container level — there is nothing
+    // between it and a table — so the tree has no schema layer to render.
+    assert!(!info.capabilities.schemas);
+    assert!(info.capabilities.databases);
 }
 
 #[tokio::test]

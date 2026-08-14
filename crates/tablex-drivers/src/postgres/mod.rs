@@ -53,6 +53,7 @@ impl Driver for PostgresDriver {
                 multi_statement: true,
                 explain: true,
                 schemas: true,
+                databases: true,
                 foreign_keys: true,
                 views: true,
                 stored_procedures: true,
@@ -90,8 +91,19 @@ impl Driver for PostgresDriver {
         pg.application_name("Table X");
 
         let client = establish(&pg, config.tls.mode).await?;
+
+        // Asked rather than taken from the config: with no `dbname` the server
+        // connects you to one named after the user, and the tree has to mark the
+        // database you are actually in, not the one you did not name.
+        let database: String = client
+            .query_one("SELECT current_database()", &[])
+            .await
+            .map_err(map_err)?
+            .get(0);
+
         Ok(Box::new(PostgresConnection {
             client,
+            database,
             type_cache: HashMap::new(),
         }))
     }
@@ -164,6 +176,9 @@ where
 
 pub struct PostgresConnection {
     client: Client,
+    /// The database this session is attached to. Fixed for its lifetime — the
+    /// protocol offers no way to change it — so switching means reconnecting.
+    database: String,
     /// OID → (schema, table) for result-column provenance. Table OIDs are stable
     /// for the life of a table, so this is cached rather than re-queried per row.
     type_cache: HashMap<u32, (String, String)>,
@@ -191,8 +206,16 @@ impl Connection for PostgresConnection {
     }
 
     async fn browse(&mut self, parent: Option<&str>) -> Result<Vec<SchemaNode>> {
-        introspect::browse(&self.client, parent).await
+        introspect::browse(&self.client, &self.database, parent).await
     }
+
+    async fn current_database(&mut self) -> Result<Option<String>> {
+        Ok(Some(self.database.clone()))
+    }
+
+    // `use_database` is deliberately left at its default error. A PostgreSQL
+    // connection is bound to one database by the startup packet and there is no
+    // in-session equivalent of `USE`; the app layer reconnects instead.
 
     async fn table_detail(&mut self, schema: Option<&str>, table: &str) -> Result<TableDetail> {
         introspect::table_detail(&self.client, schema.unwrap_or("public"), table).await

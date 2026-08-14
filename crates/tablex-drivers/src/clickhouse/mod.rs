@@ -29,11 +29,45 @@ use tablex_core::{
     },
     error::{Error, Result},
     result::{Column, QueryOutcome, ResultSet, StatementResult},
-    schema::{ColumnDef, IndexDef, NodeKind, SchemaNode, TableDetail},
-    sql::split_statements,
+    schema::{decode_path, ColumnDef, IndexDef, NodeKind, SchemaNode, TableDetail},
+    sql::{quote_ident, split_statements},
 };
 
 const QUOTE: char = '`';
+
+/// One folder in the object tree.
+struct Folder {
+    id: &'static str,
+    label: &'static str,
+    kind: NodeKind,
+}
+
+/// ClickHouse has no triggers and no stored procedures, so neither is offered.
+/// Functions are server-wide rather than per-database, but they are listed under
+/// each database anyway: the alternative is a level of the tree that exists for
+/// one folder.
+const FOLDERS: &[Folder] = &[
+    Folder {
+        id: "tables",
+        label: "Tables",
+        kind: NodeKind::Table,
+    },
+    Folder {
+        id: "views",
+        label: "Views",
+        kind: NodeKind::View,
+    },
+    Folder {
+        id: "functions",
+        label: "Functions",
+        kind: NodeKind::Function,
+    },
+];
+
+/// `` `db`.`name` ``.
+fn qualify(db: &str, name: &str) -> String {
+    format!("{}.{}", quote_ident(db, QUOTE), quote_ident(name, QUOTE))
+}
 
 /// Databases that ship with every server and are noise for the user.
 const HIDDEN_DATABASES: &str = "'system', 'INFORMATION_SCHEMA', 'information_schema'";
@@ -66,7 +100,9 @@ impl Driver for ClickhouseDriver {
                 // single partition, so they are not advertised.
                 transactions: false,
                 explain: true,
-                schemas: true,
+                // ClickHouse's database is its only container level.
+                schemas: false,
+                databases: true,
                 views: true,
                 // No foreign keys, and no row-level UPDATE — see the module docs.
                 foreign_keys: false,
@@ -162,77 +198,55 @@ impl Connection for ClickhouseConnection {
         })
     }
 
+    /// Paths are `[]`, `[database]`, `[database, folder]`, and
+    /// `[database, folder, table]` for that table's columns.
     async fn browse(&mut self, parent: Option<&str>) -> Result<Vec<SchemaNode>> {
-        match parent {
-            None => {
-                let names = self
-                    .column_of(&format!(
-                        "SELECT name FROM system.databases \
-                         WHERE name NOT IN ({HIDDEN_DATABASES}) ORDER BY name"
-                    ))
-                    .await?;
-                Ok(names
-                    .into_iter()
-                    .map(|name| SchemaNode {
-                        id: name.clone(),
-                        name,
-                        kind: NodeKind::Database,
-                        expandable: true,
-                        children: None,
-                        detail: None,
-                    })
-                    .collect())
-            }
+        let path = parent.map(decode_path).unwrap_or_default();
+        let segments: Vec<&str> = path.iter().map(String::as_str).collect();
 
-            Some(path) => match path.split_once('.') {
-                Some((db, table)) => Ok(self
-                    .columns(db, table)
-                    .await?
-                    .into_iter()
-                    .map(|c| SchemaNode {
-                        id: format!("{db}.{table}.{}", c.name),
-                        name: c.name.clone(),
-                        kind: NodeKind::Column,
-                        expandable: false,
-                        children: None,
-                        detail: Some(c.type_name),
-                    })
-                    .collect()),
-
-                None => {
-                    let rows = self
-                        .rows_of(&format!(
-                            "SELECT name, engine, toString(total_rows) FROM system.tables \
-                             WHERE database = {} ORDER BY name",
-                            types::literal_str(path)
-                        ))
-                        .await?;
-                    Ok(rows
-                        .into_iter()
-                        .map(|r| {
-                            let name = r.first().cloned().unwrap_or_default();
-                            let engine = r.get(1).cloned().unwrap_or_default();
-                            let total = r.get(2).cloned().unwrap_or_default();
-                            SchemaNode {
-                                id: format!("{path}.{name}"),
-                                name,
-                                kind: if engine.ends_with("View") {
-                                    NodeKind::View
-                                } else {
-                                    NodeKind::Table
-                                },
-                                expandable: true,
-                                children: None,
-                                // total_rows is exact for MergeTree tables and
-                                // null for engines that cannot report it.
-                                detail: (!total.is_empty() && total != "\\N")
-                                    .then(|| format!("{total} rows · {engine}")),
-                            }
-                        })
-                        .collect())
-                }
+        match segments.as_slice() {
+            [] => self.browse_databases().await,
+            [db] => Ok(FOLDERS
+                .iter()
+                .map(|f| SchemaNode::new(&[db, f.id], f.label, NodeKind::Folder).expandable())
+                .collect()),
+            [db, folder] => match FOLDERS.iter().find(|f| f.id == *folder) {
+                Some(spec) => self.browse_folder(db, spec).await,
+                None => Ok(Vec::new()),
             },
+            [db, folder, table] => Ok(self
+                .columns(db, table)
+                .await?
+                .into_iter()
+                .map(|c| {
+                    SchemaNode::new(&[db, folder, table, &c.name], &c.name, NodeKind::Column)
+                        .detail(c.type_name)
+                })
+                .collect()),
+            _ => Ok(Vec::new()),
         }
+    }
+
+    async fn current_database(&mut self) -> Result<Option<String>> {
+        Ok(Some(self.database.clone()))
+    }
+
+    /// The database is a request parameter here, not session state, so
+    /// switching is a local change that the next request carries with it.
+    async fn use_database(&mut self, database: &str) -> Result<()> {
+        // Checked rather than trusted: a typo would otherwise fail later, on an
+        // unrelated query, with an error that names the wrong thing.
+        let found = self
+            .column_of(&format!(
+                "SELECT name FROM system.databases WHERE name = {}",
+                types::literal_str(database)
+            ))
+            .await?;
+        if found.is_empty() {
+            return Err(Error::Config(format!("no database named {database}")));
+        }
+        self.database = database.to_string();
+        Ok(())
     }
 
     async fn table_detail(&mut self, schema: Option<&str>, table: &str) -> Result<TableDetail> {
@@ -506,6 +520,85 @@ impl ClickhouseConnection {
                         other => other.to_string(),
                     })
                     .collect()
+            })
+            .collect())
+    }
+
+    async fn browse_databases(&self) -> Result<Vec<SchemaNode>> {
+        let names = self
+            .column_of(&format!(
+                "SELECT name FROM system.databases \
+                 WHERE name NOT IN ({HIDDEN_DATABASES}) ORDER BY name"
+            ))
+            .await?;
+
+        Ok(names
+            .into_iter()
+            .map(|name| {
+                let node = SchemaNode::new(&[&name], &name, NodeKind::Database)
+                    .expandable()
+                    .qualified(quote_ident(&name, QUOTE));
+                if name == self.database {
+                    node.detail("in use")
+                } else {
+                    node
+                }
+            })
+            .collect())
+    }
+
+    async fn browse_folder(&self, db: &str, spec: &Folder) -> Result<Vec<SchemaNode>> {
+        if spec.id == "functions" {
+            return self.browse_functions(db, spec).await;
+        }
+
+        // Engine names ending in "View" cover both `View` and
+        // `MaterializedView`; everything else is a table of some engine.
+        let comparison = if spec.id == "views" {
+            "engine LIKE '%View'"
+        } else {
+            "engine NOT LIKE '%View'"
+        };
+        let rows = self
+            .rows_of(&format!(
+                "SELECT name, engine, toString(total_rows) FROM system.tables \
+                 WHERE database = {} AND {comparison} ORDER BY name",
+                types::literal_str(db)
+            ))
+            .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| {
+                let name = r.first().cloned().unwrap_or_default();
+                let engine = r.get(1).cloned().unwrap_or_default();
+                let total = r.get(2).cloned().unwrap_or_default();
+                let node = SchemaNode::new(&[db, spec.id, &name], &name, spec.kind.clone())
+                    .expandable()
+                    .qualified(qualify(db, &name));
+                // total_rows is exact for MergeTree tables and null for engines
+                // that cannot report it.
+                if !total.is_empty() && total != "\\N" {
+                    node.detail(format!("{total} rows · {engine}"))
+                } else {
+                    node.detail(engine)
+                }
+            })
+            .collect())
+    }
+
+    async fn browse_functions(&self, db: &str, spec: &Folder) -> Result<Vec<SchemaNode>> {
+        // Only user-defined ones: ClickHouse ships well over a thousand builtins,
+        // and a folder of those is a reference manual, not a browsable list.
+        let names = self
+            .column_of("SELECT name FROM system.functions WHERE origin != 'System' ORDER BY name")
+            .await?;
+
+        Ok(names
+            .into_iter()
+            .map(|name| {
+                SchemaNode::new(&[db, spec.id, &name], &name, spec.kind.clone())
+                    .qualified(quote_ident(&name, QUOTE))
             })
             .collect())
     }

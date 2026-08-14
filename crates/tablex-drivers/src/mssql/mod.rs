@@ -23,7 +23,9 @@ use tablex_core::{
     },
     error::{Error, Result},
     result::{Column, QueryOutcome, ResultSet, StatementResult},
-    schema::{ColumnDef, ForeignKeyDef, IndexDef, NodeKind, SchemaNode, TableDetail},
+    schema::{
+        decode_path, ColumnDef, ForeignKeyDef, IndexDef, NodeKind, SchemaNode, TableDetail,
+    },
     sql::{quote_ident, split_statements},
 };
 use tiberius::{AuthMethod, Client, Config, QueryItem};
@@ -39,6 +41,52 @@ const QUOTE: char = '[';
 const HIDDEN_SCHEMAS: &str = "'sys', 'INFORMATION_SCHEMA', 'guest', 'db_owner', \
      'db_accessadmin', 'db_securityadmin', 'db_ddladmin', 'db_backupoperator', \
      'db_datareader', 'db_datawriter', 'db_denydatareader', 'db_denydatawriter'";
+
+/// One folder in the object tree.
+struct Folder {
+    id: &'static str,
+    label: &'static str,
+    kind: NodeKind,
+}
+
+const FOLDERS: &[Folder] = &[
+    Folder {
+        id: "tables",
+        label: "Tables",
+        kind: NodeKind::Table,
+    },
+    Folder {
+        id: "views",
+        label: "Views",
+        kind: NodeKind::View,
+    },
+    Folder {
+        id: "functions",
+        label: "Functions",
+        kind: NodeKind::Function,
+    },
+    Folder {
+        id: "procedures",
+        label: "Procedures",
+        kind: NodeKind::Procedure,
+    },
+    Folder {
+        id: "triggers",
+        label: "Triggers",
+        kind: NodeKind::Trigger,
+    },
+];
+
+/// `[db].[schema].[name]` — the three-part name that also works from another
+/// database, which is exactly the case the tree makes reachable.
+fn qualify(db: &str, schema: &str, name: &str) -> String {
+    format!(
+        "{}.{}.{}",
+        quote_ident(db, QUOTE),
+        quote_ident(schema, QUOTE),
+        quote_ident(name, QUOTE)
+    )
+}
 
 pub struct MssqlDriver;
 
@@ -67,6 +115,7 @@ impl Driver for MssqlDriver {
                 multi_statement: true,
                 explain: true,
                 schemas: true,
+                databases: true,
                 foreign_keys: true,
                 views: true,
                 stored_procedures: true,
@@ -117,10 +166,19 @@ impl Driver for MssqlDriver {
             .await
             .map_err(map_err)?;
 
-        Ok(Box::new(MssqlConnection {
+        let mut connection = MssqlConnection {
             client,
             default_schema: "dbo".to_string(),
-        }))
+            database: String::new(),
+        };
+        // Asked rather than taken from the config: with no database named, the
+        // server puts you in the login's default, and the tree has to mark the
+        // one you are actually in.
+        connection.database = connection
+            .scalar_string("SELECT DB_NAME()")
+            .await?
+            .unwrap_or_else(|| "master".to_string());
+        Ok(Box::new(connection))
     }
 }
 
@@ -128,6 +186,8 @@ pub struct MssqlConnection {
     client: Client<Compat<TcpStream>>,
     /// SQL Server's default schema; used when a caller does not name one.
     default_schema: String,
+    /// The database `USE` last selected, and what unqualified names resolve in.
+    database: String,
 }
 
 #[async_trait]
@@ -151,14 +211,46 @@ impl Connection for MssqlConnection {
         })
     }
 
+    /// Paths are `[]`, `[database]`, `[database, schema]`,
+    /// `[database, schema, folder]`, and `[database, schema, folder, object]`.
     async fn browse(&mut self, parent: Option<&str>) -> Result<Vec<SchemaNode>> {
-        match parent {
-            None => self.browse_schemas().await,
-            Some(path) => match path.split_once('.') {
-                Some((schema, table)) => self.browse_columns(schema, table).await,
-                None => self.browse_tables(path).await,
+        let path = parent.map(decode_path).unwrap_or_default();
+        let segments: Vec<&str> = path.iter().map(String::as_str).collect();
+
+        match segments.as_slice() {
+            [] => self.browse_databases().await,
+            [db] => self.browse_schemas(db).await,
+            [db, schema] => Ok(FOLDERS
+                .iter()
+                .map(|f| {
+                    SchemaNode::new(&[db, schema, f.id], f.label, NodeKind::Folder).expandable()
+                })
+                .collect()),
+            [db, schema, folder] => match FOLDERS.iter().find(|f| f.id == *folder) {
+                Some(spec) => self.browse_folder(db, schema, spec).await,
+                None => Ok(Vec::new()),
             },
+            [db, schema, folder, object] => self.browse_columns(db, schema, folder, object).await,
+            _ => Ok(Vec::new()),
         }
+    }
+
+    async fn current_database(&mut self) -> Result<Option<String>> {
+        Ok(Some(self.database.clone()))
+    }
+
+    /// `USE` switches the session, so no reconnection is needed.
+    ///
+    /// Browsing does not depend on this — the catalogue queries name their
+    /// database explicitly — but the editor's unqualified statements do, and
+    /// that is what the user means by selecting a database.
+    async fn use_database(&mut self, database: &str) -> Result<()> {
+        self.client
+            .simple_query(format!("USE {}", quote_ident(database, QUOTE)))
+            .await
+            .map_err(map_err)?;
+        self.database = database.to_string();
+        Ok(())
     }
 
     async fn table_detail(&mut self, schema: Option<&str>, table: &str) -> Result<TableDetail> {
@@ -380,6 +472,19 @@ impl MssqlConnection {
         Ok(StatementResult::Rows(rs))
     }
 
+    /// Run a query returning a single nullable string.
+    async fn scalar_string(&mut self, sql: &str) -> Result<Option<String>> {
+        let row = self
+            .client
+            .simple_query(sql)
+            .await
+            .map_err(map_err)?
+            .into_row()
+            .await
+            .map_err(map_err)?;
+        Ok(row.and_then(|r| r.get::<&str, _>(0).map(str::to_string)))
+    }
+
     /// Run a query returning a single nullable integer.
     async fn scalar_i64(&mut self, sql: &str) -> Result<Option<i64>> {
         let row = self
@@ -431,70 +536,152 @@ impl MssqlConnection {
             .collect())
     }
 
-    async fn browse_schemas(&mut self) -> Result<Vec<SchemaNode>> {
-        Ok(self
-            .strings(&format!(
-                "SELECT name FROM sys.schemas WHERE name NOT IN ({HIDDEN_SCHEMAS}) ORDER BY name"
-            ))
-            .await?
+    async fn browse_databases(&mut self) -> Result<Vec<SchemaNode>> {
+        // state = 0 is ONLINE. A database being restored or taken offline
+        // cannot be read, and listing it as browsable only produces an error
+        // when the user clicks it.
+        let names = self
+            .strings(
+                "SELECT name FROM sys.databases                  WHERE state = 0 AND name NOT IN ('master', 'tempdb', 'model', 'msdb')                  ORDER BY name",
+            )
+            .await?;
+
+        let current = self.database.clone();
+        Ok(names
             .into_iter()
-            .map(|name| SchemaNode {
-                id: name.clone(),
-                name,
-                kind: NodeKind::Schema,
-                expandable: true,
-                children: None,
-                detail: None,
+            .map(|name| {
+                let node = SchemaNode::new(&[&name], &name, NodeKind::Database)
+                    .expandable()
+                    .qualified(quote_ident(&name, QUOTE));
+                if name == current {
+                    node.detail("in use")
+                } else {
+                    node
+                }
             })
             .collect())
     }
 
-    async fn browse_tables(&mut self, schema: &str) -> Result<Vec<SchemaNode>> {
+    /// Schemas of `db`.
+    ///
+    /// Every catalogue query here is prefixed with the database name rather
+    /// than issuing `USE` first: three-part naming reads another database's
+    /// catalogue without disturbing the session the editor is running in.
+    async fn browse_schemas(&mut self, db: &str) -> Result<Vec<SchemaNode>> {
+        Ok(self
+            .strings(&format!(
+                "SELECT name FROM {}.sys.schemas WHERE name NOT IN ({HIDDEN_SCHEMAS}) ORDER BY name",
+                quote_ident(db, QUOTE)
+            ))
+            .await?
+            .into_iter()
+            .map(|name| {
+                SchemaNode::new(&[db, &name], &name, NodeKind::Schema)
+                    .expandable()
+                    .qualified(quote_ident(&name, QUOTE))
+            })
+            .collect())
+    }
+
+    async fn browse_folder(
+        &mut self,
+        db: &str,
+        schema: &str,
+        spec: &Folder,
+    ) -> Result<Vec<SchemaNode>> {
+        match spec.id {
+            "triggers" => self.browse_triggers(db, schema, spec).await,
+            _ => self.browse_objects(db, schema, spec).await,
+        }
+    }
+
+    /// Tables, views, functions, and procedures all live in `sys.objects`,
+    /// separated by `type`.
+    async fn browse_objects(
+        &mut self,
+        db: &str,
+        schema: &str,
+        spec: &Folder,
+    ) -> Result<Vec<SchemaNode>> {
+        // FN/IF/TF are scalar, inline table-valued, and multi-statement
+        // table-valued functions; all three are things you call.
+        let types = match spec.id {
+            "tables" => "'U'",
+            "views" => "'V'",
+            "functions" => "'FN','IF','TF'",
+            "procedures" => "'P'",
+            _ => return Ok(Vec::new()),
+        };
+
         let rows = self
-            .pairs(&format!(
-                "SELECT t.name, t.kind FROM ( \
-                    SELECT name, schema_id, 'table' AS kind FROM sys.tables \
-                    UNION ALL SELECT name, schema_id, 'view' FROM sys.views \
-                 ) t \
-                 JOIN sys.schemas s ON s.schema_id = t.schema_id \
-                 WHERE s.name = '{}' ORDER BY t.name",
-                escape_literal(schema)
+            .strings(&format!(
+                "SELECT o.name FROM {db}.sys.objects o                  JOIN {db}.sys.schemas s ON s.schema_id = o.schema_id                  WHERE s.name = '{schema}' AND o.type IN ({types}) ORDER BY o.name",
+                db = quote_ident(db, QUOTE),
+                schema = escape_literal(schema),
+                types = types
             ))
             .await?;
 
         Ok(rows
             .into_iter()
-            .map(|(name, kind)| SchemaNode {
-                id: format!("{schema}.{name}"),
-                name,
-                kind: if kind == "view" {
-                    NodeKind::View
+            .map(|name| {
+                let node = SchemaNode::new(&[db, schema, spec.id, &name], &name, spec.kind.clone())
+                    .qualified(qualify(db, schema, &name));
+                // Only relations have columns to expand into.
+                if matches!(spec.id, "tables" | "views") {
+                    node.expandable()
                 } else {
-                    NodeKind::Table
-                },
-                expandable: true,
-                children: None,
-                detail: None,
+                    node
+                }
             })
             .collect())
     }
 
-    async fn browse_columns(&mut self, schema: &str, table: &str) -> Result<Vec<SchemaNode>> {
+    async fn browse_triggers(
+        &mut self,
+        db: &str,
+        schema: &str,
+        spec: &Folder,
+    ) -> Result<Vec<SchemaNode>> {
+        let rows = self
+            .pairs(&format!(
+                "SELECT tr.name, t.name FROM {db}.sys.triggers tr                  JOIN {db}.sys.tables t ON t.object_id = tr.parent_id                  JOIN {db}.sys.schemas s ON s.schema_id = t.schema_id                  WHERE s.name = '{schema}' AND tr.is_ms_shipped = 0                  ORDER BY t.name, tr.name",
+                db = quote_ident(db, QUOTE),
+                schema = escape_literal(schema)
+            ))
+            .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|(name, table)| {
+                SchemaNode::new(&[db, schema, spec.id, &name], &name, spec.kind.clone())
+                    .detail(format!("on {table}"))
+            })
+            .collect())
+    }
+
+    async fn browse_columns(
+        &mut self,
+        db: &str,
+        schema: &str,
+        folder: &str,
+        table: &str,
+    ) -> Result<Vec<SchemaNode>> {
         Ok(self
             .columns(schema, table)
             .await?
             .into_iter()
-            .map(|c| SchemaNode {
-                id: format!("{schema}.{table}.{}", c.name),
-                name: c.name.clone(),
-                kind: NodeKind::Column,
-                expandable: false,
-                children: None,
-                detail: Some(if c.nullable {
+            .map(|c| {
+                SchemaNode::new(
+                    &[db, schema, folder, table, &c.name],
+                    &c.name,
+                    NodeKind::Column,
+                )
+                .detail(if c.nullable {
                     c.type_name
                 } else {
                     format!("{} NOT NULL", c.type_name)
-                }),
+                })
             })
             .collect())
     }

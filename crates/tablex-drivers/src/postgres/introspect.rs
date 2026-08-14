@@ -10,7 +10,10 @@ use std::collections::HashMap;
 use tablex_core::{
     driver::CompletionScope,
     error::{Error, Result},
-    schema::{ColumnDef, ForeignKeyDef, IndexDef, NodeKind, SchemaNode, TableDetail},
+    schema::{
+        decode_path, ColumnDef, ForeignKeyDef, IndexDef, NodeKind, SchemaNode, TableDetail,
+    },
+    sql::quote_ident,
 };
 use tokio_postgres::Client;
 
@@ -19,19 +22,71 @@ const HIDDEN_SCHEMAS: &str = "'pg_catalog', 'information_schema', 'pg_toast'";
 
 /// One level of the object tree.
 ///
-/// `parent` is `None` for the roots (schemas), a schema name for its tables, or
-/// `schema.table` for that table's columns.
-pub async fn browse(client: &Client, parent: Option<&str>) -> Result<Vec<SchemaNode>> {
-    match parent {
-        None => browse_schemas(client).await,
-        Some(path) => match path.split_once('.') {
-            Some((schema, table)) => browse_columns(client, schema, table).await,
-            None => browse_tables(client, path).await,
+/// The path shape is `[]`, `[database]`, `[database, schema]`,
+/// `[database, schema, folder]`, then `[database, schema, folder, object]` for a
+/// table's columns.
+///
+/// The database level is real but only one of its entries can be expanded: a
+/// PostgreSQL connection is bound to one database for its lifetime, so the other
+/// databases are listed and marked, and opening one reconnects. `current` is the
+/// database this connection is actually attached to.
+pub async fn browse(
+    client: &Client,
+    current: &str,
+    parent: Option<&str>,
+) -> Result<Vec<SchemaNode>> {
+    let path = parent.map(decode_path).unwrap_or_default();
+    let segments: Vec<&str> = path.iter().map(String::as_str).collect();
+
+    match segments.as_slice() {
+        [] => browse_databases(client, current).await,
+        [db] => browse_schemas(client, db).await,
+        [db, schema] => Ok(FOLDERS
+            .iter()
+            .map(|f| SchemaNode::new(&[db, schema, f.id], f.label, NodeKind::Folder).expandable())
+            .collect()),
+        [db, schema, folder] => match FOLDERS.iter().find(|f| f.id == *folder) {
+            Some(spec) => browse_folder(client, db, schema, spec).await,
+            None => Ok(Vec::new()),
         },
+        [db, schema, folder, object] => browse_columns(client, db, schema, folder, object).await,
+        _ => Ok(Vec::new()),
     }
 }
 
-async fn browse_schemas(client: &Client) -> Result<Vec<SchemaNode>> {
+/// Databases on this server, with the connected one marked.
+async fn browse_databases(client: &Client, current: &str) -> Result<Vec<SchemaNode>> {
+    // datallowconn excludes template0, which by design refuses connections.
+    let rows = client
+        .query(
+            "SELECT datname FROM pg_catalog.pg_database \
+             WHERE datallowconn AND NOT datistemplate ORDER BY datname",
+            &[],
+        )
+        .await
+        .map_err(map_err)?;
+
+    Ok(rows
+        .iter()
+        .map(|r| {
+            let name: String = r.get(0);
+            let is_current = name == current;
+            let node = SchemaNode::new(&[&name], &name, NodeKind::Database)
+                .expandable()
+                .qualified(quote_ident(&name, '"'));
+            // Only the attached database can be expanded without reconnecting.
+            // Saying so is the difference between "click to open" and a node
+            // that mysteriously fails.
+            if is_current {
+                node.detail("connected")
+            } else {
+                node
+            }
+        })
+        .collect())
+}
+
+async fn browse_schemas(client: &Client, db: &str) -> Result<Vec<SchemaNode>> {
     let sql = format!(
         "SELECT nspname FROM pg_catalog.pg_namespace \
          WHERE nspname NOT IN ({HIDDEN_SCHEMAS}) AND nspname NOT LIKE 'pg_temp%' \
@@ -43,31 +98,178 @@ async fn browse_schemas(client: &Client) -> Result<Vec<SchemaNode>> {
         .iter()
         .map(|r| {
             let name: String = r.get(0);
-            SchemaNode {
-                id: name.clone(),
-                name,
-                kind: NodeKind::Schema,
-                expandable: true,
-                children: None,
-                detail: None,
+            SchemaNode::new(&[db, &name], &name, NodeKind::Schema)
+                .expandable()
+                .qualified(quote_ident(&name, '"'))
+        })
+        .collect())
+}
+
+/// One folder of objects, and the catalogue query that fills it.
+struct Folder {
+    id: &'static str,
+    label: &'static str,
+    kind: NodeKind,
+}
+
+const FOLDERS: &[Folder] = &[
+    Folder {
+        id: "tables",
+        label: "Tables",
+        kind: NodeKind::Table,
+    },
+    Folder {
+        id: "views",
+        label: "Views",
+        kind: NodeKind::View,
+    },
+    Folder {
+        id: "matviews",
+        label: "Materialized views",
+        kind: NodeKind::MaterializedView,
+    },
+    Folder {
+        id: "functions",
+        label: "Functions",
+        kind: NodeKind::Function,
+    },
+    Folder {
+        id: "procedures",
+        label: "Procedures",
+        kind: NodeKind::Procedure,
+    },
+    Folder {
+        id: "triggers",
+        label: "Triggers",
+        kind: NodeKind::Trigger,
+    },
+    Folder {
+        id: "sequences",
+        label: "Sequences",
+        kind: NodeKind::Sequence,
+    },
+];
+
+async fn browse_folder(
+    client: &Client,
+    db: &str,
+    schema: &str,
+    spec: &Folder,
+) -> Result<Vec<SchemaNode>> {
+    match spec.id {
+        "functions" | "procedures" => browse_routines(client, db, schema, spec).await,
+        "triggers" => browse_triggers(client, db, schema, spec).await,
+        _ => browse_relations(client, db, schema, spec).await,
+    }
+}
+
+/// Tables, views, materialized views, and sequences all live in `pg_class`,
+/// separated by `relkind`.
+async fn browse_relations(
+    client: &Client,
+    db: &str,
+    schema: &str,
+    spec: &Folder,
+) -> Result<Vec<SchemaNode>> {
+    // Partitions are hidden: they clutter the list and are reachable through
+    // the partitioned table that owns them.
+    let relkinds: &[&str] = match spec.id {
+        "tables" => &["r", "p", "f"],
+        "views" => &["v"],
+        "matviews" => &["m"],
+        "sequences" => &["S"],
+        _ => &[],
+    };
+    let list = relkinds
+        .iter()
+        .map(|k| format!("'{k}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let sql = format!(
+        "SELECT c.relname, \
+                CASE WHEN c.reltuples < 0 THEN NULL ELSE c.reltuples::bigint END \
+         FROM pg_catalog.pg_class c \
+         JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+         WHERE n.nspname = $1 AND c.relkind IN ({list}) AND NOT c.relispartition \
+         ORDER BY c.relname"
+    );
+    let rows = client.query(sql.as_str(), &[&schema]).await.map_err(map_err)?;
+
+    Ok(rows
+        .iter()
+        .map(|r| {
+            let name: String = r.get(0);
+            let estimated: Option<i64> = r.get(1);
+            let node = SchemaNode::new(&[db, schema, spec.id, &name], &name, spec.kind.clone())
+                .qualified(qualify(schema, &name));
+            // A sequence has no columns to expand into.
+            let node = if spec.id == "sequences" {
+                node
+            } else {
+                node.expandable()
+            };
+            // Explicitly an estimate from the planner statistics. An exact
+            // COUNT(*) per table would make expanding a schema unusable.
+            match estimated {
+                Some(n) if spec.id != "sequences" => node.detail(format!("~{n} rows")),
+                _ => node,
             }
         })
         .collect())
 }
 
-async fn browse_tables(client: &Client, schema: &str) -> Result<Vec<SchemaNode>> {
-    // relkind: r ordinary table, p partitioned table, v view, m materialized view,
-    // f foreign table. Partitions themselves (relispartition) are hidden because
-    // they clutter the tree and are reachable through their parent.
+async fn browse_routines(
+    client: &Client,
+    db: &str,
+    schema: &str,
+    spec: &Folder,
+) -> Result<Vec<SchemaNode>> {
+    // prokind: f function, p procedure, a aggregate, w window. Aggregates and
+    // window functions are listed with the functions - they are things you call.
+    let kinds = if spec.id == "procedures" {
+        "'p'"
+    } else {
+        "'f','a','w'"
+    };
+    let sql = format!(
+        "SELECT p.proname, pg_catalog.pg_get_function_identity_arguments(p.oid) \
+         FROM pg_catalog.pg_proc p \
+         JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace \
+         WHERE n.nspname = $1 AND p.prokind IN ({kinds}) \
+         ORDER BY p.proname"
+    );
+    let rows = client.query(sql.as_str(), &[&schema]).await.map_err(map_err)?;
+
+    Ok(rows
+        .iter()
+        .map(|r| {
+            let name: String = r.get(0);
+            let args: String = r.get(1);
+            // Overloads share a name, so the argument list is what tells them
+            // apart — and it is what you need to call one.
+            SchemaNode::new(&[db, schema, spec.id, &format!("{name}({args})")], &name, spec.kind.clone())
+                .detail(format!("({args})"))
+                .qualified(qualify(schema, &name))
+        })
+        .collect())
+}
+
+async fn browse_triggers(
+    client: &Client,
+    db: &str,
+    schema: &str,
+    spec: &Folder,
+) -> Result<Vec<SchemaNode>> {
+    // tgisinternal excludes the triggers PostgreSQL creates to enforce foreign
+    // keys, which are an implementation detail of the constraint.
     let rows = client
         .query(
-            "SELECT c.relname, c.relkind, \
-                    CASE WHEN c.reltuples < 0 THEN NULL ELSE c.reltuples::bigint END \
-             FROM pg_catalog.pg_class c \
+            "SELECT t.tgname, c.relname FROM pg_catalog.pg_trigger t \
+             JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid \
              JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
-             WHERE n.nspname = $1 AND c.relkind IN ('r','p','v','m','f') \
-               AND NOT c.relispartition \
-             ORDER BY c.relname",
+             WHERE n.nspname = $1 AND NOT t.tgisinternal \
+             ORDER BY c.relname, t.tgname",
             &[&schema],
         )
         .await
@@ -77,41 +279,36 @@ async fn browse_tables(client: &Client, schema: &str) -> Result<Vec<SchemaNode>>
         .iter()
         .map(|r| {
             let name: String = r.get(0);
-            let relkind: i8 = r.get(1);
-            let estimated: Option<i64> = r.get(2);
-            SchemaNode {
-                id: format!("{schema}.{name}"),
-                name,
-                kind: match relkind as u8 as char {
-                    'v' => NodeKind::View,
-                    'm' => NodeKind::MaterializedView,
-                    _ => NodeKind::Table,
-                },
-                expandable: true,
-                children: None,
-                // Explicitly an estimate from the planner statistics. An exact
-                // COUNT(*) per table would make expanding a schema unusable.
-                detail: estimated.map(|n| format!("~{n} rows")),
-            }
+            let table: String = r.get(1);
+            SchemaNode::new(&[db, schema, spec.id, &format!("{table}.{name}")], &name, spec.kind.clone())
+                .detail(format!("on {table}"))
         })
         .collect())
 }
 
-async fn browse_columns(client: &Client, schema: &str, table: &str) -> Result<Vec<SchemaNode>> {
+/// `"schema"."name"`, quoted so it can be pasted straight into a statement.
+fn qualify(schema: &str, name: &str) -> String {
+    format!("{}.{}", quote_ident(schema, '"'), quote_ident(name, '"'))
+}
+
+async fn browse_columns(
+    client: &Client,
+    db: &str,
+    schema: &str,
+    folder: &str,
+    table: &str,
+) -> Result<Vec<SchemaNode>> {
     let columns = columns(client, schema, table).await?;
     Ok(columns
         .into_iter()
-        .map(|c| SchemaNode {
-            id: format!("{schema}.{table}.{}", c.name),
-            name: c.name.clone(),
-            kind: NodeKind::Column,
-            expandable: false,
-            children: None,
-            detail: Some(if c.nullable {
-                c.type_name
-            } else {
-                format!("{} NOT NULL", c.type_name)
-            }),
+        .map(|c| {
+            SchemaNode::new(&[db, schema, folder, table, &c.name], &c.name, NodeKind::Column).detail(
+                if c.nullable {
+                    c.type_name
+                } else {
+                    format!("{} NOT NULL", c.type_name)
+                },
+            )
         })
         .collect())
 }
