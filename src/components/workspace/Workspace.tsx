@@ -16,10 +16,22 @@ import { HistoryPanel } from "./HistoryPanel";
 import { TabBar } from "./TabBar";
 import { SplitHandle } from "./SplitHandle";
 import { Button, Spinner, cx } from "../ui/primitives";
+import { ContextMenu } from "../ui/ContextMenu";
+import type { MenuItem } from "../ui/ContextMenu";
+import { ipc } from "@/lib/ipc";
 import { useHistory } from "@/store/history";
 import { useSettings } from "@/store/settings";
 import { useWorkspace } from "@/store/workspace";
-import type { ConnectionConfig, DriverInfo, StatementResult } from "@/lib/types";
+import type { ConnectionConfig, DriverInfo, NodeKind, SchemaNode, StatementResult } from "@/lib/types";
+
+/**
+ * Object kinds whose source is a statement worth editing.
+ *
+ * A table's "definition" is its columns, which the structure view shows far
+ * better than a CREATE statement would; these are the ones where the script
+ * *is* the object.
+ */
+const SCRIPTED: NodeKind[] = ["function", "procedure", "trigger"];
 
 export function Workspace({
   connection,
@@ -37,6 +49,8 @@ export function Workspace({
     run,
     loadSession,
     loadCompletionFor,
+    openScript: openScriptTab,
+    setTabError,
     useDatabase,
     applyEdit,
     undo,
@@ -52,6 +66,7 @@ export function Workspace({
   const storedRatio = useSettings((s) => s.editorRatio);
   const setEditorRatio = useSettings((s) => s.setEditorRatio);
   const [dragRatio, setDragRatio] = useState<number | null>(null);
+  const [menu, setMenu] = useState<{ node: SchemaNode; x: number; y: number } | null>(null);
   const ratio = dragRatio ?? storedRatio;
   const splitRef = useRef<HTMLDivElement>(null);
 
@@ -110,6 +125,25 @@ export function Workspace({
     return () => window.removeEventListener("keydown", onKey);
   }, [connection.id, openQuery]);
 
+  /**
+   * Fetch an object's source and open it in its own tab.
+   *
+   * The failure lands on the tab the user is looking at rather than in a dialog:
+   * "this procedure is encrypted" is information about the object, and it
+   * belongs where the rest of the query errors go.
+   */
+  const openScript = async (node: SchemaNode) => {
+    try {
+      const sql = await ipc.objectDefinition(connection.id, node.id);
+      openScriptTab(connection.id, { title: node.name, sql });
+    } catch (e) {
+      const current = activeTab(connection.id);
+      if (current) {
+        setTabError(connection.id, current.id, (e as Error).message);
+      }
+    }
+  };
+
   const active = tab?.outcome?.statements[tab.activeStatement];
 
   const readOnlyReason = useMemo(() => {
@@ -136,6 +170,7 @@ export function Workspace({
             })
           }
           onSelectDatabase={(name) => void useDatabase(connection.id, name)}
+          onContextMenu={(node, at) => setMenu({ node, x: at.x, y: at.y })}
         />
       </aside>
 
@@ -301,6 +336,22 @@ export function Workspace({
         )}
       </div>
 
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={menuFor(menu.node, {
+            onEditScript: () => void openScript(menu.node),
+            onOpen: () =>
+              openTable(connection.id, {
+                title: menu.node.name,
+                qualified: menu.node.qualified ?? menu.node.name,
+              }),
+          })}
+          onClose={() => setMenu(null)}
+        />
+      )}
+
       <HistoryPanel
         connectionId={connection.id}
         onPick={(sql) => tab && setSql(connection.id, tab.id, sql)}
@@ -312,6 +363,27 @@ export function Workspace({
       />
     </div>
   );
+}
+
+/**
+ * What right-clicking this node offers.
+ *
+ * Only actions that would actually work: a menu item that reports "not
+ * supported" when clicked is a menu item that should not have been there.
+ */
+function menuFor(
+  node: SchemaNode,
+  actions: { onEditScript: () => void; onOpen: () => void },
+): MenuItem[] {
+  const items: MenuItem[] = [];
+
+  if (node.kind === "table" || node.kind === "view" || node.kind === "materialized_view") {
+    items.push({ label: "Open rows", onSelect: actions.onOpen });
+  }
+  if (SCRIPTED.includes(node.kind)) {
+    items.push({ label: "Edit script", onSelect: actions.onEditScript });
+  }
+  return items;
 }
 
 function StatementTabs({

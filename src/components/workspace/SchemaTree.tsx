@@ -46,6 +46,7 @@ export function SchemaTree({
   activeDatabase,
   onOpenTable,
   onSelectDatabase,
+  onContextMenu,
 }: {
   connectionId: string;
   /** The database the session is pointed at, marked in the list. */
@@ -54,6 +55,8 @@ export function SchemaTree({
   onOpenTable: (node: SchemaNode & NodeContext) => void;
   /** Clicking a database asks the session to switch to it. */
   onSelectDatabase: (name: string) => void;
+  /** Right-clicking an object asks for a menu at that point. */
+  onContextMenu: (node: SchemaNode & NodeContext, at: { x: number; y: number }) => void;
 }) {
   const [roots, setRoots] = useState<SchemaNode[] | null>(null);
   const [rootError, setRootError] = useState<string | null>(null);
@@ -156,6 +159,7 @@ export function SchemaTree({
           onToggle={toggle}
           onOpenTable={onOpenTable}
           onSelectDatabase={onSelectDatabase}
+          onContextMenu={onContextMenu}
         />
       ))}
     </ul>
@@ -171,6 +175,7 @@ function TreeNode({
   onToggle,
   onOpenTable,
   onSelectDatabase,
+  onContextMenu,
 }: {
   node: SchemaNode;
   depth: number;
@@ -181,6 +186,7 @@ function TreeNode({
   onToggle: (node: SchemaNode) => void;
   onOpenTable: (node: SchemaNode & NodeContext) => void;
   onSelectDatabase: (name: string) => void;
+  onContextMenu: (node: SchemaNode & NodeContext, at: { x: number; y: number }) => void;
 }) {
   const expanded = tree.expanded.has(node.id);
   const loading = tree.loading.has(node.id);
@@ -219,6 +225,10 @@ function TreeNode({
         aria-current={isActiveDatabase || undefined}
         tabIndex={0}
         onClick={activate}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onContextMenu({ ...node, ...context }, { x: e.clientX, y: e.clientY });
+        }}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
             e.preventDefault();
@@ -298,6 +308,7 @@ function TreeNode({
                 onToggle={onToggle}
                 onOpenTable={onOpenTable}
                 onSelectDatabase={onSelectDatabase}
+                onContextMenu={onContextMenu}
               />
             ))
           )}

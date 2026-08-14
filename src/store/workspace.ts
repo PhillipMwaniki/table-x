@@ -115,10 +115,14 @@ interface WorkspaceState {
     connectionId: string,
     object: { title: string; qualified: string; schema?: string | undefined },
   ) => void;
+  /** A query tab that opens with content already in it, e.g. an object's DDL. */
+  openScript: (connectionId: string, script: { title: string; sql: string }) => void;
   closeTab: (connectionId: string, tabId: string) => void;
   selectTab: (connectionId: string, tabId: string) => Promise<void>;
 
   setSql: (connectionId: string, tabId: string, sql: string) => void;
+  /** Show a failure that did not come from running this tab's own statement. */
+  setTabError: (connectionId: string, tabId: string, message: string) => void;
   setActiveStatement: (connectionId: string, tabId: string, index: number) => void;
   run: (connectionId: string, tabId: string, sqlOverride?: string) => Promise<void>;
 
@@ -218,6 +222,21 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     void get().run(id, tab.id);
   },
 
+  openScript: (id, script) => {
+    const tab = blankTab({
+      kind: "query",
+      title: script.title,
+      database: get().database[id] ?? null,
+      sql: script.sql,
+    });
+    set((s) => ({
+      tabs: { ...s.tabs, [id]: [...tabsOf(s, id), tab] },
+      active: { ...s.active, [id]: tab.id },
+    }));
+    // Deliberately not run. This is a CREATE statement for something that
+    // already exists; running it on open would fail at best.
+  },
+
   closeTab: (id, tabId) => {
     const list = tabsOf(get(), id);
     const index = list.findIndex((t) => t.id === tabId);
@@ -248,6 +267,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   },
 
   setSql: (id, tabId, sql) => set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { sql }) })),
+
+  setTabError: (id, tabId, message) =>
+    set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { error: { message } }) })),
 
   setActiveStatement: (id, tabId, index) =>
     set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { activeStatement: index }) })),

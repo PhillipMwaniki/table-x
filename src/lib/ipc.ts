@@ -120,6 +120,15 @@ export const ipc = {
   tableDetail: (connection_id: string, table: string, schema?: string) =>
     call<TableDetail>("table_detail", { connection_id, table, schema: schema ?? null }),
 
+  /**
+   * The statement that would recreate an object, for viewing and editing.
+   *
+   * Takes the tree node's id: the driver built that path and knows which
+   * catalogue to ask.
+   */
+  objectDefinition: (connection_id: string, node_id: string) =>
+    call<string>("object_definition", { connection_id, node_id }),
+
   applyEdit: (connection_id: string, edit: RowEdit) =>
     call<void>("apply_edit", { connection_id, edit }),
 
