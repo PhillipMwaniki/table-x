@@ -1,9 +1,14 @@
 /**
- * Per-connection workspace state: editor contents, the last result, and the
- * undo stack for inline edits.
+ * Tabs, and the state each one holds.
  *
- * Keyed by connection id so switching connections in the sidebar preserves each
- * one's query and results rather than resetting the pane.
+ * A tab is the unit of work: one editor and one result, or one table's rows.
+ * Tabs belong to a connection, so switching connections in the sidebar shows
+ * that connection's tabs rather than resetting anything.
+ *
+ * The database a tab was opened against is part of the tab, not just a label.
+ * A session points at one database at a time, so activating a tab that belongs
+ * to another one switches the session back — otherwise a query typed against
+ * `app_staging` would silently run against whatever was selected last.
  */
 
 import { create } from "zustand";
@@ -27,91 +32,267 @@ export interface QueryError {
   code?: string | undefined;
 }
 
-interface Pane {
+/**
+ * A table tab shows one object's rows with no editor; a query tab is an editor
+ * over a result. They share everything else, so they share a shape.
+ */
+export type TabKind = "query" | "table";
+
+export interface Tab {
+  id: string;
+  kind: TabKind;
+  title: string;
+  /** The database this tab's statements belong to, when the engine has any. */
+  database: string | null;
+  /** Where a table tab's object lives, shown as the tab's context line. */
+  schema?: string | undefined;
+
   sql: string;
   outcome: QueryOutcome | null;
   error: QueryError | null;
   running: boolean;
   /** Index of the statement whose results are shown. */
   activeStatement: number;
-  completion: CompletionScope | null;
   undo: AppliedEdit[];
   redo: AppliedEdit[];
 }
 
-function blankPane(): Pane {
+let counter = 0;
+function nextId(): string {
+  counter += 1;
+  return `tab-${counter}`;
+}
+
+function blankTab(overrides: Partial<Tab> = {}): Tab {
   return {
+    id: nextId(),
+    kind: "query",
+    title: "Query",
+    database: null,
     sql: "",
     outcome: null,
     error: null,
     running: false,
     activeStatement: 0,
-    completion: null,
     undo: [],
     redo: [],
+    ...overrides,
   };
 }
 
 interface WorkspaceState {
-  panes: Record<string, Pane>;
+  /** Tabs per connection id, in display order. */
+  tabs: Record<string, Tab[]>;
+  /** Active tab id per connection id. */
+  active: Record<string, string>;
+  /** Autocomplete data per connection — it describes the session, not a tab. */
+  completion: Record<string, CompletionScope | null>;
+  /** The database each session is currently pointed at. */
+  database: Record<string, string | null>;
+  /** Set while a database switch is in flight, so the tree can show it. */
+  switching: Record<string, boolean>;
 
-  pane: (connectionId: string) => Pane;
-  setSql: (connectionId: string, sql: string) => void;
-  setActiveStatement: (connectionId: string, index: number) => void;
-  run: (connectionId: string, sqlOverride?: string) => Promise<void>;
-  loadCompletion: (connectionId: string) => Promise<void>;
+  tabsFor: (connectionId: string) => Tab[];
+  activeTab: (connectionId: string) => Tab | null;
+
+  openQuery: (connectionId: string) => void;
+  openTable: (
+    connectionId: string,
+    object: { title: string; qualified: string; schema?: string | undefined },
+  ) => void;
+  closeTab: (connectionId: string, tabId: string) => void;
+  selectTab: (connectionId: string, tabId: string) => Promise<void>;
+
+  setSql: (connectionId: string, tabId: string, sql: string) => void;
+  setActiveStatement: (connectionId: string, tabId: string, index: number) => void;
+  run: (connectionId: string, tabId: string, sqlOverride?: string) => Promise<void>;
+
+  loadSession: (connectionId: string) => Promise<void>;
+  useDatabase: (connectionId: string, database: string) => Promise<void>;
+  loadCompletionFor: (connectionId: string) => Promise<void>;
+
   applyEdit: (
     connectionId: string,
+    tabId: string,
     rowIndex: number,
     columnIndex: number,
     next: Value,
   ) => Promise<void>;
-  undo: (connectionId: string) => Promise<void>;
-  redo: (connectionId: string) => Promise<void>;
+  undo: (connectionId: string, tabId: string) => Promise<void>;
+  redo: (connectionId: string, tabId: string) => Promise<void>;
   reset: (connectionId: string) => void;
 }
 
-/** Read-modify-write one pane without disturbing the others. */
-function patch(
-  panes: Record<string, Pane>,
-  id: string,
-  changes: Partial<Pane>,
-): Record<string, Pane> {
-  return { ...panes, [id]: { ...(panes[id] ?? blankPane()), ...changes } };
+/** Read-modify-write one tab without disturbing the others. */
+function patchTab(
+  tabs: Record<string, Tab[]>,
+  connectionId: string,
+  tabId: string,
+  changes: Partial<Tab>,
+): Record<string, Tab[]> {
+  const list = tabs[connectionId] ?? [];
+  return {
+    ...tabs,
+    [connectionId]: list.map((t) => (t.id === tabId ? { ...t, ...changes } : t)),
+  };
 }
 
 /** The result set currently displayed, if the active statement returned rows. */
-function activeRows(pane: Pane): (StatementResult & { type: "rows" }) | null {
-  const statement = pane.outcome?.statements[pane.activeStatement];
+function activeRows(tab: Tab): (StatementResult & { type: "rows" }) | null {
+  const statement = tab.outcome?.statements[tab.activeStatement];
   return statement?.type === "rows" ? statement : null;
 }
 
 export const useWorkspace = create<WorkspaceState>((set, get) => ({
-  panes: {},
+  tabs: {},
+  active: {},
+  completion: {},
+  database: {},
+  switching: {},
 
-  pane: (id) => get().panes[id] ?? blankPane(),
+  tabsFor: (id) => get().tabs[id] ?? [],
+  activeTab: (id) => {
+    const list = get().tabs[id] ?? [];
+    return list.find((t) => t.id === get().active[id]) ?? list[0] ?? null;
+  },
 
-  setSql: (id, sql) => set((s) => ({ panes: patch(s.panes, id, { sql }) })),
+  openQuery: (id) => {
+    const list = get().tabs[id] ?? [];
+    // Numbered by how many query tabs exist rather than by total tabs, so the
+    // names stay predictable when table tabs are opened and closed between them.
+    const n = list.filter((t) => t.kind === "query").length + 1;
+    const tab = blankTab({
+      kind: "query",
+      title: `Query ${n}`,
+      database: get().database[id] ?? null,
+    });
+    set((s) => ({
+      tabs: { ...s.tabs, [id]: [...list, tab] },
+      active: { ...s.active, [id]: tab.id },
+    }));
+  },
 
-  setActiveStatement: (id, index) =>
-    set((s) => ({ panes: patch(s.panes, id, { activeStatement: index }) })),
+  openTable: (id, object) => {
+    const list = get().tabs[id] ?? [];
+    const database = get().database[id] ?? null;
 
-  reset: (id) => set((s) => ({ panes: patch(s.panes, id, blankPane()) })),
+    // Opening the same table twice focuses the tab that is already there, the
+    // way a browser does. Two identical tabs would just be two ways to lose
+    // track of which one has your unsaved filter on it.
+    const existing = list.find(
+      (t) => t.kind === "table" && t.title === object.title && t.database === database,
+    );
+    if (existing) {
+      set((s) => ({ active: { ...s.active, [id]: existing.id } }));
+      return;
+    }
 
-  run: async (id, sqlOverride) => {
-    const pane = get().pane(id);
-    const sql = sqlOverride ?? pane.sql;
+    const tab = blankTab({
+      kind: "table",
+      title: object.title,
+      database,
+      schema: object.schema,
+      // The driver supplied the quoted, qualified name, so this is correct for
+      // the engine's own quoting rules without the UI knowing them.
+      sql: `SELECT * FROM ${object.qualified}`,
+    });
+    set((s) => ({
+      tabs: { ...s.tabs, [id]: [...list, tab] },
+      active: { ...s.active, [id]: tab.id },
+    }));
+    void get().run(id, tab.id);
+  },
+
+  closeTab: (id, tabId) => {
+    const list = get().tabs[id] ?? [];
+    const index = list.findIndex((t) => t.id === tabId);
+    const remaining = list.filter((t) => t.id !== tabId);
+
+    // Focus moves to the neighbour on the left, which is where the eye already
+    // is after closing something.
+    const nextActive =
+      get().active[id] === tabId
+        ? (remaining[Math.max(0, index - 1)]?.id ?? "")
+        : (get().active[id] ?? "");
+
+    set((s) => ({
+      tabs: { ...s.tabs, [id]: remaining },
+      active: { ...s.active, [id]: nextActive },
+    }));
+  },
+
+  selectTab: async (id, tabId) => {
+    set((s) => ({ active: { ...s.active, [id]: tabId } }));
+
+    // A tab belongs to the database it was opened in. Bringing it forward has
+    // to bring its database with it, or its SQL would run somewhere else.
+    const tab = (get().tabs[id] ?? []).find((t) => t.id === tabId);
+    if (tab?.database && tab.database !== get().database[id]) {
+      await get().useDatabase(id, tab.database);
+    }
+  },
+
+  setSql: (id, tabId, sql) => set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { sql }) })),
+
+  setActiveStatement: (id, tabId, index) =>
+    set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { activeStatement: index }) })),
+
+  reset: (id) =>
+    set((s) => ({
+      tabs: { ...s.tabs, [id]: [] },
+      active: { ...s.active, [id]: "" },
+      database: { ...s.database, [id]: null },
+    })),
+
+  loadSession: async (id) => {
+    try {
+      const info = await ipc.sessionInfo(id);
+      set((s) => ({ database: { ...s.database, [id]: info.database ?? null } }));
+    } catch {
+      // A session that cannot report its database is still usable; the tree
+      // simply will not mark one.
+    }
+
+    // Every connection starts with somewhere to type.
+    if ((get().tabs[id] ?? []).length === 0) get().openQuery(id);
+  },
+
+  useDatabase: async (id, database) => {
+    if (get().database[id] === database) return;
+    set((s) => ({ switching: { ...s.switching, [id]: true } }));
+    try {
+      const now = await ipc.useDatabase(id, database);
+      set((s) => ({ database: { ...s.database, [id]: now } }));
+      // Autocomplete describes the database that was open, so it is refetched
+      // rather than left describing the previous one.
+      void get().loadCompletionFor(id);
+    } catch (e) {
+      const err = e as IpcError;
+      const tab = get().activeTab(id);
+      if (tab) {
+        set((s) => ({
+          tabs: patchTab(s.tabs, id, tab.id, { error: { message: err.message } }),
+        }));
+      }
+    } finally {
+      set((s) => ({ switching: { ...s.switching, [id]: false } }));
+    }
+  },
+
+  run: async (id, tabId, sqlOverride) => {
+    const tab = (get().tabs[id] ?? []).find((t) => t.id === tabId);
+    if (!tab) return;
+    const sql = sqlOverride ?? tab.sql;
     if (!sql.trim()) return;
-    // One query per pane at a time. The session is locked for the duration
-    // anyway, so a second submission would only queue behind the first - and
-    // an impatient double-click on a table should not run it twice.
-    if (pane.running) return;
+    // One query per tab at a time. The session is locked for the duration
+    // anyway, so a second submission would only queue behind the first.
+    if (tab.running) return;
 
-    set((s) => ({ panes: patch(s.panes, id, { running: true, error: null }) }));
+    set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { running: true, error: null }) }));
     try {
       const outcome = await ipc.execute({ connection_id: id, sql });
       set((s) => ({
-        panes: patch(s.panes, id, {
+        tabs: patchTab(s.tabs, id, tabId, {
           outcome,
           running: false,
           activeStatement: 0,
@@ -124,7 +305,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     } catch (e) {
       const err = e as IpcError;
       set((s) => ({
-        panes: patch(s.panes, id, {
+        tabs: patchTab(s.tabs, id, tabId, {
           running: false,
           error: { message: err.message, position: err.position, code: err.code },
           // Keep the previous outcome visible. Blanking the grid on a typo
@@ -134,19 +315,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     }
   },
 
-  loadCompletion: async (id) => {
-    try {
-      const completion = await ipc.completionScope(id);
-      set((s) => ({ panes: patch(s.panes, id, { completion }) }));
-    } catch {
-      // Autocomplete is an enhancement; failing to load it must not surface as
-      // an error banner over the user's results.
-    }
-  },
-
-  applyEdit: async (id, rowIndex, columnIndex, next) => {
-    const pane = get().pane(id);
-    const rows = activeRows(pane);
+  applyEdit: async (id, tabId, rowIndex, columnIndex, next) => {
+    const tab = (get().tabs[id] ?? []).find((t) => t.id === tabId);
+    if (!tab) return;
+    const rows = activeRows(tab);
     if (!rows || !rows.editable) return;
 
     const column = rows.columns[columnIndex];
@@ -182,8 +354,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const updatedRows = [...rows.rows];
     updatedRows[rowIndex] = updatedRow;
 
-    const statements = [...(pane.outcome?.statements ?? [])];
-    statements[pane.activeStatement] = { ...rows, rows: updatedRows };
+    const statements = [...(tab.outcome?.statements ?? [])];
+    statements[tab.activeStatement] = { ...rows, rows: updatedRows };
 
     const applied: AppliedEdit = {
       rowIndex,
@@ -194,23 +366,24 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     };
 
     set((s) => ({
-      panes: patch(s.panes, id, {
-        outcome: { ...pane.outcome!, statements },
-        undo: [...pane.undo, applied],
+      tabs: patchTab(s.tabs, id, tabId, {
+        outcome: { ...tab.outcome!, statements },
+        undo: [...tab.undo, applied],
         // Any new edit invalidates the redo branch, as in every text editor.
         redo: [],
       }),
     }));
   },
 
-  undo: async (id) => {
-    const pane = get().pane(id);
-    const last = pane.undo[pane.undo.length - 1];
+  undo: async (id, tabId) => {
+    const tab = (get().tabs[id] ?? []).find((t) => t.id === tabId);
+    if (!tab) return;
+    const last = tab.undo[tab.undo.length - 1];
     if (!last) return;
 
     await ipc.applyEdit(id, last.inverse);
 
-    const rows = activeRows(pane);
+    const rows = activeRows(tab);
     if (!rows) return;
     const row = rows.rows[last.rowIndex];
     if (!row) return;
@@ -219,21 +392,22 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     updatedRow[last.columnIndex] = last.before;
     const updatedRows = [...rows.rows];
     updatedRows[last.rowIndex] = updatedRow;
-    const statements = [...(pane.outcome?.statements ?? [])];
-    statements[pane.activeStatement] = { ...rows, rows: updatedRows };
+    const statements = [...(tab.outcome?.statements ?? [])];
+    statements[tab.activeStatement] = { ...rows, rows: updatedRows };
 
     set((s) => ({
-      panes: patch(s.panes, id, {
-        outcome: { ...pane.outcome!, statements },
-        undo: pane.undo.slice(0, -1),
-        redo: [...pane.redo, last],
+      tabs: patchTab(s.tabs, id, tabId, {
+        outcome: { ...tab.outcome!, statements },
+        undo: tab.undo.slice(0, -1),
+        redo: [...tab.redo, last],
       }),
     }));
   },
 
-  redo: async (id) => {
-    const pane = get().pane(id);
-    const next = pane.redo[pane.redo.length - 1];
+  redo: async (id, tabId) => {
+    const tab = (get().tabs[id] ?? []).find((t) => t.id === tabId);
+    if (!tab) return;
+    const next = tab.redo[tab.redo.length - 1];
     if (!next) return;
 
     // Re-apply by inverting the inverse.
@@ -243,7 +417,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     };
     await ipc.applyEdit(id, forward);
 
-    const rows = activeRows(pane);
+    const rows = activeRows(tab);
     if (!rows) return;
     const row = rows.rows[next.rowIndex];
     if (!row) return;
@@ -252,15 +426,25 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     updatedRow[next.columnIndex] = next.after;
     const updatedRows = [...rows.rows];
     updatedRows[next.rowIndex] = updatedRow;
-    const statements = [...(pane.outcome?.statements ?? [])];
-    statements[pane.activeStatement] = { ...rows, rows: updatedRows };
+    const statements = [...(tab.outcome?.statements ?? [])];
+    statements[tab.activeStatement] = { ...rows, rows: updatedRows };
 
     set((s) => ({
-      panes: patch(s.panes, id, {
-        outcome: { ...pane.outcome!, statements },
-        undo: [...pane.undo, next],
-        redo: pane.redo.slice(0, -1),
+      tabs: patchTab(s.tabs, id, tabId, {
+        outcome: { ...tab.outcome!, statements },
+        undo: [...tab.undo, next],
+        redo: tab.redo.slice(0, -1),
       }),
     }));
+  },
+
+  loadCompletionFor: async (id) => {
+    try {
+      const completion = await ipc.completionScope(id);
+      set((s) => ({ completion: { ...s.completion, [id]: completion } }));
+    } catch {
+      // Autocomplete is an enhancement; failing to load it must not surface as
+      // an error banner over the user's results.
+    }
   },
 }));

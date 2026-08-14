@@ -15,6 +15,12 @@ import type { NodeKind, SchemaNode } from "@/lib/types";
 const GLYPH: Partial<Record<NodeKind, string>> = {
   schema: "◈",
   database: "◈",
+  folder: "▸",
+  function: "ƒ",
+  procedure: "ƒ",
+  trigger: "⚡",
+  sequence: "#",
+  index: "⋮",
   table: "▤",
   view: "▥",
   materialized_view: "▩",
@@ -29,13 +35,25 @@ interface TreeState {
   failed: Record<string, string>;
 }
 
+/** Where a node sits, gathered from what the tree actually rendered above it. */
+export interface NodeContext {
+  database?: string | undefined;
+  schema?: string | undefined;
+}
+
 export function SchemaTree({
   connectionId,
+  activeDatabase,
   onOpenTable,
+  onSelectDatabase,
 }: {
   connectionId: string;
-  /** Double-clicking a table asks the workspace to query it. */
-  onOpenTable: (node: SchemaNode) => void;
+  /** The database the session is pointed at, marked in the list. */
+  activeDatabase: string | null;
+  /** Clicking an object asks the workspace to open it as a tab. */
+  onOpenTable: (node: SchemaNode & NodeContext) => void;
+  /** Clicking a database asks the session to switch to it. */
+  onSelectDatabase: (name: string) => void;
 }) {
   const [roots, setRoots] = useState<SchemaNode[] | null>(null);
   const [rootError, setRootError] = useState<string | null>(null);
@@ -133,8 +151,11 @@ export function SchemaTree({
           node={node}
           depth={0}
           tree={tree}
+          context={{}}
+          activeDatabase={activeDatabase}
           onToggle={toggle}
           onOpenTable={onOpenTable}
+          onSelectDatabase={onSelectDatabase}
         />
       ))}
     </ul>
@@ -145,48 +166,76 @@ function TreeNode({
   node,
   depth,
   tree,
+  context,
+  activeDatabase,
   onToggle,
   onOpenTable,
+  onSelectDatabase,
 }: {
   node: SchemaNode;
   depth: number;
   tree: TreeState;
+  /** Database and schema of everything rendered above this node. */
+  context: NodeContext;
+  activeDatabase: string | null;
   onToggle: (node: SchemaNode) => void;
-  onOpenTable: (node: SchemaNode) => void;
+  onOpenTable: (node: SchemaNode & NodeContext) => void;
+  onSelectDatabase: (name: string) => void;
 }) {
   const expanded = tree.expanded.has(node.id);
   const loading = tree.loading.has(node.id);
   const children = tree.children[node.id];
   const error = tree.failed[node.id];
-  const isTable = node.kind === "table" || node.kind === "view" || node.kind === "materialized_view";
+
+  // Anything with rows to show opens as a tab. Functions, triggers, and
+  // sequences are listed but not opened: there is nothing to select from them.
+  const opens =
+    node.kind === "table" || node.kind === "view" || node.kind === "materialized_view";
+  const isDatabase = node.kind === "database";
+  const isActiveDatabase = isDatabase && node.name === activeDatabase;
+
+  // Each level contributes its own name to what its children inherit.
+  const childContext: NodeContext = {
+    database: isDatabase ? node.name : context.database,
+    schema: node.kind === "schema" ? node.name : context.schema,
+  };
+
+  const activate = () => {
+    if (opens) {
+      onOpenTable({ ...node, ...context });
+      return;
+    }
+    // Selecting a database points the session at it *and* opens it, because
+    // both are what "I want to work in this one" means.
+    if (isDatabase && !isActiveDatabase) onSelectDatabase(node.name);
+    if (node.expandable) onToggle(node);
+  };
 
   return (
     <li>
       <div
         role="treeitem"
         aria-expanded={node.expandable ? expanded : undefined}
+        aria-current={isActiveDatabase || undefined}
         tabIndex={0}
-        // Clicking a table opens its rows. Anywhere else in the tree a click
-        // expands, which is what a folder-shaped thing should do — but a table
-        // is the thing you came for, and making the obvious gesture do nothing
-        // while hiding the data behind a double-click is not an affordance, it
-        // is a guess.
-        onClick={() => (isTable ? onOpenTable(node) : node.expandable && onToggle(node))}
+        onClick={activate}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
             e.preventDefault();
-            if (isTable) onOpenTable(node);
-            else if (node.expandable) onToggle(node);
+            activate();
           }
         }}
         style={{ paddingLeft: depth * 12 + 6 }}
-        className="flex cursor-default items-center gap-1.5 py-[3px] pr-2 hover:bg-surface-2"
+        className={cx(
+          "flex cursor-default items-center gap-1.5 py-[3px] pr-2 hover:bg-surface-2",
+          isActiveDatabase && "bg-surface-2",
+        )}
         title={node.detail ? `${node.name} — ${node.detail}` : node.name}
       >
-        {/* A table's columns are behind the chevron, since its row is now the
+        {/* An object's columns are behind the chevron, since its row is now the
             open-data target. Rendered as a button so it takes the click without
-            also opening the table, and so it is reachable from the keyboard. */}
-        {node.expandable && isTable ? (
+            also opening the object, and so it is reachable from the keyboard. */}
+        {node.expandable && opens ? (
           <button
             aria-label={expanded ? `Collapse ${node.name}` : `Expand ${node.name}`}
             onClick={(e) => {
@@ -203,7 +252,17 @@ function TreeNode({
           </span>
         )}
         <span className="shrink-0 text-[10px] text-text-muted">{GLYPH[node.kind] ?? "·"}</span>
-        <span className="truncate text-[11.5px] text-text">{node.name}</span>
+        <span
+          className={cx(
+            "truncate text-[11.5px]",
+            // The database in use is the one every unqualified statement runs
+            // against, which is worth more than a subtle highlight.
+            isActiveDatabase ? "font-medium text-accent" : "text-text",
+            node.kind === "folder" && "text-text-muted uppercase tracking-wide text-[10px]",
+          )}
+        >
+          {node.name}
+        </span>
         {node.detail && (
           <span className="ml-auto shrink-0 truncate pl-2 font-mono text-[9.5px] text-text-muted/70">
             {node.detail}
@@ -234,8 +293,11 @@ function TreeNode({
                 node={child}
                 depth={depth + 1}
                 tree={tree}
+                context={childContext}
+                activeDatabase={activeDatabase}
                 onToggle={onToggle}
                 onOpenTable={onOpenTable}
+                onSelectDatabase={onSelectDatabase}
               />
             ))
           )}
@@ -243,16 +305,6 @@ function TreeNode({
       )}
     </li>
   );
-}
-
-/** Build a browse query for a table node. */
-export function selectFor(node: SchemaNode, quote: string): string {
-  const q = (name: string) => `${quote}${name.replaceAll(quote, quote + quote)}${quote}`;
-  // Node ids are `schema.table` where the driver reports schemas, otherwise the
-  // bare table name.
-  const parts = node.id.split(".");
-  const qualified = parts.length > 1 ? parts.map(q).join(".") : q(node.name);
-  return `SELECT * FROM ${qualified};`;
 }
 
 export { cx };

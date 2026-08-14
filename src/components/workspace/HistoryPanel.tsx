@@ -31,8 +31,11 @@ export function HistoryPanel({
   const { open, entries, text, scope, loading, error, setOpen, setText, setScope, refresh, clear } =
     useHistory();
 
-  // A finished run is the one moment the list is certainly out of date.
-  const running = useWorkspace((s) => s.panes[connectionId]?.running ?? false);
+  // A finished run is the one moment the list is certainly out of date. Any
+  // tab's run counts: they all write to the same history.
+  const running = useWorkspace((s) =>
+    (s.tabs[connectionId] ?? []).some((t) => t.running),
+  );
   const wasRunning = useRef(running);
 
   useEffect(() => {

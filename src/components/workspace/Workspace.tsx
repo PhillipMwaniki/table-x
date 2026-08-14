@@ -1,13 +1,19 @@
 /**
- * The working area for one connected connection: schema tree on the left, SQL
- * editor above, results below.
+ * The working area for one connected connection: schema tree on the left, tabs
+ * across the top, and the active tab's editor and results below.
+ *
+ * A table tab shows rows with no editor — you opened an object, not a question —
+ * while a query tab is an editor over a result. Both carry the database they
+ * belong to, which is what makes them safe to switch between on a server that
+ * has more than one.
  */
 
 import { useEffect, useMemo } from "react";
-import { SchemaTree, selectFor } from "./SchemaTree";
+import { SchemaTree } from "./SchemaTree";
 import { SqlEditor } from "./SqlEditor";
 import { ResultGrid } from "./ResultGrid";
 import { HistoryPanel } from "./HistoryPanel";
+import { TabBar } from "./TabBar";
 import { Button, Spinner, cx } from "../ui/primitives";
 import { useHistory } from "@/store/history";
 import { useWorkspace } from "@/store/workspace";
@@ -21,11 +27,15 @@ export function Workspace({
   driver: DriverInfo | undefined;
 }) {
   const {
-    pane,
+    activeTab,
+    openQuery,
+    openTable,
     setSql,
     setActiveStatement,
     run,
-    loadCompletion,
+    loadSession,
+    loadCompletionFor,
+    useDatabase,
     applyEdit,
     undo,
     redo,
@@ -34,13 +44,16 @@ export function Workspace({
   const historyOpen = useHistory((s) => s.open);
   const setHistoryOpen = useHistory((s) => s.setOpen);
 
-  const state = pane(connection.id);
-  const quote = driver?.capabilities.identifier_quote ?? '"';
+  const tab = activeTab(connection.id);
+  const completion = useWorkspace((s) => s.completion[connection.id] ?? null);
+  const database = useWorkspace((s) => s.database[connection.id] ?? null);
 
-  // Autocomplete data is fetched once per connection, not per keystroke.
+  // The session's database and the first tab are established once per
+  // connection; autocomplete is fetched once rather than per keystroke.
   useEffect(() => {
-    void loadCompletion(connection.id);
-  }, [connection.id, loadCompletion]);
+    void loadSession(connection.id);
+    void loadCompletionFor(connection.id);
+  }, [connection.id, loadSession, loadCompletionFor]);
 
   // Undo/redo are global shortcuts while this pane is mounted. Bound on window
   // rather than the grid so they work regardless of which element has focus,
@@ -50,13 +63,13 @@ export function Workspace({
       const inEditor = (e.target as HTMLElement)?.closest?.(".cm-editor");
       if (inEditor) return;
       const mod = e.ctrlKey || e.metaKey;
-      if (!mod || e.key.toLowerCase() !== "z") return;
+      if (!mod || e.key.toLowerCase() !== "z" || !tab) return;
       e.preventDefault();
-      void (e.shiftKey ? redo(connection.id) : undo(connection.id));
+      void (e.shiftKey ? redo(connection.id, tab.id) : undo(connection.id, tab.id));
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [connection.id, undo, redo]);
+  }, [connection.id, tab, undo, redo]);
 
   // History gets its own handler rather than joining the one above, because it
   // must work while the caret is in the editor — that is where you are when you
@@ -71,7 +84,18 @@ export function Workspace({
     return () => window.removeEventListener("keydown", onKey);
   }, [setHistoryOpen]);
 
-  const active = state.outcome?.statements[state.activeStatement];
+  // A new query tab is Ctrl+T, as it is in every tabbed application.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== "t") return;
+      e.preventDefault();
+      openQuery(connection.id);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [connection.id, openQuery]);
+
+  const active = tab?.outcome?.statements[tab.activeStatement];
 
   const readOnlyReason = useMemo(() => {
     if (connection.read_only) return "This connection is marked read-only.";
@@ -83,148 +107,175 @@ export function Workspace({
 
   return (
     <div className="flex min-h-0 flex-1">
-      <aside className="flex w-56 shrink-0 flex-col overflow-y-auto border-r border-border bg-surface-1">
+      <aside className="flex w-60 shrink-0 flex-col overflow-y-auto border-r border-border bg-surface-1">
         <SchemaTree
           connectionId={connection.id}
-          onOpenTable={(node) => {
-            const sql = selectFor(node, quote);
-            setSql(connection.id, sql);
-            void run(connection.id, sql);
-          }}
+          activeDatabase={database}
+          onOpenTable={(node) =>
+            openTable(connection.id, {
+              title: node.name,
+              // The driver already quoted and qualified this for its own
+              // engine, so the UI never assembles a name itself.
+              qualified: node.qualified ?? node.name,
+              schema: node.schema,
+            })
+          }
+          onSelectDatabase={(name) => void useDatabase(connection.id, name)}
         />
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border bg-surface-1 px-2">
-          <Button
-            variant="primary"
-            onClick={() => void run(connection.id)}
-            busy={state.running}
-            disabled={!state.sql.trim()}
-            className="h-6"
-          >
-            Run
-          </Button>
-          <span className="text-[10.5px] text-text-muted">Ctrl+Enter</span>
+        <TabBar connectionId={connection.id} />
 
-          {connection.read_only && (
-            <span className="rounded bg-warn/15 px-1.5 py-0.5 text-[10px] font-medium text-warn">
-              READ-ONLY
-            </span>
-          )}
-
-          <div className="flex-1" />
-
-          <Button
-            variant="ghost"
-            className={cx("h-6", historyOpen && "bg-surface-3 text-text")}
-            onClick={() => setHistoryOpen(!historyOpen)}
-            aria-pressed={historyOpen}
-            title="Query history (Ctrl+H)"
-          >
-            History
-          </Button>
-          <Button
-            variant="ghost"
-            className="h-6"
-            disabled={state.undo.length === 0}
-            onClick={() => void undo(connection.id)}
-            title="Undo last cell edit (Ctrl+Z)"
-          >
-            Undo{state.undo.length > 0 && ` (${state.undo.length})`}
-          </Button>
-          <Button
-            variant="ghost"
-            className="h-6"
-            disabled={state.redo.length === 0}
-            onClick={() => void redo(connection.id)}
-            title="Redo (Ctrl+Shift+Z)"
-          >
-            Redo
-          </Button>
-        </div>
-
-        {/* The editor gets a fixed share and the results take the rest, which is
-            the proportion people actually want once a result is on screen. */}
-        <div className="h-[38%] min-h-24 shrink-0 border-b border-border">
-          <SqlEditor
-            value={state.sql}
-            onChange={(sql) => setSql(connection.id, sql)}
-            onRun={(text) => void run(connection.id, text)}
-            driver={connection.driver}
-            completion={state.completion}
-            errorPosition={state.error?.position}
-          />
-        </div>
-
-        <div className="flex min-h-0 flex-1 flex-col">
-          {state.error && (
-            <div role="alert" className="shrink-0 border-b border-danger/30 bg-danger/10 px-2 py-1.5">
-              <p className="font-mono text-[11px] text-danger" data-selectable>
-                {state.error.message}
-              </p>
-              {state.error.code && (
-                <p className="mt-0.5 text-[10px] text-danger/70">
-                  SQLSTATE {state.error.code}
-                  {state.error.position !== undefined && ` · position ${state.error.position}`}
-                </p>
+        {tab ? (
+          <>
+            <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border bg-surface-1 px-2">
+              <Button
+                variant="primary"
+                onClick={() => void run(connection.id, tab.id)}
+                busy={tab.running}
+                disabled={!tab.sql.trim()}
+                className="h-6"
+              >
+                {tab.kind === "table" ? "Refresh" : "Run"}
+              </Button>
+              {tab.kind === "query" && (
+                <span className="text-[10.5px] text-text-muted">Ctrl+Enter</span>
               )}
-            </div>
-          )}
 
-          {state.outcome && state.outcome.statements.length > 1 && (
-            <StatementTabs
-              statements={state.outcome.statements}
-              active={state.activeStatement}
-              onSelect={(i) => setActiveStatement(connection.id, i)}
-            />
-          )}
-
-          {state.running && !state.outcome ? (
-            <div className="flex flex-1 items-center justify-center">
-              <Spinner className="text-text-muted" />
-            </div>
-          ) : active?.type === "rows" ? (
-            <ResultGrid
-              result={active}
-              readOnlyReason={readOnlyReason}
-              onEdit={(row, col, next) => applyEdit(connection.id, row, col, next)}
-            />
-          ) : active?.type === "affected" ? (
-            <div className="flex flex-1 items-center justify-center text-[12px] text-text-muted">
-              {active.rows_affected} row{active.rows_affected === 1 ? "" : "s"} affected
-              {active.last_insert_id != null && ` · last insert id ${active.last_insert_id}`}
-            </div>
-          ) : (
-            <div className="flex flex-1 items-center justify-center px-6 text-center text-[12px] text-text-muted">
-              {state.error
-                ? "Fix the statement and run again."
-                : "Write a query and press Ctrl+Enter, or click a table in the sidebar."}
-            </div>
-          )}
-
-          {state.outcome && (
-            <div className="flex h-5 shrink-0 items-center gap-3 border-t border-border bg-surface-1 px-2 text-[10.5px] text-text-muted">
-              <span>{state.outcome.elapsed_ms} ms</span>
-              {state.outcome.statements.length > 1 && (
-                <span>{state.outcome.statements.length} statements</span>
-              )}
-              {state.outcome.notices.map((n, i) => (
-                <span key={i} className="truncate text-warn">
-                  {n}
+              {connection.read_only && (
+                <span className="rounded bg-warn/15 px-1.5 py-0.5 text-[10px] font-medium text-warn">
+                  READ-ONLY
                 </span>
-              ))}
+              )}
+
+              <div className="flex-1" />
+
+              <Button
+                variant="ghost"
+                className={cx("h-6", historyOpen && "bg-surface-3 text-text")}
+                onClick={() => setHistoryOpen(!historyOpen)}
+                aria-pressed={historyOpen}
+                title="Query history (Ctrl+H)"
+              >
+                History
+              </Button>
+              <Button
+                variant="ghost"
+                className="h-6"
+                disabled={tab.undo.length === 0}
+                onClick={() => void undo(connection.id, tab.id)}
+                title="Undo last cell edit (Ctrl+Z)"
+              >
+                Undo{tab.undo.length > 0 && ` (${tab.undo.length})`}
+              </Button>
+              <Button
+                variant="ghost"
+                className="h-6"
+                disabled={tab.redo.length === 0}
+                onClick={() => void redo(connection.id, tab.id)}
+                title="Redo (Ctrl+Shift+Z)"
+              >
+                Redo
+              </Button>
             </div>
-          )}
-        </div>
+
+            {/* A table tab gives its whole height to the rows: there is no
+                statement to edit, and the SQL that produced them is one line
+                the tab's own context already describes. */}
+            {tab.kind === "query" && (
+              <div className="h-[38%] min-h-24 shrink-0 border-b border-border">
+                <SqlEditor
+                  value={tab.sql}
+                  onChange={(sql) => setSql(connection.id, tab.id, sql)}
+                  onRun={(text) => void run(connection.id, tab.id, text)}
+                  driver={connection.driver}
+                  completion={completion}
+                  errorPosition={tab.error?.position}
+                />
+              </div>
+            )}
+
+            <div className="flex min-h-0 flex-1 flex-col">
+              {tab.error && (
+                <div
+                  role="alert"
+                  className="shrink-0 border-b border-danger/30 bg-danger/10 px-2 py-1.5"
+                >
+                  <p className="font-mono text-[11px] text-danger" data-selectable>
+                    {tab.error.message}
+                  </p>
+                  {tab.error.code && (
+                    <p className="mt-0.5 text-[10px] text-danger/70">
+                      SQLSTATE {tab.error.code}
+                      {tab.error.position !== undefined && ` · position ${tab.error.position}`}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {tab.outcome && tab.outcome.statements.length > 1 && (
+                <StatementTabs
+                  statements={tab.outcome.statements}
+                  active={tab.activeStatement}
+                  onSelect={(i) => setActiveStatement(connection.id, tab.id, i)}
+                />
+              )}
+
+              {tab.running && !tab.outcome ? (
+                <div className="flex flex-1 items-center justify-center">
+                  <Spinner className="text-text-muted" />
+                </div>
+              ) : active?.type === "rows" ? (
+                <ResultGrid
+                  result={active}
+                  readOnlyReason={readOnlyReason}
+                  onEdit={(row, col, next) => applyEdit(connection.id, tab.id, row, col, next)}
+                />
+              ) : active?.type === "affected" ? (
+                <div className="flex flex-1 items-center justify-center text-[12px] text-text-muted">
+                  {active.rows_affected} row{active.rows_affected === 1 ? "" : "s"} affected
+                  {active.last_insert_id != null && ` · last insert id ${active.last_insert_id}`}
+                </div>
+              ) : (
+                <div className="flex flex-1 items-center justify-center px-6 text-center text-[12px] text-text-muted">
+                  {tab.error
+                    ? "Fix the statement and run again."
+                    : "Write a query and press Ctrl+Enter, or click a table in the sidebar."}
+                </div>
+              )}
+
+              {tab.outcome && (
+                <div className="flex h-5 shrink-0 items-center gap-3 border-t border-border bg-surface-1 px-2 text-[10.5px] text-text-muted">
+                  <span>{tab.outcome.elapsed_ms} ms</span>
+                  {tab.outcome.statements.length > 1 && (
+                    <span>{tab.outcome.statements.length} statements</span>
+                  )}
+                  {tab.outcome.notices.map((n, i) => (
+                    <span key={i} className="truncate text-warn">
+                      {n}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          </>
+        ) : (
+          <div className="flex flex-1 items-center justify-center">
+            <Button variant="primary" onClick={() => openQuery(connection.id)}>
+              New query
+            </Button>
+          </div>
+        )}
       </div>
 
       <HistoryPanel
         connectionId={connection.id}
-        onPick={(sql) => setSql(connection.id, sql)}
+        onPick={(sql) => tab && setSql(connection.id, tab.id, sql)}
         onRun={(sql) => {
-          setSql(connection.id, sql);
-          void run(connection.id, sql);
+          if (!tab) return;
+          setSql(connection.id, tab.id, sql);
+          void run(connection.id, tab.id, sql);
         }}
       />
     </div>
