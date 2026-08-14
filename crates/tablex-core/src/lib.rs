@@ -11,6 +11,7 @@
 pub mod config;
 pub mod driver;
 pub mod error;
+pub mod export;
 pub mod registry;
 pub mod result;
 pub mod schema;

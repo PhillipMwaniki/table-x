@@ -4,6 +4,7 @@
 //! OS keychain. All database behaviour lives in `tablex-core` and
 //! `tablex-drivers`, which know nothing about Tauri.
 
+mod export;
 mod history;
 mod ipc;
 mod secrets;
@@ -58,6 +59,7 @@ pub fn run() {
             ipc::browse,
             ipc::table_detail,
             ipc::object_definition,
+            ipc::export_table,
             ipc::apply_edit,
             ipc::completion_scope,
             ipc::ssh_host_fingerprint,

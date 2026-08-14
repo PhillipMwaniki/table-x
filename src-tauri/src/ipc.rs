@@ -540,6 +540,42 @@ pub async fn browse(
     Ok(nodes)
 }
 
+/// Write a table to a file as CSV, JSON, or SQL.
+///
+/// The path comes from the frontend's save dialog; the writing happens here,
+/// because the webview has no filesystem access of its own and should not.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn export_table(
+    state: tauri::State<'_, AppState>,
+    connection_id: String,
+    qualified: String,
+    schema: Option<String>,
+    table: String,
+    format: tablex_core::export::Format,
+    path: String,
+) -> IpcResult<u64> {
+    let started = std::time::Instant::now();
+    let rows = crate::export::run(
+        &state,
+        crate::export::ExportRequest {
+            connection_id,
+            qualified,
+            schema,
+            table,
+            format,
+            path: path.clone(),
+        },
+    )
+    .await?;
+    tracing::debug!(
+        rows,
+        path,
+        elapsed_ms = started.elapsed().as_millis(),
+        "export"
+    );
+    Ok(rows)
+}
+
 /// The statement that would recreate an object, for viewing and editing.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn object_definition(
