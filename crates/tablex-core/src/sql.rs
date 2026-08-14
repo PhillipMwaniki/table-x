@@ -18,119 +18,280 @@
 /// Trailing empty statements are dropped, so a trailing `;` does not produce a
 /// spurious empty execution.
 pub fn split_statements(sql: &str) -> Vec<String> {
-    let bytes = sql.as_bytes();
-    let mut out = Vec::new();
-    let mut start = 0usize;
-    let mut i = 0usize;
-    // Nesting inside a `BEGIN ... END` routine body, where `;` separates the
-    // body's own statements rather than the submission's.
-    let mut depth = 0usize;
+    let mut splitter = Splitter::new();
+    let mut out = splitter.push(sql);
+    out.extend(splitter.finish());
+    out
+}
 
-    while i < bytes.len() {
-        let c = bytes[i];
-        match c {
-            b'\'' | b'"' | b'`' => {
-                let quote = c;
-                i += 1;
-                while i < bytes.len() {
-                    if bytes[i] == quote {
-                        // A doubled quote is an escaped quote, not a terminator.
-                        if i + 1 < bytes.len() && bytes[i + 1] == quote {
-                            i += 2;
-                            continue;
+/// Where the scanner is, so it can stop mid-input and pick up where it left off.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum State {
+    Normal,
+    /// Inside `'…'`, `"…"`, or `` `…` ``.
+    Quoted(u8),
+    /// Inside a SQL Server `[…]` identifier.
+    Bracketed,
+    LineComment,
+    /// Block comments nest in PostgreSQL, so the depth is tracked.
+    BlockComment(usize),
+    /// Inside `$tag$ … $tag$`, holding the tag to match.
+    DollarQuoted(String),
+}
+
+/// Splits SQL into statements as the text arrives.
+///
+/// [`split_statements`] is this fed once. The incremental form exists for
+/// importing a dump file: a multi-gigabyte script cannot be read into memory to
+/// be split, and its statements have to reach the server while the rest of the
+/// file is still being read.
+///
+/// The buffer holds only the statement currently being scanned — everything
+/// before it is handed out and dropped — so memory tracks the largest single
+/// statement rather than the size of the file.
+pub struct Splitter {
+    buffer: String,
+    /// How far into `buffer` the scanner has consumed.
+    scanned: usize,
+    state: State,
+    /// Nesting inside a `BEGIN ... END` routine body.
+    depth: usize,
+}
+
+impl Default for Splitter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Splitter {
+    pub fn new() -> Self {
+        Splitter {
+            buffer: String::new(),
+            scanned: 0,
+            state: State::Normal,
+            depth: 0,
+        }
+    }
+
+    /// Bytes currently held: one statement at most, never the whole input.
+    pub fn buffered(&self) -> usize {
+        self.buffer.len()
+    }
+
+    /// Feed more text, returning whatever statements are now complete.
+    pub fn push(&mut self, text: &str) -> Vec<String> {
+        self.buffer.push_str(text);
+        self.scan(false)
+    }
+
+    /// Flush the trailing statement, if the input ended without a semicolon.
+    ///
+    /// A dump's last statement usually has one; a hand-typed one usually does
+    /// not, and dropping it would be the kind of silent loss this codebase
+    /// avoids.
+    pub fn finish(&mut self) -> Vec<String> {
+        let mut out = self.scan(true);
+        let rest = self.buffer.split_off(0);
+        self.scanned = 0;
+        self.state = State::Normal;
+        self.depth = 0;
+        push_statement(&mut out, &rest);
+        out
+    }
+
+    /// Scan the buffer, emitting complete statements.
+    ///
+    /// `at_end` decides what happens at a token that needs more bytes to
+    /// classify — a lone `-`, an unterminated word, the start of a `$tag$`.
+    /// Mid-stream the scanner stops and waits; at the end of input there is
+    /// nothing more coming, so it takes the bytes as they are.
+    fn scan(&mut self, at_end: bool) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut i = self.scanned;
+
+        while i < self.buffer.len() {
+            let bytes = self.buffer.as_bytes();
+            let c = bytes[i];
+
+            match &self.state {
+                State::Quoted(quote) => {
+                    let quote = *quote;
+                    if c == b'\\' && quote == b'\'' {
+                        // A backslash escape needs the byte after it, which may
+                        // not have arrived.
+                        if i + 1 >= bytes.len() && !at_end {
+                            break;
                         }
-                        i += 1;
-                        break;
-                    }
-                    // Backslash escapes apply inside strings, not identifiers.
-                    if bytes[i] == b'\\' && quote == b'\'' && i + 1 < bytes.len() {
                         i += 2;
                         continue;
                     }
-                    i += 1;
-                }
-            }
-            b'[' => {
-                // SQL Server bracket identifier: [My Table]. No escapes beyond ]].
-                i += 1;
-                while i < bytes.len() {
-                    if bytes[i] == b']' {
-                        if i + 1 < bytes.len() && bytes[i + 1] == b']' {
+                    if c == quote {
+                        // A doubled quote is an escaped quote, not a terminator,
+                        // and telling them apart needs the next byte.
+                        if i + 1 >= bytes.len() && !at_end {
+                            break;
+                        }
+                        if bytes.get(i + 1) == Some(&quote) {
                             i += 2;
                             continue;
                         }
-                        i += 1;
-                        break;
+                        self.state = State::Normal;
                     }
                     i += 1;
                 }
-            }
-            b'-' if i + 1 < bytes.len() && bytes[i + 1] == b'-' => {
-                while i < bytes.len() && bytes[i] != b'\n' {
+
+                State::Bracketed => {
+                    if c == b']' {
+                        if i + 1 >= bytes.len() && !at_end {
+                            break;
+                        }
+                        if bytes.get(i + 1) == Some(&b']') {
+                            i += 2;
+                            continue;
+                        }
+                        self.state = State::Normal;
+                    }
                     i += 1;
                 }
-            }
-            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'*' => {
-                // PostgreSQL block comments nest, so track depth rather than
-                // stopping at the first */.
-                let mut depth = 1;
-                i += 2;
-                while i < bytes.len() && depth > 0 {
-                    if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
-                        depth += 1;
+
+                State::LineComment => {
+                    if c == b'\n' {
+                        self.state = State::Normal;
+                    }
+                    i += 1;
+                }
+
+                State::BlockComment(depth) => {
+                    let depth = *depth;
+                    if i + 1 >= bytes.len() && !at_end {
+                        break;
+                    }
+                    if c == b'/' && bytes.get(i + 1) == Some(&b'*') {
+                        self.state = State::BlockComment(depth + 1);
                         i += 2;
-                    } else if bytes[i] == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
-                        depth -= 1;
+                    } else if c == b'*' && bytes.get(i + 1) == Some(&b'/') {
+                        self.state = if depth == 1 {
+                            State::Normal
+                        } else {
+                            State::BlockComment(depth - 1)
+                        };
                         i += 2;
                     } else {
                         i += 1;
                     }
                 }
-            }
-            b'$' => {
-                if let Some(tag_end) = dollar_tag_end(bytes, i) {
-                    let tag = &bytes[i..tag_end];
-                    i = tag_end;
-                    // Scan for the matching closing tag.
-                    while i < bytes.len() {
-                        if bytes[i] == b'$' && bytes[i..].starts_with(tag) {
-                            i += tag.len();
-                            break;
+
+                State::DollarQuoted(tag) => {
+                    if c == b'$' {
+                        // The whole tag has to be present to match it.
+                        if i + tag.len() > bytes.len() {
+                            if !at_end {
+                                break;
+                            }
+                            i += 1;
+                            continue;
                         }
+                        if self.buffer[i..].starts_with(tag.as_str()) {
+                            let len = tag.len();
+                            self.state = State::Normal;
+                            i += len;
+                            continue;
+                        }
+                    }
+                    i += 1;
+                }
+
+                State::Normal => match c {
+                    b'\'' | b'"' | b'`' => {
+                        self.state = State::Quoted(c);
                         i += 1;
                     }
-                } else {
-                    i += 1;
-                }
-            }
-            b';' if depth == 0 => {
-                push_statement(&mut out, &sql[start..i]);
-                i += 1;
-                start = i;
-            }
-            c if c.is_ascii_alphabetic() || c == b'_' => {
-                let word_start = i;
-                while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
-                    i += 1;
-                }
-                let word = &sql[word_start..i];
-
-                if depth > 0 {
-                    if word.eq_ignore_ascii_case("BEGIN") || word.eq_ignore_ascii_case("CASE") {
-                        depth += 1;
-                    } else if word.eq_ignore_ascii_case("END") && closes_a_block(sql, i) {
-                        depth -= 1;
+                    b'[' => {
+                        self.state = State::Bracketed;
+                        i += 1;
                     }
-                } else if opens_a_routine_body(&sql[start..word_start], word) {
-                    depth = 1;
-                }
-            }
-            _ => i += 1,
-        }
-    }
+                    b'-' => {
+                        if i + 1 >= bytes.len() && !at_end {
+                            break;
+                        }
+                        if bytes.get(i + 1) == Some(&b'-') {
+                            self.state = State::LineComment;
+                            i += 2;
+                        } else {
+                            i += 1;
+                        }
+                    }
+                    b'/' => {
+                        if i + 1 >= bytes.len() && !at_end {
+                            break;
+                        }
+                        if bytes.get(i + 1) == Some(&b'*') {
+                            self.state = State::BlockComment(1);
+                            i += 2;
+                        } else {
+                            i += 1;
+                        }
+                    }
+                    b'$' => {
+                        match dollar_tag_end(bytes, i) {
+                            Some(tag_end) => {
+                                let tag = self.buffer[i..tag_end].to_string();
+                                self.state = State::DollarQuoted(tag);
+                                i = tag_end;
+                            }
+                            // No closing `$` yet: either a parameter marker like
+                            // `$1`, or a tag still arriving. Only the end of
+                            // input can tell them apart.
+                            None if at_end => i += 1,
+                            None => break,
+                        }
+                    }
+                    b';' if self.depth == 0 => {
+                        let statement: String = self.buffer.drain(..i).collect();
+                        // Drop the semicolon itself.
+                        self.buffer.drain(..1);
+                        push_statement(&mut out, &statement);
+                        i = 0;
+                    }
+                    c if c.is_ascii_alphabetic() || c == b'_' => {
+                        let word_start = i;
+                        let mut end = i;
+                        while end < bytes.len()
+                            && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_')
+                        {
+                            end += 1;
+                        }
+                        // A word running to the end of the buffer may be half a
+                        // word; `BEGI` must not be mistaken for anything.
+                        if end == bytes.len() && !at_end {
+                            break;
+                        }
 
-    push_statement(&mut out, &sql[start..]);
-    out
+                        let word = &self.buffer[word_start..end];
+                        if self.depth > 0 {
+                            if word.eq_ignore_ascii_case("BEGIN")
+                                || word.eq_ignore_ascii_case("CASE")
+                            {
+                                self.depth += 1;
+                            } else if word.eq_ignore_ascii_case("END")
+                                && closes_a_block(&self.buffer, end)
+                            {
+                                self.depth -= 1;
+                            }
+                        } else if opens_a_routine_body(&self.buffer[..word_start], word) {
+                            self.depth = 1;
+                        }
+                        i = end;
+                    }
+                    _ => i += 1,
+                },
+            }
+        }
+
+        self.scanned = i.min(self.buffer.len());
+        out
+    }
 }
 
 /// Whether `BEGIN` at this point opens a routine body rather than a transaction.
@@ -350,6 +511,89 @@ pub fn quote_ident(name: &str, quote: char) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Feed the same SQL one byte at a time, which puts a chunk boundary in
+    /// every position a token could straddle.
+    fn split_byte_by_byte(sql: &str) -> Vec<String> {
+        let mut splitter = Splitter::new();
+        let mut out = Vec::new();
+        for ch in sql.chars() {
+            out.extend(splitter.push(&ch.to_string()));
+        }
+        out.extend(splitter.finish());
+        out
+    }
+
+    #[test]
+    fn chunking_does_not_change_the_result() {
+        // Every construct the scanner tracks, in one string: quotes with
+        // doubling and backslashes, both comment kinds, a bracket identifier, a
+        // dollar-quoted body, and a routine body with its own semicolons.
+        let sql = "SELECT 'a;b', \"c;d\", `e;f`, [g;h]; \
+                   -- a; comment\n\
+                   /* nested /* b; */ still */ SELECT 1; \
+                   CREATE TRIGGER t AFTER UPDATE ON u BEGIN SELECT 1; END; \
+                   CREATE FUNCTION f() RETURNS int AS $$ BEGIN; RETURN 1; END; $$ LANGUAGE plpgsql; \
+                   SELECT 'it''s'; SELECT 'back\\\\slash'";
+
+        let whole = split_statements(sql);
+        assert_eq!(
+            split_byte_by_byte(sql),
+            whole,
+            "a chunk boundary must not change how anything is read"
+        );
+        // And the whole-input answer is itself right. Six, not seven: a
+        // comment belongs to the statement that follows it rather than
+        // standing as one of its own.
+        assert_eq!(whole.len(), 6, "{whole:?}");
+    }
+
+    #[test]
+    fn a_statement_split_across_chunks_arrives_once_and_whole() {
+        let mut splitter = Splitter::new();
+        assert!(splitter.push("SELECT 'a").is_empty(), "no terminator yet");
+        assert!(
+            splitter.push("b;c' AS x").is_empty(),
+            "the ; is inside a string"
+        );
+        let done = splitter.push("; SELECT 2");
+        assert_eq!(done, vec!["SELECT 'ab;c' AS x".to_string()]);
+        assert_eq!(splitter.finish(), vec!["SELECT 2".to_string()]);
+    }
+
+    #[test]
+    fn the_buffer_does_not_grow_with_the_file() {
+        // What makes importing a large dump possible: statements are handed out
+        // and dropped, so what is held is one statement, not the file.
+        let mut splitter = Splitter::new();
+        for _ in 0..1_000 {
+            let done = splitter.push("INSERT INTO t VALUES (1);");
+            assert_eq!(done.len(), 1);
+        }
+        assert!(
+            splitter.buffered() < 64,
+            "held {} bytes after 1000 statements",
+            splitter.buffered()
+        );
+    }
+
+    #[test]
+    fn a_trailing_statement_without_a_semicolon_is_not_lost() {
+        let mut splitter = Splitter::new();
+        assert!(splitter.push("SELECT 1").is_empty());
+        assert_eq!(splitter.finish(), vec!["SELECT 1".to_string()]);
+    }
+
+    #[test]
+    fn finishing_twice_yields_nothing_the_second_time() {
+        let mut splitter = Splitter::new();
+        splitter.push("SELECT 1");
+        assert_eq!(splitter.finish().len(), 1);
+        assert!(
+            splitter.finish().is_empty(),
+            "the buffer was already flushed"
+        );
+    }
 
     #[test]
     fn splits_plain_statements() {
