@@ -122,7 +122,7 @@ Milestone 1 ("core + power features") is the current target.
 | ✅ | **SQL editor** | CodeMirror 6, schema-aware autocomplete, run-selection, error positioning. |
 | ✅ | **Result grid** | Virtualized rows, inline editing, sorting, filtering, undo/redo. |
 | ✅ | **SSH tunnels** | Password / private key / agent auth, mandatory host key verification with a confirmation flow. |
-| ⬜ | **Query history** | Persisted, full-text searchable. |
+| ✅ | **Query history** | Every run persisted with its timing and outcome, searchable across connections. 10 tests. |
 | ⬜ | **Multi-tab workspace** | Tabs, split panes, session restore. |
 | ⬜ | **CSV/JSON import-export** | Streaming, so file size is not bounded by RAM. |
 | ✅ | **ClickHouse driver** | HTTP + JSONCompact, exact wide integers and `Decimal`. Read-only — no row-level `UPDATE`. 23 tests. |
@@ -254,6 +254,7 @@ exhaust the client's memory.
 | **SSH key material** | With agent authentication, no private key is ever loaded into this process — signing is delegated to the OS agent over a Unix socket or the Windows OpenSSH named pipe. |
 | **Accidental writes** | Connections carry a `read_only` flag enforced client-side regardless of database permissions, plus a color tag so production connections are visibly distinct. |
 | **Inline edits** | Built as parameterized `UPDATE`s keyed on the row's original values, and rolled back unless exactly one row is affected. |
+| **Query history** | Plain text in the config directory, so it stays inspectable and greppable. Statements that assign a credential (`... PASSWORD 'x'`, `IDENTIFIED BY 'x'`) are dropped rather than redacted — a redaction that misses one vendor's syntax leaks the secret anyway — and the UI says so, so their absence is not a mystery. |
 
 ## Getting started
 
