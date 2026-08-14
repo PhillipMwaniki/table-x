@@ -252,20 +252,64 @@ async fn syntax_errors_are_categorized_as_query_errors() {
 }
 
 #[tokio::test]
-async fn browse_lists_tables_then_columns() {
+async fn browse_starts_at_folders_then_objects_then_columns() {
     let mut conn = seeded().await;
 
     let roots = conn.browse(None).await.expect("browse roots");
-    assert_eq!(roots.len(), 1);
-    assert_eq!(roots[0].name, "users");
-    assert!(roots[0].expandable);
+    let folders: Vec<_> = roots.iter().map(|n| n.name.as_str()).collect();
+    assert_eq!(folders, vec!["Tables", "Views", "Triggers", "Indexes"]);
     // Children are not fetched until asked for — the tree is lazy.
-    assert!(roots[0].children.is_none());
+    assert!(roots.iter().all(|n| n.children.is_none()));
 
-    let cols = conn.browse(Some("users")).await.expect("browse columns");
+    let tables = conn.browse(Some(&roots[0].id)).await.expect("browse tables");
+    assert_eq!(tables.len(), 1);
+    assert_eq!(tables[0].name, "users");
+    // The name SQL should use travels with the node, so the UI never has to
+    // know this engine's quoting rules.
+    assert_eq!(tables[0].qualified.as_deref(), Some("\"users\""));
+
+    let cols = conn
+        .browse(Some(&tables[0].id))
+        .await
+        .expect("browse columns");
     let names: Vec<_> = cols.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(names, vec!["id", "email", "active", "balance", "created"]);
     assert!(cols.iter().all(|c| !c.expandable));
+}
+
+#[tokio::test]
+async fn views_and_triggers_are_listed_under_their_own_folders() {
+    let mut conn = seeded().await;
+    exec(
+        &mut conn,
+        "CREATE VIEW active_users AS SELECT id FROM users WHERE active = 1",
+    )
+    .await;
+    exec(
+        &mut conn,
+        "CREATE TRIGGER users_touch AFTER UPDATE ON users BEGIN SELECT 1; END",
+    )
+    .await;
+
+    let roots = conn.browse(None).await.expect("browse roots");
+    let folder = |name: &str| roots.iter().find(|n| n.name == name).expect(name).id.clone();
+
+    let views = conn.browse(Some(&folder("Views"))).await.expect("views");
+    assert_eq!(views.len(), 1);
+    assert_eq!(views[0].name, "active_users");
+
+    let triggers = conn.browse(Some(&folder("Triggers"))).await.expect("triggers");
+    assert_eq!(triggers.len(), 1);
+    assert_eq!(triggers[0].name, "users_touch");
+    // A trigger is only meaningful against the table it fires on, so the list
+    // says which one rather than leaving it to be looked up.
+    assert_eq!(triggers[0].detail.as_deref(), Some("on users"));
+    assert!(!triggers[0].expandable, "a trigger has no columns to show");
+
+    // A table's own folder must not also contain the view.
+    let tables = conn.browse(Some(&folder("Tables"))).await.expect("tables");
+    assert_eq!(tables.len(), 1);
+    assert_eq!(tables[0].name, "users");
 }
 
 #[tokio::test]
@@ -280,10 +324,12 @@ async fn internal_sqlite_tables_are_hidden() {
     exec(&mut conn, "INSERT INTO t DEFAULT VALUES").await;
 
     let roots = conn.browse(None).await.expect("browse");
+    let tables_folder = &roots[0].id;
+    let tables = conn.browse(Some(tables_folder)).await.expect("browse tables");
     assert!(
-        roots.iter().all(|n| !n.name.starts_with("sqlite_")),
+        tables.iter().all(|n| !n.name.starts_with("sqlite_")),
         "got {:?}",
-        roots.iter().map(|n| &n.name).collect::<Vec<_>>()
+        tables.iter().map(|n| &n.name).collect::<Vec<_>>()
     );
 }
 

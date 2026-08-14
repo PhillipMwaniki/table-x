@@ -16,7 +16,9 @@ use tablex_core::{
     },
     error::{Error, Result},
     result::{Column, ColumnSource, QueryOutcome, ResultSet, StatementResult},
-    schema::{ColumnDef, ForeignKeyDef, IndexDef, NodeKind, SchemaNode, TableDetail},
+    schema::{
+        decode_path, ColumnDef, ForeignKeyDef, IndexDef, NodeKind, SchemaNode, TableDetail,
+    },
     sql::{quote_ident, split_statements},
 };
 use types::Affinity;
@@ -54,6 +56,10 @@ impl Driver for SqliteDriver {
                 // SQLite has no schemas; attached databases are a different
                 // concept and are not modelled as one.
                 schemas: false,
+                // A SQLite connection is a file, and the file is the database.
+                // ATTACH exists but is a session-local alias, not a catalogue to
+                // browse, so there is nothing here to switch between.
+                databases: false,
                 // Available because this build compiles in
                 // SQLITE_ENABLE_COLUMN_METADATA — see the rusqlite features in
                 // Cargo.toml. Columns that are expressions rather than stored
@@ -154,62 +160,49 @@ impl Connection for SqliteConnection {
         .await
     }
 
+    /// A file is one database, so the tree starts at the object folders rather
+    /// than at a database level that would always have exactly one entry.
+    ///
+    /// Paths are `[folder]`, `[folder, object]`, `[folder, object, column]`.
     async fn browse(&mut self, parent: Option<&str>) -> Result<Vec<SchemaNode>> {
-        let parent = parent.map(str::to_string);
-        self.with_conn(move |conn| match parent {
-            // Roots: every table and view in the main database.
-            None => {
-                let mut stmt = conn
-                    .prepare(
-                        "SELECT name, type FROM sqlite_master \
-                         WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' \
-                         ORDER BY type, name",
-                    )
-                    .map_err(map_err)?;
-                let rows = stmt
-                    .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-                    .map_err(map_err)?;
+        let path = parent.map(decode_path).unwrap_or_default();
+        self.with_conn(move |conn| match path.as_slice() {
+            [] => Ok(FOLDERS
+                .iter()
+                .map(|f| SchemaNode::new(&[f.id], f.label, NodeKind::Folder).expandable())
+                .collect()),
 
-                let mut nodes = Vec::new();
-                for row in rows {
-                    let (name, kind) = row.map_err(map_err)?;
-                    nodes.push(SchemaNode {
-                        id: name.clone(),
-                        name,
-                        kind: if kind == "view" {
-                            NodeKind::View
-                        } else {
-                            NodeKind::Table
-                        },
-                        expandable: true,
-                        children: None,
-                        detail: None,
-                    });
-                }
-                Ok(nodes)
+            [folder] => {
+                let Some(spec) = FOLDERS.iter().find(|f| f.id == folder) else {
+                    return Ok(Vec::new());
+                };
+                browse_folder(conn, spec)
             }
 
-            // Expanding a table lists its columns.
-            Some(table) => {
-                let cols = table_columns(conn, &table)?;
-                Ok(cols
-                    .into_iter()
-                    .map(|c| SchemaNode {
-                        id: format!("{table}.{}", c.name),
-                        name: c.name.clone(),
-                        kind: NodeKind::Column,
-                        expandable: false,
-                        children: None,
-                        detail: Some(if c.nullable {
+            // Only objects with columns expand further; a trigger or an index
+            // has none, and is reported as a leaf above.
+            [folder, object] => Ok(table_columns(conn, object)?
+                .into_iter()
+                .map(|c| {
+                    SchemaNode::new(&[folder, object, &c.name], &c.name, NodeKind::Column).detail(
+                        if c.nullable {
                             c.type_name.clone()
                         } else {
                             format!("{} NOT NULL", c.type_name)
-                        }),
-                    })
-                    .collect())
-            }
+                        },
+                    )
+                })
+                .collect()),
+
+            _ => Ok(Vec::new()),
         })
         .await
+    }
+
+    async fn current_database(&mut self) -> Result<Option<String>> {
+        // The file path is the closest thing to a database name here, and the
+        // UI already shows it. Reporting none keeps the database switcher off.
+        Ok(None)
     }
 
     async fn table_detail(&mut self, _schema: Option<&str>, table: &str) -> Result<TableDetail> {
@@ -464,6 +457,79 @@ fn run_one(
     };
     rs.recompute_editable();
     Ok(StatementResult::Rows(rs))
+}
+
+/// One folder in the object tree, and the `sqlite_master` rows it holds.
+struct Folder {
+    id: &'static str,
+    label: &'static str,
+    /// `sqlite_master.type` values that belong here.
+    types: &'static str,
+    kind: NodeKind,
+    /// Whether its objects expand to show columns.
+    expandable: bool,
+}
+
+/// Only what SQLite has. There is no stored-procedure or user-function catalog
+/// to browse — functions are registered by the host program, not the database —
+/// so no empty folder is offered for them.
+const FOLDERS: &[Folder] = &[
+    Folder {
+        id: "tables",
+        label: "Tables",
+        types: "'table'",
+        kind: NodeKind::Table,
+        expandable: true,
+    },
+    Folder {
+        id: "views",
+        label: "Views",
+        types: "'view'",
+        kind: NodeKind::View,
+        expandable: true,
+    },
+    Folder {
+        id: "triggers",
+        label: "Triggers",
+        types: "'trigger'",
+        kind: NodeKind::Trigger,
+        expandable: false,
+    },
+    Folder {
+        id: "indexes",
+        label: "Indexes",
+        types: "'index'",
+        kind: NodeKind::Index,
+        expandable: false,
+    },
+];
+
+fn browse_folder(conn: &rusqlite::Connection, spec: &Folder) -> Result<Vec<SchemaNode>> {
+    // `tbl_name` is what a trigger or an index is attached to, which is the one
+    // piece of context that makes those lists readable.
+    let sql = format!(
+        "SELECT name, tbl_name FROM sqlite_master \
+         WHERE type IN ({}) AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        spec.types
+    );
+    let mut stmt = conn.prepare(&sql).map_err(map_err)?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .map_err(map_err)?;
+
+    let mut nodes = Vec::new();
+    for row in rows {
+        let (name, owner) = row.map_err(map_err)?;
+        let mut node = SchemaNode::new(&[spec.id, &name], &name, spec.kind.clone())
+            .qualified(quote_ident(&name, QUOTE));
+        if spec.expandable {
+            node = node.expandable();
+        } else if owner != name {
+            node = node.detail(format!("on {owner}"));
+        }
+        nodes.push(node);
+    }
+    Ok(nodes)
 }
 
 /// The key an inline edit would use, or empty when the result cannot be edited.
