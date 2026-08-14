@@ -20,6 +20,8 @@ const actions = {
   onNewTab: noop,
   onCopy: noop,
   onExport: noop,
+  onExportDatabase: noop,
+  onImport: noop,
   onRefresh: noop,
 };
 
@@ -28,6 +30,17 @@ function labels(...args: Parameters<typeof menuFor>) {
 }
 
 describe("menuFor", () => {
+  it("offers a database the two things you do to a whole database", () => {
+    // And nothing else: per-table formats do not apply to a database, and a
+    // database has no rows of its own to open.
+    const items = labels(
+      node("database", { name: "app", qualified: "`app`" }),
+      { driver: "mysql", tableScripts: true },
+      actions,
+    );
+    expect(items).toEqual(["Export database as SQL…", "Import SQL file…", "Refresh"]);
+  });
+
   it("offers a table everything a table can do", () => {
     const items = labels(node("table"), { driver: "mysql", tableScripts: true }, actions);
 

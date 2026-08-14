@@ -125,7 +125,7 @@ Milestone 1 ("core + power features") is the current target.
 | ✅ | **Query history** | Every run persisted with its timing and outcome, searchable across connections. 10 tests. |
 | ✅ | **Appearance** | Six themes plus follow-system, data and interface fonts, adjustable data size. 12 tests. |
 | 🚧 | **Multi-tab workspace** | Query and table tabs, each carrying its database; resizable editor/results split. Session restore not started. |
-| 🚧 | **CSV/JSON/SQL export** | Streaming on all five drivers, with progress and cancellation. Import not started. |
+| ✅ | **CSV/JSON/SQL export, SQL import** | Streaming on all five drivers. Table, database, and SQL-file restore, with progress and cancellation. |
 | ✅ | **ClickHouse driver** | HTTP + JSONCompact, exact wide integers and `Decimal`. Read-only — no row-level `UPDATE`. 23 tests. |
 | ⬜ | **CI/CD + packaging** | MSI/NSIS, .dmg, .deb/.rpm/AppImage, mobile bundles. |
 

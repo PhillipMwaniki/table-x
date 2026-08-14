@@ -158,7 +158,19 @@ export const ipc = {
       },
     }),
 
-  /** Ask a running export to stop at its next batch boundary. */
+  /** Dump a whole database to one SQL file, returning rows written. */
+  exportDatabase: (args: {
+    id: string;
+    connection_id: string;
+    database: string;
+    path: string;
+  }) => call<number>("export_database", { request: args }),
+
+  /** Run every statement in a SQL file, returning how many were applied. */
+  importSql: (args: { id: string; connection_id: string; path: string }) =>
+    call<number>("import_sql", { request: args }),
+
+  /** Ask a running export or import to stop. */
   cancelExport: (id: string) => call<void>("cancel_export", { id }),
 
   applyEdit: (connection_id: string, edit: RowEdit) =>

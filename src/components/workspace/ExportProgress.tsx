@@ -26,12 +26,12 @@ export function ExportProgress() {
 
         return (
           <div key={job.id} className="flex items-center gap-2 px-2 py-1">
-            <span className="shrink-0 text-[11px] text-text">Exporting {job.table}</span>
+            <span className="shrink-0 text-[11px] text-text">{job.label}</span>
 
             <span className="min-w-0 flex-1">
               <span
                 role="progressbar"
-                aria-label={`Exporting ${job.table}`}
+                aria-label={job.label}
                 aria-valuenow={fraction === null ? undefined : Math.round(fraction * 100)}
                 className="block h-1 overflow-hidden rounded-full bg-surface-3"
               >
@@ -50,7 +50,7 @@ export function ExportProgress() {
 
             <span className="shrink-0 font-mono text-[10.5px] text-text-muted">
               {job.rows.toLocaleString()}
-              {job.total ? ` of about ${job.total.toLocaleString()}` : ""} rows
+              {job.total ? ` of ${job.total.toLocaleString()}` : ""} {job.unit}
             </span>
 
             <Button

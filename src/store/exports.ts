@@ -13,9 +13,12 @@ import { ipc } from "@/lib/ipc";
 /** One progress report, as the backend emits it. */
 export interface ExportProgress {
   id: string;
-  table: string;
+  /** What is being worked on: a table, a database, a file. */
+  label: string;
+  /** What `rows` counts — rows, tables, or kilobytes of a file being read. */
+  unit: string;
   rows: number;
-  /** The planner's estimate for the table, when it has one. Not a count. */
+  /** An estimate where one exists. Not a count. */
   total: number | null;
   done: boolean;
 }
@@ -30,8 +33,8 @@ interface ExportState {
 
   /** Subscribe to backend progress. Safe to call more than once. */
   watch: () => Promise<void>;
-  /** Register an export before its first event, so the bar appears at once. */
-  begin: (id: string, table: string) => void;
+  /** Register a job before its first event, so the bar appears at once. */
+  begin: (id: string, label: string, unit?: string) => void;
   /** Remove one, whether it finished, failed, or was cancelled. */
   end: (id: string) => void;
   cancel: (id: string) => Promise<void>;
@@ -63,13 +66,13 @@ export const useExports = create<ExportState>((set, get) => ({
     });
   },
 
-  begin: (id, table) =>
+  begin: (id, label, unit = "rows") =>
     set((s) => ({
       running: {
         ...s.running,
-        // Zero rows and no estimate yet: the first query has not returned, and
-        // that first query is often the slow part.
-        [id]: { id, table, rows: 0, total: null, done: false, cancelling: false },
+        // Zero and no estimate yet: the first query has not returned, and that
+        // first query is often the slow part.
+        [id]: { id, label, unit, rows: 0, total: null, done: false, cancelling: false },
       },
     })),
 

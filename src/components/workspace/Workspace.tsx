@@ -21,7 +21,7 @@ import { ContextMenu } from "../ui/ContextMenu";
 import type { MenuItem } from "../ui/ContextMenu";
 import { ipc, IpcError } from "@/lib/ipc";
 import { drop, selectFrom, truncate } from "@/lib/statements";
-import { save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { useHistory } from "@/store/history";
 import { useSettings } from "@/store/settings";
 import { useExports } from "@/store/exports";
@@ -219,15 +219,89 @@ export function Workspace({
         );
       }
     } catch (e) {
-      const err = e as IpcError;
-      // Stopping something you asked to stop is not an error to report as one.
-      if (err.category !== "cancelled" && current) {
-        setTabError(connection.id, current.id, err.message);
-      } else if (current) {
-        setTabNotice(connection.id, current.id, `Export of ${node.name} cancelled.`);
-      }
+      reportJobFailure(e as IpcError, current?.id, `Export of ${node.name}`);
     } finally {
       endExport(id);
+    }
+  };
+
+
+  /**
+   * Dump a whole database to one SQL file.
+   *
+   * Schema then data, table by table, which is the order a restore needs.
+   */
+  const exportDatabase = async (database: string) => {
+    const path = await save({
+      defaultPath: `${database}.sql`,
+      filters: [{ name: "SQL", extensions: ["sql"] }],
+    });
+    if (!path) return;
+
+    const id = crypto.randomUUID();
+    const current = activeTab(connection.id);
+    beginExport(id, `Exporting ${database}`, "tables");
+    try {
+      const rows = await ipc.exportDatabase({
+        id,
+        connection_id: connection.id,
+        database,
+        path,
+      });
+      if (current) {
+        setTabNotice(
+          connection.id,
+          current.id,
+          `Exported ${database} — ${rows.toLocaleString()} rows to ${path}`,
+        );
+      }
+    } catch (e) {
+      reportJobFailure(e as IpcError, current?.id, `Export of ${database}`);
+    } finally {
+      endExport(id);
+    }
+  };
+
+  /**
+   * Run a SQL file against this connection.
+   *
+   * Nothing is dropped or emptied first: what the file does is what happens,
+   * and a restore that silently cleared the target would be a data-loss bug
+   * wearing a feature's clothes.
+   */
+  const importSql = async () => {
+    const path = await open({
+      multiple: false,
+      filters: [{ name: "SQL", extensions: ["sql"] }],
+    });
+    if (typeof path !== "string") return;
+
+    const id = crypto.randomUUID();
+    const current = activeTab(connection.id);
+    beginExport(id, `Importing ${path.split(/[\\/]/).pop()}`, "KB");
+    try {
+      const applied = await ipc.importSql({ id, connection_id: connection.id, path });
+      if (current) {
+        setTabNotice(
+          connection.id,
+          current.id,
+          `Applied ${applied.toLocaleString()} statements from ${path}`,
+        );
+      }
+    } catch (e) {
+      reportJobFailure(e as IpcError, current?.id, "Import");
+    } finally {
+      endExport(id);
+    }
+  };
+
+  /** Cancelling is a decision; anything else is a failure worth reading. */
+  const reportJobFailure = (err: IpcError, tabId: string | undefined, what: string) => {
+    if (!tabId) return;
+    if (err.category === "cancelled") {
+      setTabNotice(connection.id, tabId, `${what} cancelled.`);
+    } else {
+      setTabError(connection.id, tabId, err.message);
     }
   };
 
@@ -457,6 +531,8 @@ export function Workspace({
               onNewTab: (title, sql) => openScriptTab(connection.id, { title, sql }),
               onCopy: (text) => void navigator.clipboard?.writeText(text),
               onExport: (format, extension) => void exportTable(menu.node, format, extension),
+              onExportDatabase: () => void exportDatabase(menu.node.name),
+              onImport: () => void importSql(),
               onRefresh: menu.refresh,
             },
           )}
@@ -499,11 +575,25 @@ export function menuFor(
     onNewTab: (title: string, sql: string) => void;
     onCopy: (text: string) => void;
     onExport: (format: ExportFormat, extension: string) => void;
+    onExportDatabase: () => void;
+    onImport: () => void;
     onRefresh: (() => void) | null;
   },
 ): MenuItem[] {
   const items: MenuItem[] = [];
   const qualified = node.qualified ?? node.name;
+
+  // A database is dumped whole and restored whole; the per-table formats do
+  // not apply to it, and a per-table menu does not apply to a database.
+  if (node.kind === "database") {
+    items.push({ label: "Export database as SQL…", onSelect: actions.onExportDatabase });
+    items.push({ label: "Import SQL file…", onSelect: actions.onImport });
+    if (actions.onRefresh) {
+      items.push({ label: "Refresh", separated: true, onSelect: actions.onRefresh });
+    }
+    return items;
+  }
+
   const isRelation =
     node.kind === "table" || node.kind === "view" || node.kind === "materialized_view";
 
