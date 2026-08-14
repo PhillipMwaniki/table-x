@@ -10,12 +10,16 @@
 use serde::{Deserialize, Serialize};
 use tablex_core::{
     driver::{DriverInfo, FetchOptions, RowEdit},
-    result::QueryOutcome,
+    result::{QueryOutcome, StatementResult},
     schema::{SchemaNode, TableDetail},
     ConnectionConfig, ErrorPayload,
 };
 
-use crate::{secrets, state::AppState};
+use crate::{
+    history::{self, HistoryEntry, HistoryQuery},
+    secrets,
+    state::AppState,
+};
 
 pub type IpcResult<T> = std::result::Result<T, ErrorPayload>;
 
@@ -354,8 +358,91 @@ pub async fn execute(
     };
 
     let session = state.sessions.get(&request.connection_id).await?;
-    let mut guard = session.connection.lock().await;
-    Ok(guard.execute(&request.sql, &opts).await?)
+    let started = std::time::Instant::now();
+    // Scoped so the connection lock is released before history is written: a
+    // slow disk must never hold up the next query on the same session.
+    let outcome = {
+        let mut guard = session.connection.lock().await;
+        guard.execute(&request.sql, &opts).await
+    };
+
+    // A paged fetch continues a query that is already in history; recording it
+    // again would fill the panel with duplicates of whatever the user scrolled.
+    if request.offset == 0 {
+        record_history(&state, &config, &request.sql, started, &outcome).await;
+    }
+
+    Ok(outcome?)
+}
+
+/// Append one execution to the history file.
+///
+/// Failures are logged and swallowed: the user asked for a query, not for a log
+/// line, and failing the command because history could not be written would turn
+/// a full disk into "your database is broken".
+async fn record_history(
+    state: &AppState,
+    config: &ConnectionConfig,
+    sql: &str,
+    started: std::time::Instant,
+    outcome: &tablex_core::error::Result<QueryOutcome>,
+) {
+    if history::assigns_a_credential(sql) {
+        return;
+    }
+
+    let entry = HistoryEntry {
+        id: uuid::Uuid::new_v4().to_string(),
+        connection_id: config.id.clone(),
+        connection_name: config.name.clone(),
+        driver: config.driver.clone(),
+        sql: sql.to_string(),
+        ran_at: chrono::Utc::now().to_rfc3339(),
+        // On success prefer the driver's own measurement, which excludes the
+        // time spent waiting for the session lock.
+        elapsed_ms: match outcome {
+            Ok(o) => o.elapsed_ms,
+            Err(_) => started.elapsed().as_millis() as u64,
+        },
+        rows: outcome.as_ref().ok().map(row_count),
+        succeeded: outcome.is_ok(),
+        error: outcome.as_ref().err().map(|e| e.to_string()),
+    };
+
+    if let Err(e) = state.history.lock().await.record(entry) {
+        tracing::warn!("could not record query history: {e}");
+    }
+}
+
+/// Rows returned or affected across every statement in one submission.
+fn row_count(outcome: &QueryOutcome) -> u64 {
+    outcome
+        .statements
+        .iter()
+        .map(|s| match s {
+            StatementResult::Rows(set) => set.rows.len() as u64,
+            StatementResult::Affected { rows_affected, .. } => *rows_affected,
+        })
+        .sum()
+}
+
+/// Search the history, newest first.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn query_history(
+    state: tauri::State<'_, AppState>,
+    query: HistoryQuery,
+) -> IpcResult<Vec<HistoryEntry>> {
+    Ok(state.history.lock().await.search(&query))
+}
+
+/// Forget history for one connection, or all of it when `connection_id` is null.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn clear_query_history(
+    state: tauri::State<'_, AppState>,
+    connection_id: Option<String>,
+) -> IpcResult<()> {
+    state.history.lock().await.clear(connection_id.as_deref())?;
+    Ok(())
 }
 
 #[tauri::command(rename_all = "snake_case")]

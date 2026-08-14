@@ -1,6 +1,6 @@
 //! Process-wide application state.
 
-use crate::{sessions::SessionRegistry, store::ConnectionStore};
+use crate::{history::QueryHistory, sessions::SessionRegistry, store::ConnectionStore};
 use std::path::Path;
 use tablex_core::{
     error::{Error, Result},
@@ -17,6 +17,8 @@ pub struct AppState {
     /// Saved connections, mirrored to disk on every change.
     pub connections: Mutex<Vec<ConnectionConfig>>,
     pub store: ConnectionStore,
+    /// Executed statements, appended to disk as they run.
+    pub history: Mutex<QueryHistory>,
 }
 
 impl AppState {
@@ -35,6 +37,7 @@ impl AppState {
             sessions: SessionRegistry::new(),
             connections: Mutex::new(connections),
             store,
+            history: Mutex::new(QueryHistory::load(config_dir)),
         }
     }
 

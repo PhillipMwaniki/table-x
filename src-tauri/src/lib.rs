@@ -4,6 +4,7 @@
 //! OS keychain. All database behaviour lives in `tablex-core` and
 //! `tablex-drivers`, which know nothing about Tauri.
 
+mod history;
 mod ipc;
 mod secrets;
 mod sessions;
@@ -59,6 +60,8 @@ pub fn run() {
             ipc::apply_edit,
             ipc::completion_scope,
             ipc::ssh_host_fingerprint,
+            ipc::query_history,
+            ipc::clear_query_history,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Table X");
