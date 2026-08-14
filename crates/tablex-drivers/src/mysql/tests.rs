@@ -43,6 +43,7 @@ fn test_config() -> Option<(ConnectionConfig, String)> {
                 ..Default::default()
             },
             ssh: None,
+            folder: None,
             color: None,
             read_only: false,
             options: IndexMap::new(),

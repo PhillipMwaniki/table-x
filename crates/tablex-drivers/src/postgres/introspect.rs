@@ -10,9 +10,7 @@ use std::collections::HashMap;
 use tablex_core::{
     driver::CompletionScope,
     error::{Error, Result},
-    schema::{
-        decode_path, ColumnDef, ForeignKeyDef, IndexDef, NodeKind, SchemaNode, TableDetail,
-    },
+    schema::{decode_path, ColumnDef, ForeignKeyDef, IndexDef, NodeKind, SchemaNode, TableDetail},
     sql::quote_ident,
 };
 use tokio_postgres::Client;
@@ -194,7 +192,10 @@ async fn browse_relations(
          WHERE n.nspname = $1 AND c.relkind IN ({list}) AND NOT c.relispartition \
          ORDER BY c.relname"
     );
-    let rows = client.query(sql.as_str(), &[&schema]).await.map_err(map_err)?;
+    let rows = client
+        .query(sql.as_str(), &[&schema])
+        .await
+        .map_err(map_err)?;
 
     Ok(rows
         .iter()
@@ -239,7 +240,10 @@ async fn browse_routines(
          WHERE n.nspname = $1 AND p.prokind IN ({kinds}) \
          ORDER BY p.proname"
     );
-    let rows = client.query(sql.as_str(), &[&schema]).await.map_err(map_err)?;
+    let rows = client
+        .query(sql.as_str(), &[&schema])
+        .await
+        .map_err(map_err)?;
 
     Ok(rows
         .iter()
@@ -248,9 +252,13 @@ async fn browse_routines(
             let args: String = r.get(1);
             // Overloads share a name, so the argument list is what tells them
             // apart — and it is what you need to call one.
-            SchemaNode::new(&[db, schema, spec.id, &format!("{name}({args})")], &name, spec.kind.clone())
-                .detail(format!("({args})"))
-                .qualified(qualify(schema, &name))
+            SchemaNode::new(
+                &[db, schema, spec.id, &format!("{name}({args})")],
+                &name,
+                spec.kind.clone(),
+            )
+            .detail(format!("({args})"))
+            .qualified(qualify(schema, &name))
         })
         .collect())
 }
@@ -280,8 +288,12 @@ async fn browse_triggers(
         .map(|r| {
             let name: String = r.get(0);
             let table: String = r.get(1);
-            SchemaNode::new(&[db, schema, spec.id, &format!("{table}.{name}")], &name, spec.kind.clone())
-                .detail(format!("on {table}"))
+            SchemaNode::new(
+                &[db, schema, spec.id, &format!("{table}.{name}")],
+                &name,
+                spec.kind.clone(),
+            )
+            .detail(format!("on {table}"))
         })
         .collect())
 }
@@ -302,13 +314,16 @@ async fn browse_columns(
     Ok(columns
         .into_iter()
         .map(|c| {
-            SchemaNode::new(&[db, schema, folder, table, &c.name], &c.name, NodeKind::Column).detail(
-                if c.nullable {
-                    c.type_name
-                } else {
-                    format!("{} NOT NULL", c.type_name)
-                },
+            SchemaNode::new(
+                &[db, schema, folder, table, &c.name],
+                &c.name,
+                NodeKind::Column,
             )
+            .detail(if c.nullable {
+                c.type_name
+            } else {
+                format!("{} NOT NULL", c.type_name)
+            })
         })
         .collect())
 }

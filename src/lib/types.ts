@@ -155,6 +155,8 @@ export interface ConnectionConfig {
   file_path?: string | undefined;
   tls: TlsConfig;
   ssh?: SshConfig | undefined;
+  /** Sidebar group. One flat level, absent for connections filed under none. */
+  folder?: string | undefined;
   color?: string | undefined;
   read_only: boolean;
   options: Record<string, string>;

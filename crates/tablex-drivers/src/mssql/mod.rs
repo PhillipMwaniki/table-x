@@ -23,9 +23,7 @@ use tablex_core::{
     },
     error::{Error, Result},
     result::{Column, QueryOutcome, ResultSet, StatementResult},
-    schema::{
-        decode_path, ColumnDef, ForeignKeyDef, IndexDef, NodeKind, SchemaNode, TableDetail,
-    },
+    schema::{decode_path, ColumnDef, ForeignKeyDef, IndexDef, NodeKind, SchemaNode, TableDetail},
     sql::{quote_ident, split_statements},
 };
 use tiberius::{AuthMethod, Client, Config, QueryItem};

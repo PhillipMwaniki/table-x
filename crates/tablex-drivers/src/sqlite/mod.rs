@@ -16,9 +16,7 @@ use tablex_core::{
     },
     error::{Error, Result},
     result::{Column, ColumnSource, QueryOutcome, ResultSet, StatementResult},
-    schema::{
-        decode_path, ColumnDef, ForeignKeyDef, IndexDef, NodeKind, SchemaNode, TableDetail,
-    },
+    schema::{decode_path, ColumnDef, ForeignKeyDef, IndexDef, NodeKind, SchemaNode, TableDetail},
     sql::{quote_ident, split_statements},
 };
 use types::Affinity;

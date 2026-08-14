@@ -11,6 +11,8 @@ import { Dialog } from "./ui/Dialog";
 import { SshSection } from "./SshSection";
 import { Banner, Button, Checkbox, Field, Input, Select } from "./ui/primitives";
 import { ipc, IpcError } from "@/lib/ipc";
+import { folderNames, normalizeFolder } from "@/lib/folders";
+import { useConnections } from "@/store/connections";
 import type { ConnectionConfig, DriverInfo, TlsMode } from "@/lib/types";
 
 /** A sentinel meaning "the stored secret is unchanged". */
@@ -56,6 +58,16 @@ export function ConnectionDialog({
   editing: ConnectionConfig | null;
   onSaved: (config: ConnectionConfig, secret?: string, sshSecret?: string) => Promise<void>;
 }) {
+  // Existing folders come from the saved connections, so the picker offers what
+  // is already there instead of asking the user to remember their own names.
+  //
+  // The selector returns the stored array and the derivation happens in a memo:
+  // a selector that builds a new array each call is compared by identity, looks
+  // like a change on every render, and takes the component down with "Maximum
+  // update depth exceeded".
+  const connections = useConnections((s) => s.connections);
+  const existingFolders = useMemo(() => folderNames(connections), [connections]);
+
   const [config, setConfig] = useState<ConnectionConfig | null>(null);
   // `KEEP_EXISTING` distinguishes "the user did not touch the password field"
   // from "the user cleared it", which must delete the keychain entry.
@@ -102,6 +114,7 @@ export function ConnectionDialog({
             ...blankConfig(next),
             id: c.id,
             name: c.name,
+            folder: c.folder,
             color: c.color,
             read_only: c.read_only,
           }
@@ -318,7 +331,29 @@ export function ConnectionDialog({
           />
         )}
 
-        <div className="grid grid-cols-2 gap-3 border-t border-border pt-3">
+        <div className="border-t border-border pt-3">
+          <Field
+            label="Folder"
+            hint="Groups this connection in the sidebar. Type a new name or pick an existing one."
+          >
+            {/* A text input with suggestions rather than a dropdown: creating a
+                folder and choosing one are the same gesture, so there is no
+                separate "new folder" step to find. */}
+            <Input
+              list="connection-folders"
+              value={config.folder ?? ""}
+              onChange={(e) => patch({ folder: normalizeFolder(e.target.value) })}
+              placeholder="None"
+            />
+            <datalist id="connection-folders">
+              {existingFolders.map((f) => (
+                <option key={f} value={f} />
+              ))}
+            </datalist>
+          </Field>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 pt-1">
           <Field label="Colour tag" hint="Shown in the sidebar.">
             <Select
               value={config.color ?? ""}

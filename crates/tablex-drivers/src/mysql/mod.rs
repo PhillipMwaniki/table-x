@@ -19,9 +19,7 @@ use tablex_core::{
     },
     error::{is_connection_refused, root_cause, Error, Result},
     result::{Column, ColumnSource, QueryOutcome, ResultSet, StatementResult},
-    schema::{
-        decode_path, ColumnDef, ForeignKeyDef, IndexDef, NodeKind, SchemaNode, TableDetail,
-    },
+    schema::{decode_path, ColumnDef, ForeignKeyDef, IndexDef, NodeKind, SchemaNode, TableDetail},
     sql::{quote_ident, split_statements},
 };
 
@@ -576,7 +574,11 @@ impl MysqlConnection {
     async fn browse_tables(&mut self, db: &str, spec: &Folder) -> Result<Vec<SchemaNode>> {
         // BASE TABLE and VIEW are the two values that matter; SYSTEM VIEW
         // appears only in the schemas already hidden from the database list.
-        let wanted = if spec.id == "views" { "VIEW" } else { "BASE TABLE" };
+        let wanted = if spec.id == "views" {
+            "VIEW"
+        } else {
+            "BASE TABLE"
+        };
         let rows: Vec<(String, Option<i64>)> = self
             .conn
             .exec(
@@ -652,7 +654,12 @@ impl MysqlConnection {
             .collect())
     }
 
-    async fn browse_columns(&mut self, db: &str, folder: &str, table: &str) -> Result<Vec<SchemaNode>> {
+    async fn browse_columns(
+        &mut self,
+        db: &str,
+        folder: &str,
+        table: &str,
+    ) -> Result<Vec<SchemaNode>> {
         Ok(self
             .columns(db, table)
             .await?

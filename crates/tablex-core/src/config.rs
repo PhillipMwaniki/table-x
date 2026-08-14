@@ -35,6 +35,15 @@ pub struct ConnectionConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh: Option<SshConfig>,
 
+    /// Group this connection is filed under in the sidebar.
+    ///
+    /// A flat name rather than a tree. One level separates "work" from
+    /// "personal" or staging from production, which is what people actually do
+    /// with folders here; nesting would add a move-between-parents problem for
+    /// a list that is rarely longer than a screen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+
     /// Colour tag shown in the UI. A loud red on production connections is a
     /// cheap and effective guard against running the wrong statement.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -164,6 +173,7 @@ mod tests {
             file_path: None,
             tls: TlsConfig::default(),
             ssh: None,
+            folder: None,
             color: None,
             read_only: true,
             options: IndexMap::new(),

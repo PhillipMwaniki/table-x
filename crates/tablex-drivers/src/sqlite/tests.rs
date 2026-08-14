@@ -19,6 +19,7 @@ fn config() -> ConnectionConfig {
         file_path: Some(":memory:".into()),
         tls: TlsConfig::default(),
         ssh: None,
+        folder: None,
         color: None,
         read_only: false,
         options: IndexMap::new(),
@@ -261,7 +262,10 @@ async fn browse_starts_at_folders_then_objects_then_columns() {
     // Children are not fetched until asked for — the tree is lazy.
     assert!(roots.iter().all(|n| n.children.is_none()));
 
-    let tables = conn.browse(Some(&roots[0].id)).await.expect("browse tables");
+    let tables = conn
+        .browse(Some(&roots[0].id))
+        .await
+        .expect("browse tables");
     assert_eq!(tables.len(), 1);
     assert_eq!(tables[0].name, "users");
     // The name SQL should use travels with the node, so the UI never has to
@@ -292,13 +296,23 @@ async fn views_and_triggers_are_listed_under_their_own_folders() {
     .await;
 
     let roots = conn.browse(None).await.expect("browse roots");
-    let folder = |name: &str| roots.iter().find(|n| n.name == name).expect(name).id.clone();
+    let folder = |name: &str| {
+        roots
+            .iter()
+            .find(|n| n.name == name)
+            .expect(name)
+            .id
+            .clone()
+    };
 
     let views = conn.browse(Some(&folder("Views"))).await.expect("views");
     assert_eq!(views.len(), 1);
     assert_eq!(views[0].name, "active_users");
 
-    let triggers = conn.browse(Some(&folder("Triggers"))).await.expect("triggers");
+    let triggers = conn
+        .browse(Some(&folder("Triggers")))
+        .await
+        .expect("triggers");
     assert_eq!(triggers.len(), 1);
     assert_eq!(triggers[0].name, "users_touch");
     // A trigger is only meaningful against the table it fires on, so the list
@@ -325,7 +339,10 @@ async fn internal_sqlite_tables_are_hidden() {
 
     let roots = conn.browse(None).await.expect("browse");
     let tables_folder = &roots[0].id;
-    let tables = conn.browse(Some(tables_folder)).await.expect("browse tables");
+    let tables = conn
+        .browse(Some(tables_folder))
+        .await
+        .expect("browse tables");
     assert!(
         tables.iter().all(|n| !n.name.starts_with("sqlite_")),
         "got {:?}",
@@ -507,7 +524,10 @@ async fn an_alias_does_not_hide_the_underlying_column() {
 
     assert!(rs.editable);
     assert_eq!(rs.columns[1].name, "address");
-    assert_eq!(rs.columns[1].source.as_ref().expect("origin").column, "email");
+    assert_eq!(
+        rs.columns[1].source.as_ref().expect("origin").column,
+        "email"
+    );
 }
 
 #[tokio::test]
@@ -624,7 +644,10 @@ async fn a_view_reports_the_base_table_it_reads_from() {
     // stores nothing.
     let rs = query(&mut conn, "SELECT id, email FROM active_users").await;
     assert!(rs.editable);
-    assert_eq!(rs.columns[1].source.as_ref().expect("origin").table, "users");
+    assert_eq!(
+        rs.columns[1].source.as_ref().expect("origin").table,
+        "users"
+    );
 
     conn.apply_edit(&RowEdit {
         schema: None,

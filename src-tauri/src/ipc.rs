@@ -169,6 +169,7 @@ mod tests {
             file_path: None,
             tls: TlsConfig::default(),
             ssh: None,
+            folder: None,
             color: None,
             read_only: false,
             options: IndexMap::new(),
