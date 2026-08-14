@@ -323,7 +323,10 @@ mod tests {
         assert!(!node.expandable);
         assert!(node.qualified.is_none());
 
-        let node = node.expandable().qualified("\"app\".\"users\"").detail("120 rows");
+        let node = node
+            .expandable()
+            .qualified("\"app\".\"users\"")
+            .detail("120 rows");
         assert!(node.expandable);
         assert_eq!(node.qualified.as_deref(), Some("\"app\".\"users\""));
         assert_eq!(node.detail.as_deref(), Some("120 rows"));
