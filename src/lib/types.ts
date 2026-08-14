@@ -96,6 +96,8 @@ export interface Capabilities {
   foreign_keys: boolean;
   views: boolean;
   stored_procedures: boolean;
+  /** Whether a table's CREATE statement can be shown. Not every engine has one. */
+  table_scripts: boolean;
   column_provenance: boolean;
   streaming: boolean;
   placeholder_style: PlaceholderStyle;

@@ -57,6 +57,9 @@ impl Driver for PostgresDriver {
                 foreign_keys: true,
                 views: true,
                 stored_procedures: true,
+                // PostgreSQL has no catalogue function that renders a table as
+                // a CREATE statement, so the tree does not offer one.
+                table_scripts: false,
                 // The wire protocol reports table OID and attribute number per
                 // column, so results can be traced back to their source table.
                 column_provenance: true,

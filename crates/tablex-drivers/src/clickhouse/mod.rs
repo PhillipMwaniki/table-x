@@ -104,6 +104,8 @@ impl Driver for ClickhouseDriver {
                 schemas: false,
                 databases: true,
                 views: true,
+                // SHOW CREATE TABLE answers for tables and views alike.
+                table_scripts: true,
                 // No foreign keys, and no row-level UPDATE — see the module docs.
                 foreign_keys: false,
                 column_provenance: false,

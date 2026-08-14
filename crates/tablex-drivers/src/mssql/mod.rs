@@ -119,6 +119,7 @@ impl Driver for MssqlDriver {
                 stored_procedures: true,
                 // See the module docs: tiberius does not expose the originating
                 // table, so ad-hoc results cannot be safely edited.
+                table_scripts: false,
                 column_provenance: false,
                 cancel: false,
                 streaming: false,

@@ -107,6 +107,8 @@ impl Driver for MysqlDriver {
                 // intermediate level between a database and its tables.
                 schemas: false,
                 databases: true,
+                // SHOW CREATE TABLE returns the statement the server stored.
+                table_scripts: true,
                 // `org_table` and `org_name` come back in the column definition
                 // packet, so results can be traced to their source.
                 column_provenance: true,

@@ -32,6 +32,14 @@ pub struct Capabilities {
     pub foreign_keys: bool,
     pub views: bool,
     pub stored_procedures: bool,
+    /// Whether `definition` can return a `CREATE` statement for a *table*.
+    ///
+    /// Routines and triggers are scriptable everywhere; tables are not.
+    /// PostgreSQL has no catalogue function that renders one, and SQL Server's
+    /// `OBJECT_DEFINITION` returns NULL for anything that is not a module. The
+    /// menu hides the option rather than offering one that fails.
+    pub table_scripts: bool,
+
     /// Whether the driver reports which table each result column came from.
     /// Without it, inline editing must stay disabled.
     pub column_provenance: bool,
@@ -56,6 +64,7 @@ impl Default for Capabilities {
             foreign_keys: false,
             views: false,
             stored_procedures: false,
+            table_scripts: false,
             column_provenance: false,
             streaming: false,
             placeholder_style: PlaceholderStyle::Question,

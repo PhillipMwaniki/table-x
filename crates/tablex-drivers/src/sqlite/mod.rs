@@ -63,6 +63,8 @@ impl Driver for SqliteDriver {
                 // SQLITE_ENABLE_COLUMN_METADATA — see the rusqlite features in
                 // Cargo.toml. Columns that are expressions rather than stored
                 // values still report no origin, which is exactly right.
+                // sqlite_master keeps the original CREATE text for every object.
+                table_scripts: true,
                 column_provenance: true,
                 stored_procedures: false,
                 cancel: false,
