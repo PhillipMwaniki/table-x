@@ -45,7 +45,9 @@ function dialectFor(driver: string): SQLDialect {
 const theme = EditorView.theme({
   "&": {
     height: "100%",
-    fontSize: "12.5px",
+    // Follows the data size from settings, like every other surface that shows
+    // what is in the database rather than chrome around it.
+    fontSize: "var(--text-data)",
     backgroundColor: "var(--color-surface-0)",
     color: "var(--color-text)",
   },

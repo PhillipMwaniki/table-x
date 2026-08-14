@@ -11,9 +11,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { cellClass, editText, formatValue, isInlineEditable, isNumeric, parseEdit } from "@/lib/value";
 import { cx } from "../ui/primitives";
+import { rowHeightFor } from "@/lib/settings";
+import { useSettings } from "@/store/settings";
 import type { Column, ResultSet, Value } from "@/lib/types";
 
-const ROW_HEIGHT = 24;
 const MIN_COL_WIDTH = 80;
 const MAX_INITIAL_COL_WIDTH = 320;
 
@@ -51,6 +52,10 @@ export function ResultGrid({
   readOnlyReason?: string | undefined;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
+  // Row height and column widths are both measured in characters, so they have
+  // to be recomputed when the data font size changes rather than read from CSS.
+  const fontSize = useSettings((s) => s.dataFontSize);
+  const rowHeight = rowHeightFor(fontSize);
   const [sort, setSort] = useState<Sort | null>(null);
   const [filter, setFilter] = useState("");
   const [editing, setEditing] = useState<{ row: number; col: number } | null>(null);
@@ -62,14 +67,20 @@ export function ResultGrid({
   // scanning 100k rows to size a column is not worth the frame it costs.
   const widths = useMemo(() => {
     const sample = result.rows.slice(0, 100);
+    // A monospace advance is close enough to 0.6em for sizing; measuring text
+    // properly would cost a layout pass per column for a few pixels.
+    const charWidth = fontSize * 0.6;
     return result.columns.map((col, i) => {
       const longest = sample.reduce((max, row) => {
         const cell = row[i];
         return Math.max(max, cell ? formatValue(cell).length : 0);
       }, col.name.length);
-      return Math.min(Math.max(longest * 7 + 24, MIN_COL_WIDTH), MAX_INITIAL_COL_WIDTH);
+      return Math.min(
+        Math.max(Math.round(longest * charWidth) + 24, MIN_COL_WIDTH),
+        MAX_INITIAL_COL_WIDTH,
+      );
     });
-  }, [result]);
+  }, [result, fontSize]);
 
   /**
    * Rows after filtering and sorting, carrying their original index so edits
@@ -101,9 +112,15 @@ export function ResultGrid({
   const virtualizer = useVirtualizer({
     count: view.length,
     getScrollElement: () => scroller.current,
-    estimateSize: () => ROW_HEIGHT,
+    estimateSize: () => rowHeight,
     overscan: 12,
   });
+
+  // The virtualizer caches measurements, so a size change has to invalidate
+  // them or every row keeps the height it had at the old font size.
+  useEffect(() => {
+    virtualizer.measure();
+  }, [rowHeight, virtualizer]);
 
   const beginEdit = useCallback(
     (rowIndex: number, colIndex: number, value: Value) => {
@@ -315,7 +332,7 @@ function HeaderCell({
       className="flex shrink-0 items-center gap-1 border-r border-border px-2 py-1 text-left hover:bg-surface-3"
     >
       <span className="flex min-w-0 flex-col leading-tight">
-        <span className="flex items-center gap-1 truncate text-[11px] font-medium text-text">
+        <span className="flex items-center gap-1 truncate text-[length:var(--text-data)] font-medium text-text">
           {isKey && (
             <span aria-label="Key column" title="Key column" className="text-accent">
               ⚿
@@ -323,7 +340,11 @@ function HeaderCell({
           )}
           {column.name}
         </span>
-        <span className="truncate font-mono text-[9px] text-text-muted">{column.type_name}</span>
+        {/* The type line sits a fixed ratio under the column name, so it stays
+            legible rather than vanishing as the data size grows. */}
+        <span className="truncate font-mono text-[length:calc(var(--text-data)*0.78)] text-text-muted">
+          {column.type_name}
+        </span>
       </span>
       <span className="ml-auto text-[9px] text-text-muted">
         {sort === "asc" ? "▲" : sort === "desc" ? "▼" : ""}
@@ -368,7 +389,8 @@ function Cell({
               onCommit();
             }
           }}
-          className="h-6 w-full border border-accent bg-surface-0 px-1.5 font-mono text-[11px] outline-none"
+          style={{ height: "var(--row-height)" }}
+          className="w-full border border-accent bg-surface-0 px-1.5 font-mono text-[length:var(--text-data)] outline-none"
         />
       </div>
     );
@@ -379,7 +401,8 @@ function Cell({
       style={{ width }}
       onDoubleClick={editable ? onBegin : undefined}
       className={cx(
-        "shrink-0 truncate border-r border-border px-2 py-0.5 font-mono text-[11px] leading-5",
+        "shrink-0 truncate border-r border-border px-2 font-mono",
+        "text-[length:var(--text-data)] leading-[var(--row-height)]",
         isNumeric(value) && "text-right",
         cellClass(value),
         editable && "cursor-text",
