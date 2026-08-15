@@ -136,6 +136,7 @@ Milestone 1 ("core + power features") is the current target.
 | ✅ | **Server activity** | Live sessions, blockers, and server counters on four engines; a session can be ended. |
 | ✅ | **Visual EXPLAIN** | One parser per engine into a common plan tree; self-cost bars and flagged estimate misses. `ANALYZE` on PostgreSQL only, inside a rolled-back transaction. |
 | ✅ | **ER diagram** | Deterministic layered layout computed in Rust, one bulk query per schema, pan and zoom. 11 layout tests. |
+| ✅ | **Schema diff + migration** | Compares two schemas on any connected pair, generates ordered DDL in the target engine's dialect, marks every destructive statement. Runs nothing. 17 tests. |
 | ⬜ | **CI/CD + packaging** | MSI/NSIS, .dmg, .deb/.rpm/AppImage, mobile bundles. |
 
 Deliberately **out of scope** for milestone 1, and tracked for later: the third-party
