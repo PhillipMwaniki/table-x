@@ -22,6 +22,7 @@ const actions = {
   onExport: noop,
   onExportDatabase: noop,
   onImport: noop,
+  onImportCsv: noop,
   onRefresh: noop,
 };
 
@@ -52,6 +53,14 @@ describe("menuFor", () => {
     expect(items).toContain("Export as CSV…");
     expect(items).toContain("Export as JSON…");
     expect(items).toContain("Export as SQL inserts…");
+    expect(items).toContain("Import CSV file…");
+  });
+
+  it("does not offer to import into a view", () => {
+    // Many views are not insertable at all, and which ones are is a question
+    // the menu cannot answer — so it does not ask it.
+    const items = labels(node("view"), { driver: "mysql", tableScripts: true }, actions);
+    expect(items).not.toContain("Import CSV file…");
   });
 
   it("hides the CREATE statement where the driver cannot produce one", () => {

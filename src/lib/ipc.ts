@@ -11,6 +11,7 @@ import type {
   BackendInfo,
   CompletionScope,
   ConnectionConfig,
+  CsvPreview,
   DriverInfo,
   ErrorCategory,
   ErrorPayload,
@@ -166,6 +167,25 @@ export const ipc = {
     database: string;
     path: string;
   }) => call<number>("export_database", { request: args }),
+
+  /** Read the first rows of a delimited file, sniffing the delimiter if unsure. */
+  previewCsv: (path: string, delimiter?: string) =>
+    call<CsvPreview>("preview_csv", { path, delimiter: delimiter ?? null }),
+
+  /** Load a delimited file into a table, returning rows inserted. */
+  importCsv: (args: {
+    id: string;
+    connection_id: string;
+    path: string;
+    qualified: string;
+    schema?: string | undefined;
+    table: string;
+    delimiter: string;
+    has_header: boolean;
+    /** Target column per field position; null skips that field. */
+    mapping: (string | null)[];
+    null_as_empty: boolean;
+  }) => call<number>("import_csv", { request: { ...args, schema: args.schema ?? null } }),
 
   /** Run every statement in a SQL file, returning how many were applied. */
   importSql: (args: { id: string; connection_id: string; path: string }) =>

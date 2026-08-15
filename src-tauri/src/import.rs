@@ -5,13 +5,15 @@
 //! being assembled does. Statements reach the server while the rest of the file
 //! is still being read.
 
+use std::collections::HashMap;
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tablex_core::{
+    csv::{literal_for, CsvReader},
     driver::FetchOptions,
     error::{Error, Result},
-    sql::Splitter,
+    sql::{quote_ident, Splitter},
 };
 
 use crate::{export::Progress, state::AppState};
@@ -92,19 +94,7 @@ pub async fn run(
         // U+FFFD — which would corrupt exactly the text an import is meant to
         // reproduce.
         leftover.extend_from_slice(&buffer[..n]);
-        let text = match std::str::from_utf8(&leftover) {
-            Ok(text) => {
-                let owned = text.to_string();
-                leftover.clear();
-                owned
-            }
-            Err(e) => {
-                let good = e.valid_up_to();
-                let owned = String::from_utf8_lossy(&leftover[..good]).into_owned();
-                leftover.drain(..good);
-                owned
-            }
-        };
+        let text = take_utf8(&mut leftover);
 
         for statement in splitter.push(&text) {
             apply(&mut **guard, &statement, &opts).await?;
@@ -120,6 +110,246 @@ pub async fn run(
 
     report(read_bytes, true);
     Ok(applied)
+}
+
+
+/// Rows per INSERT. Batching cuts the round trips that dominate an import
+/// without building a statement so large a server rejects it.
+const ROWS_PER_INSERT: usize = 200;
+
+pub struct CsvImportRequest {
+    pub id: String,
+    pub connection_id: String,
+    pub path: String,
+    /// The target table, quoted and qualified by the driver.
+    pub qualified: String,
+    pub schema: Option<String>,
+    pub table: String,
+    pub delimiter: char,
+    /// Whether the first record names the columns rather than holding data.
+    pub has_header: bool,
+    /// Target column for each field position. `None` skips that field.
+    pub mapping: Vec<Option<String>>,
+    /// Whether an empty field means NULL rather than an empty string.
+    pub null_as_empty: bool,
+}
+
+/// Load a delimited file into a table, returning the rows inserted.
+///
+/// Nothing is emptied first and nothing is deduplicated: the file is appended,
+/// which is the only behaviour that cannot lose data the user did not ask to
+/// lose. Replacing a table is a TRUNCATE they can run themselves, deliberately.
+pub async fn run_csv(
+    state: &AppState,
+    request: CsvImportRequest,
+    cancel: Arc<AtomicBool>,
+    on_progress: impl Fn(Progress) + Sync,
+) -> Result<u64> {
+    let file = std::fs::File::open(&request.path)
+        .map_err(|e| Error::Io(format!("could not open {}: {}", request.path, e)))?;
+    let total_bytes = file.metadata().ok().map(|m| m.len());
+    let mut reader_source = std::io::BufReader::new(file);
+
+    let label = file_label(&request.path);
+    let session = state.sessions.get(&request.connection_id).await?;
+    let mut guard = session.connection.lock().await;
+
+    // Column types decide how each field is written; without them everything
+    // would be a quoted string, which MySQL turns into a silent zero on a
+    // boolean column.
+    let types: HashMap<String, String> = match guard
+        .table_detail(request.schema.as_deref(), &request.table)
+        .await
+    {
+        Ok(detail) => detail
+            .columns
+            .into_iter()
+            .map(|c| (c.name, c.type_name))
+            .collect(),
+        Err(_) => HashMap::new(),
+    };
+
+    let report = |bytes: u64, done: bool| {
+        on_progress(Progress {
+            id: request.id.clone(),
+            label: label.clone(),
+            unit: "KB".into(),
+            rows: bytes / 1024,
+            total: total_bytes.map(|b| b / 1024),
+            done,
+        });
+    };
+    report(0, false);
+
+    let opts = FetchOptions {
+        max_rows: Some(1),
+        offset: 0,
+        timeout_secs: None,
+    };
+
+    let mut csv = CsvReader::new(request.delimiter);
+    let mut buffer = vec![0u8; CHUNK];
+    let mut leftover: Vec<u8> = Vec::new();
+    let mut read_bytes = 0u64;
+    let mut inserted = 0u64;
+    let mut skipped_header = !request.has_header;
+    let mut batch: Vec<String> = Vec::with_capacity(ROWS_PER_INSERT);
+
+    // The column list is fixed for every statement, so it is built once.
+    let target_columns: Vec<String> = request
+        .mapping
+        .iter()
+        .flatten()
+        .map(|name| quote_ident(name, quote_char(&request.qualified)))
+        .collect();
+    if target_columns.is_empty() {
+        return Err(Error::Config(
+            "no columns are mapped, so there is nothing to import".into(),
+        ));
+    }
+
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(Error::Cancelled);
+        }
+
+        let n = reader_source
+            .read(&mut buffer)
+            .map_err(|e| Error::Io(format!("could not read {}: {}", request.path, e)))?;
+        if n == 0 {
+            break;
+        }
+        read_bytes += n as u64;
+
+        leftover.extend_from_slice(&buffer[..n]);
+        let text = take_utf8(&mut leftover);
+
+        for record in csv.push(&text) {
+            if !skipped_header {
+                skipped_header = true;
+                continue;
+            }
+            batch.push(values_of(&record, &request, &types));
+            if batch.len() >= ROWS_PER_INSERT {
+                inserted += flush(&mut **guard, &request.qualified, &target_columns, &mut batch, &opts)
+                    .await?;
+            }
+        }
+        report(read_bytes, false);
+    }
+
+    if let Some(record) = csv.finish() {
+        if skipped_header {
+            batch.push(values_of(&record, &request, &types));
+        }
+    }
+    if !batch.is_empty() {
+        inserted +=
+            flush(&mut **guard, &request.qualified, &target_columns, &mut batch, &opts).await?;
+    }
+
+    report(read_bytes, true);
+    Ok(inserted)
+}
+
+/// One record as a `(...)` tuple, in mapped column order.
+fn values_of(
+    record: &[String],
+    request: &CsvImportRequest,
+    types: &HashMap<String, String>,
+) -> String {
+    let mut values = Vec::new();
+    for (index, target) in request.mapping.iter().enumerate() {
+        let Some(name) = target else { continue };
+        // A short record is padded rather than refused: a trailing empty column
+        // is the most common shape of a hand-edited CSV.
+        let field = record.get(index).map(String::as_str).unwrap_or("");
+        let type_name = types.get(name).map(String::as_str).unwrap_or("");
+        values.push(literal_for(field, type_name, request.null_as_empty));
+    }
+    format!("({})", values.join(", "))
+}
+
+/// Run one batched INSERT and clear the batch.
+async fn flush(
+    conn: &mut dyn tablex_core::driver::Connection,
+    qualified: &str,
+    columns: &[String],
+    batch: &mut Vec<String>,
+    opts: &FetchOptions,
+) -> Result<u64> {
+    if batch.is_empty() {
+        return Ok(0);
+    }
+    let sql = format!(
+        "INSERT INTO {qualified} ({}) VALUES {}",
+        columns.join(", "),
+        batch.join(", ")
+    );
+    let count = batch.len() as u64;
+    conn.execute(&sql, opts).await.map_err(|e| Error::Query {
+        // The row count says how far it got; a failed batch is the rows between
+        // that count and the next two hundred.
+        message: format!("{e}\n\nwhile inserting a batch of {count} rows"),
+        position: None,
+        code: None,
+    })?;
+    batch.clear();
+    Ok(count)
+}
+
+/// The quote character a driver used, read back off its own qualified name.
+///
+/// Cheaper than threading the capability through: the driver already quoted the
+/// table, so its first character is the answer.
+fn quote_char(qualified: &str) -> char {
+    match qualified.chars().next() {
+        Some('`') => '`',
+        Some('[') => '[',
+        _ => '"',
+    }
+}
+
+fn file_label(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string())
+}
+
+/// Take the valid UTF-8 prefix, leaving a split character for the next chunk.
+fn take_utf8(leftover: &mut Vec<u8>) -> String {
+    match std::str::from_utf8(leftover) {
+        Ok(text) => {
+            let owned = text.to_string();
+            leftover.clear();
+            owned
+        }
+        Err(e) => {
+            let good = e.valid_up_to();
+            let owned = String::from_utf8_lossy(&leftover[..good]).into_owned();
+            leftover.drain(..good);
+            owned
+        }
+    }
+}
+
+/// Read the first records of a file, for the mapping preview.
+pub fn preview(path: &str, delimiter: Option<char>, rows: usize) -> Result<(char, Vec<Vec<String>>)> {
+    let bytes = std::fs::read(path)
+        .map_err(|e| Error::Io(format!("could not read {path}: {e}")))?;
+    // Enough to see the shape without loading a gigabyte to show ten rows.
+    let head = &bytes[..bytes.len().min(64 * 1024)];
+    let text = String::from_utf8_lossy(head);
+
+    let delimiter = delimiter.unwrap_or_else(|| tablex_core::csv::sniff_delimiter(&text));
+    let mut reader = CsvReader::new(delimiter);
+    let mut records = reader.push(&text);
+    if records.len() < rows {
+        records.extend(reader.finish());
+    }
+    records.truncate(rows);
+    Ok((delimiter, records))
 }
 
 /// Run one statement, naming it if it fails.

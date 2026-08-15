@@ -675,6 +675,82 @@ pub async fn export_database(
     Ok(rows)
 }
 
+/// What the frontend asks for when loading a delimited file.
+#[derive(Deserialize)]
+pub struct CsvImportArgs {
+    pub id: String,
+    pub connection_id: String,
+    pub path: String,
+    pub qualified: String,
+    #[serde(default)]
+    pub schema: Option<String>,
+    pub table: String,
+    pub delimiter: String,
+    pub has_header: bool,
+    /// Target column per field position; null skips that field.
+    pub mapping: Vec<Option<String>>,
+    pub null_as_empty: bool,
+}
+
+/// What a delimited file looks like, for the mapping dialog.
+#[derive(Serialize)]
+pub struct CsvPreview {
+    /// The delimiter used, whether given or sniffed.
+    pub delimiter: String,
+    pub rows: Vec<Vec<String>>,
+}
+
+/// Read the first rows of a delimited file without importing anything.
+#[tauri::command(rename_all = "snake_case")]
+pub fn preview_csv(path: String, delimiter: Option<String>) -> IpcResult<CsvPreview> {
+    let wanted = delimiter.and_then(|d| d.chars().next());
+    let (delimiter, rows) = crate::import::preview(&path, wanted, 20)?;
+    Ok(CsvPreview {
+        delimiter: delimiter.to_string(),
+        rows,
+    })
+}
+
+/// Load a delimited file into a table.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn import_csv(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    request: CsvImportArgs,
+) -> IpcResult<u64> {
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    state
+        .exports
+        .lock()
+        .await
+        .insert(request.id.clone(), cancel.clone());
+    let id = request.id.clone();
+
+    let result = crate::import::run_csv(
+        &state,
+        crate::import::CsvImportRequest {
+            id: request.id,
+            connection_id: request.connection_id,
+            path: request.path,
+            qualified: request.qualified,
+            schema: request.schema,
+            table: request.table,
+            delimiter: request.delimiter.chars().next().unwrap_or(','),
+            has_header: request.has_header,
+            mapping: request.mapping,
+            null_as_empty: request.null_as_empty,
+        },
+        cancel,
+        |progress| {
+            let _ = tauri::Emitter::emit(&app, crate::export::PROGRESS_EVENT, progress);
+        },
+    )
+    .await;
+
+    state.exports.lock().await.remove(&id);
+    Ok(result?)
+}
+
 /// What the frontend asks for when running a SQL file.
 #[derive(Deserialize)]
 pub struct ImportArgs {

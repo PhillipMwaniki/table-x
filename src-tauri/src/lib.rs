@@ -64,6 +64,8 @@ pub fn run() {
             ipc::export_table,
             ipc::export_database,
             ipc::import_sql,
+            ipc::import_csv,
+            ipc::preview_csv,
             ipc::cancel_export,
             ipc::apply_edit,
             ipc::completion_scope,

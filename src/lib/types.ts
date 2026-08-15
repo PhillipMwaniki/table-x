@@ -241,6 +241,12 @@ export interface SchemaNode {
 /** File formats a table can be written out as. */
 export type ExportFormat = "csv" | "json" | "sql";
 
+/** The first rows of a delimited file, for mapping its columns. */
+export interface CsvPreview {
+  delimiter: string;
+  rows: string[][];
+}
+
 /** A query the user chose to keep. */
 export interface Snippet {
   id: string;

@@ -16,6 +16,7 @@ import { HistoryPanel } from "./HistoryPanel";
 import { TabBar } from "./TabBar";
 import { ExportProgress } from "./ExportProgress";
 import { SplitHandle } from "./SplitHandle";
+import { CsvImportDialog } from "./CsvImportDialog";
 import { Button, Spinner, cx } from "../ui/primitives";
 import { ContextMenu } from "../ui/ContextMenu";
 import type { MenuItem } from "../ui/ContextMenu";
@@ -29,6 +30,7 @@ import { useSettings } from "@/store/settings";
 import { useExports } from "@/store/exports";
 import { useWorkspace } from "@/store/workspace";
 import type {
+  ColumnDef,
   ConnectionConfig,
   DriverInfo,
   ExportFormat,
@@ -94,6 +96,12 @@ export function Workspace({
   const watchExports = useExports((s) => s.watch);
   const beginExport = useExports((s) => s.begin);
   const endExport = useExports((s) => s.end);
+  /** The file and table a mapping dialog is open for, if any. */
+  const [csvImport, setCsvImport] = useState<{
+    path: string;
+    node: SchemaNode & { schema?: string | undefined };
+    columns: ColumnDef[];
+  } | null>(null);
   const [menu, setMenu] = useState<{
     node: SchemaNode & { schema?: string | undefined };
     x: number;
@@ -263,6 +271,70 @@ export function Workspace({
       }
     } catch (e) {
       reportJobFailure(e as IpcError, current?.id, `Export of ${database}`);
+    } finally {
+      endExport(id);
+    }
+  };
+
+  /**
+   * Load a delimited file into a table.
+   *
+   * The file is chosen first and the columns are read before anything opens,
+   * so the dialog can show the mapping already made rather than an empty form
+   * asking the user to describe their own file back to us.
+   */
+  const importCsv = async (node: SchemaNode & { schema?: string | undefined }) => {
+    const path = await open({
+      multiple: false,
+      filters: [{ name: "Delimited text", extensions: ["csv", "tsv", "txt"] }],
+    });
+    if (typeof path !== "string") return;
+
+    const current = activeTab(connection.id);
+    try {
+      const detail = await ipc.tableDetail(connection.id, node.name, node.schema);
+      setCsvImport({ path, node, columns: detail.columns });
+    } catch (e) {
+      reportJobFailure(e as IpcError, current?.id, `Import into ${node.name}`);
+    }
+  };
+
+  /** Run the import the dialog just described. */
+  const runCsvImport = async (
+    target: { path: string; node: SchemaNode & { schema?: string | undefined } },
+    options: {
+      delimiter: string;
+      hasHeader: boolean;
+      mapping: (string | null)[];
+      nullAsEmpty: boolean;
+    },
+  ) => {
+    setCsvImport(null);
+    const id = crypto.randomUUID();
+    const current = activeTab(connection.id);
+    beginExport(id, `Importing ${target.path.split(/[\\/]/).pop()}`, "KB");
+    try {
+      const rows = await ipc.importCsv({
+        id,
+        connection_id: connection.id,
+        path: target.path,
+        qualified: target.node.qualified ?? target.node.name,
+        schema: target.node.schema,
+        table: target.node.name,
+        delimiter: options.delimiter,
+        has_header: options.hasHeader,
+        mapping: options.mapping,
+        null_as_empty: options.nullAsEmpty,
+      });
+      if (current) {
+        setTabNotice(
+          connection.id,
+          current.id,
+          `Imported ${rows.toLocaleString()} rows into ${target.node.name}`,
+        );
+      }
+    } catch (e) {
+      reportJobFailure(e as IpcError, current?.id, `Import into ${target.node.name}`);
     } finally {
       endExport(id);
     }
@@ -697,10 +769,22 @@ export function Workspace({
               onExport: (format, extension) => void exportTable(menu.node, format, extension),
               onExportDatabase: () => void exportDatabase(menu.node.name),
               onImport: () => void importSql(),
+              onImportCsv: () => void importCsv(menu.node),
               onRefresh: menu.refresh,
             },
           )}
           onClose={() => setMenu(null)}
+        />
+      )}
+
+      {csvImport && (
+        <CsvImportDialog
+          open
+          path={csvImport.path}
+          table={csvImport.node.name}
+          columns={csvImport.columns}
+          onClose={() => setCsvImport(null)}
+          onImport={(options) => void runCsvImport(csvImport, options)}
         />
       )}
 
@@ -741,6 +825,7 @@ export function menuFor(
     onExport: (format: ExportFormat, extension: string) => void;
     onExportDatabase: () => void;
     onImport: () => void;
+    onImportCsv: () => void;
     onRefresh: (() => void) | null;
   },
 ): MenuItem[] {
@@ -797,6 +882,10 @@ export function menuFor(
         onSelect: () => actions.onExport(format, extension),
       });
     }
+  }
+
+  if (node.kind === "table") {
+    items.push({ label: "Import CSV file…", onSelect: actions.onImportCsv });
   }
 
   if (actions.onRefresh) {
