@@ -138,6 +138,7 @@ Milestone 1 ("core + power features") is the current target.
 | ✅ | **ER diagram** | Deterministic layered layout computed in Rust, one bulk query per schema, pan and zoom. 11 layout tests. |
 | ✅ | **Schema diff + migration** | Compares two schemas on any connected pair, generates ordered DDL in the target engine's dialect, marks every destructive statement. Runs nothing. 17 tests. |
 | ✅ | **`tablex` CLI** | Same drivers, no window: `query`, `export`, `import`, `diff`, `tables`. `diff --exit-code` is a CI drift gate. 26 tests, 10 driving the real binary. |
+| ✅ | **Result charts** | Bar, line, area and scatter in hand-drawn SVG — no charting dependency. Exact values read back from text, not from the plotted float. 17 tests. |
 | ✅ | **Governance-lite** | Confirmation gate on destructive statements, driven by the colour tag; unbounded ones require typing the connection name. Exportable query-history audit trail. 13 tests. |
 | ✅ | **MCP server** | `tablex mcp` — query, list, describe and explain for an agent, read-only by default, row caps enforced, every call audited. 11 tests over real stdio. |
 | ✅ | **Correctness made visible** | Exact columns marked in the grid, a per-result panel explaining what is guaranteed, and "read-only" replaced by which of four reasons applies. |
@@ -146,6 +147,24 @@ Milestone 1 ("core + power features") is the current target.
 
 Deliberately **out of scope** for milestone 1, and tracked for later: the third-party
 plugin system, AI chat and query assistance, MCP server integration, and settings sync.
+
+### Why mobile is not simply another build target
+
+Tauri v2 targets Android and iOS from the code already written, and that is a
+real structural advantage over every desktop-only competitor. It is not, however,
+a build command away.
+
+Building for either requires the platform SDK — Android Studio and the NDK, or
+Xcode and a provisioning profile — neither of which exists on the machine this
+was developed on, so nothing here has been compiled for a phone or run on one.
+Beyond compiling, the parts that would need designing rather than porting are
+concrete: the OS keychain integration is per-platform and the mobile ones differ
+from the desktop ones; a schema tree and a result grid are pointer-and-keyboard
+designs that need rethinking for touch, not shrinking; and SSH tunnelling on iOS
+runs into background-execution limits that have no desktop equivalent.
+
+Worth doing, and worth doing as its own piece of work with a device in hand
+rather than as an untested cross-compile.
 
 ### Why Oracle and MongoDB are not simply two more drivers
 
