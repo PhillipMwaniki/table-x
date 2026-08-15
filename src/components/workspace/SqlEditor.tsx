@@ -8,13 +8,14 @@
 
 import { useEffect, useRef } from "react";
 import { EditorState, Compartment } from "@codemirror/state";
-import { EditorView, keymap, highlightActiveLine, lineNumbers, placeholder } from "@codemirror/view";
 import {
-  defaultKeymap,
-  history,
-  historyKeymap,
-  indentWithTab,
-} from "@codemirror/commands";
+  EditorView,
+  keymap,
+  highlightActiveLine,
+  lineNumbers,
+  placeholder,
+} from "@codemirror/view";
+import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { searchKeymap, highlightSelectionMatches } from "@codemirror/search";
 import {
   autocompletion,
@@ -65,11 +66,22 @@ const highlighting = HighlightStyle.define([
     color: "var(--color-ok)",
   },
   { tag: [tags.number, tags.bool, tags.null], color: "var(--color-warn)" },
-  { tag: [tags.comment, tags.lineComment, tags.blockComment], color: "var(--color-text-muted)", fontStyle: "italic" },
-  { tag: [tags.function(tags.variableName), tags.function(tags.propertyName)], color: "var(--color-null)" },
+  {
+    tag: [tags.comment, tags.lineComment, tags.blockComment],
+    color: "var(--color-text-muted)",
+    fontStyle: "italic",
+  },
+  {
+    tag: [tags.function(tags.variableName), tags.function(tags.propertyName)],
+    color: "var(--color-null)",
+  },
   // Type names appear in casts and DDL, which is exactly where you are checking
   // them, so they get their own weight rather than their own colour.
-  { tag: [tags.typeName, tags.standard(tags.typeName)], color: "var(--color-text)", fontWeight: "600" },
+  {
+    tag: [tags.typeName, tags.standard(tags.typeName)],
+    color: "var(--color-text)",
+    fontWeight: "600",
+  },
   // A quoted identifier is a name, not a string — colouring it as one would
   // suggest "users" and 'users' mean the same thing, which is the single most
   // expensive confusion in SQL.
@@ -269,9 +281,7 @@ export function SqlEditor({
   useEffect(() => {
     view.current?.dispatch({
       effects: completionCompartment.current.reconfigure(
-        completion
-          ? autocompletion({ override: [schemaCompletion(completion)] })
-          : [],
+        completion ? autocompletion({ override: [schemaCompletion(completion)] }) : [],
       ),
     });
   }, [completion]);

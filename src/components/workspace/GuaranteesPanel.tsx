@@ -45,11 +45,10 @@ export function GuaranteesPanel({
         >
           {editable ? (
             <>
-              An edit becomes an <code>UPDATE</code> matched on{" "}
-              <Names names={keyColumns} />, carrying the value the row{" "}
-              <em>had</em> when it was read. If that matches anything other than
-              exactly one row, the change is rolled back rather than applied —
-              so an edit cannot quietly hit a row someone else changed first.
+              An edit becomes an <code>UPDATE</code> matched on <Names names={keyColumns} />,
+              carrying the value the row <em>had</em> when it was read. If that matches anything
+              other than exactly one row, the change is rolled back rather than applied — so an edit
+              cannot quietly hit a row someone else changed first.
             </>
           ) : (
             <>
@@ -60,21 +59,19 @@ export function GuaranteesPanel({
 
         {exact.length > 0 && (
           <Claim tone="ok" title="Exact numbers stay exact">
-            <Names names={exact} /> {exact.length === 1 ? "is" : "are"} carried
-            as text from the server to this screen, digit for digit. No part of
-            the path converts {exact.length === 1 ? "it" : "them"} to a
-            floating-point number, so nothing is rounded on the way — including
-            values wider than a 64-bit float can hold.
+            <Names names={exact} /> {exact.length === 1 ? "is" : "are"} carried as text from the
+            server to this screen, digit for digit. No part of the path converts{" "}
+            {exact.length === 1 ? "it" : "them"} to a floating-point number, so nothing is rounded
+            on the way — including values wider than a 64-bit float can hold.
           </Claim>
         )}
 
         {approximate.length > 0 && (
           <Claim tone="warn" title="Some columns are approximate at the source">
-            <Names names={approximate} /> {approximate.length === 1 ? "is" : "are"}{" "}
-            a floating-point column, so {approximate.length === 1 ? "its value" : "their values"}{" "}
-            may already have been rounded before this application saw{" "}
-            {approximate.length === 1 ? "it" : "them"}. That is the column's
-            type, not something done here — but it is worth knowing before
+            <Names names={approximate} /> {approximate.length === 1 ? "is" : "are"} a floating-point
+            column, so {approximate.length === 1 ? "its value" : "their values"} may already have
+            been rounded before this application saw {approximate.length === 1 ? "it" : "them"}.
+            That is the column's type, not something done here — but it is worth knowing before
             trusting the last digits.
           </Claim>
         )}
@@ -85,16 +82,14 @@ export function GuaranteesPanel({
         >
           {complete ? (
             <>
-              The statement returned fewer rows than the page limit, so what is
-              shown is everything it produced. Sorting and filtering in the grid
-              cover the whole result.
+              The statement returned fewer rows than the page limit, so what is shown is everything
+              it produced. Sorting and filtering in the grid cover the whole result.
             </>
           ) : (
             <>
-              A full page came back, so there is likely more. Sorting and
-              filtering in the grid apply to the rows fetched so far, not to the
-              whole result — which is why the row count says how many are
-              loaded rather than how many exist.
+              A full page came back, so there is likely more. Sorting and filtering in the grid
+              apply to the rows fetched so far, not to the whole result — which is why the row count
+              says how many are loaded rather than how many exist.
             </>
           )}
         </Claim>

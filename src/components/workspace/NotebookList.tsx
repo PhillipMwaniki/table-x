@@ -83,10 +83,7 @@ export function NotebookList({
             {visible.map((notebook) => (
               <li key={notebook.id} className="group border-b border-border/50">
                 <div className="flex items-center gap-2 px-2 py-1.5">
-                  <button
-                    onClick={() => onOpen(notebook)}
-                    className="min-w-0 flex-1 text-left"
-                  >
+                  <button onClick={() => onOpen(notebook)} className="min-w-0 flex-1 text-left">
                     <span className="block truncate text-[12px] text-text">{notebook.name}</span>
                     <span className="block text-[10.5px] text-text-muted">
                       {notebook.cells.filter((c) => c.kind === "sql").length} queries ·{" "}

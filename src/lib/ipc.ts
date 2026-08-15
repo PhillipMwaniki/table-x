@@ -98,11 +98,7 @@ export const ipc = {
    * `sshSecrets` holds one credential per SSH hop, in chain order, each under
    * its own keychain entry so saving one never overwrites another.
    */
-  saveConnection: (
-    config: ConnectionConfig,
-    secret?: string,
-    sshSecrets?: (string | null)[],
-  ) =>
+  saveConnection: (config: ConnectionConfig, secret?: string, sshSecrets?: (string | null)[]) =>
     call<void>("save_connection", {
       config,
       secret: secret ?? null,
@@ -115,11 +111,7 @@ export const ipc = {
   disconnect: (id: string) => call<void>("disconnect", { id }),
 
   /** Validate a config that may not be saved yet, tunnel included. */
-  testConnection: (
-    config: ConnectionConfig,
-    secret?: string,
-    sshSecrets?: (string | null)[],
-  ) =>
+  testConnection: (config: ConnectionConfig, secret?: string, sshSecrets?: (string | null)[]) =>
     call<void>("test_connection", {
       config,
       secret: secret ?? null,
@@ -178,12 +170,8 @@ export const ipc = {
     }),
 
   /** Dump a whole database to one SQL file, returning rows written. */
-  exportDatabase: (args: {
-    id: string;
-    connection_id: string;
-    database: string;
-    path: string;
-  }) => call<number>("export_database", { request: args }),
+  exportDatabase: (args: { id: string; connection_id: string; database: string; path: string }) =>
+    call<number>("export_database", { request: args }),
 
   /**
    * Write rows picked out of the grid, using the same writers a whole-table

@@ -87,7 +87,9 @@ export const useExports = create<ExportState>((set, get) => ({
     // Marked immediately, because the export stops at the next batch boundary
     // and a button that looks unpressed until then invites a second press.
     set((s) => ({
-      running: s.running[id] ? { ...s.running, [id]: { ...s.running[id], cancelling: true } } : s.running,
+      running: s.running[id]
+        ? { ...s.running, [id]: { ...s.running[id], cancelling: true } }
+        : s.running,
     }));
     await ipc.cancelExport(id);
   },

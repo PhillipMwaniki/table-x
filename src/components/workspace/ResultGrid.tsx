@@ -538,8 +538,7 @@ export function ResultGrid({
                   </div>
 
                   {row.map((cell, colIndex) => {
-                    const isEditing =
-                      editing?.row === sourceIndex && editing.col === colIndex;
+                    const isEditing = editing?.row === sourceIndex && editing.col === colIndex;
                     return (
                       <Cell
                         key={colIndex}
@@ -892,9 +891,7 @@ function Cell({
               // Chosen from three options, so there is nothing to review: the
               // choice is the edit.
               onCommitValue(
-                choice === "null"
-                  ? { kind: "null" }
-                  : { kind: "bool", value: choice === "true" },
+                choice === "null" ? { kind: "null" } : { kind: "bool", value: choice === "true" },
               );
             }}
           />

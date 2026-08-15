@@ -70,7 +70,10 @@ export function DiagramView({
       if (!e.ctrlKey && !e.metaKey && Math.abs(e.deltaY) < 2) return;
       e.preventDefault();
       setView((was) => {
-        const next = Math.min(MAX_SCALE, Math.max(MIN_SCALE, was.scale * (e.deltaY < 0 ? 1.1 : 0.9)));
+        const next = Math.min(
+          MAX_SCALE,
+          Math.max(MIN_SCALE, was.scale * (e.deltaY < 0 ? 1.1 : 0.9)),
+        );
         // Zoom toward the pointer rather than the origin, so the thing being
         // looked at stays where it is.
         const rect = el.getBoundingClientRect();
@@ -194,12 +197,7 @@ export function DiagramView({
                   stroke={focus === i ? "var(--color-accent)" : "var(--color-border)"}
                   strokeWidth={focus === i ? 1.5 : 1}
                 />
-                <rect
-                  width={box.width}
-                  height={HEADER}
-                  rx={4}
-                  fill="var(--color-surface-2)"
-                />
+                <rect width={box.width} height={HEADER} rx={4} fill="var(--color-surface-2)" />
                 <text
                   x={8}
                   y={16}

@@ -18,9 +18,7 @@ describe("hasOrderBy", () => {
     // A subquery's ordering says nothing about the order rows come back in.
     expect(hasOrderBy("SELECT * FROM (SELECT * FROM t ORDER BY id) x")).toBe(false);
     // Neither does a window function's.
-    expect(
-      hasOrderBy("SELECT row_number() OVER (ORDER BY id) FROM t"),
-    ).toBe(false);
+    expect(hasOrderBy("SELECT row_number() OVER (ORDER BY id) FROM t")).toBe(false);
   });
 
   it("counts the outer clause when a subquery has one too", () => {

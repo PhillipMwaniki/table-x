@@ -63,13 +63,21 @@ export function ChartView({ result, onClose }: { result: ResultSet; onClose: () 
   if (chart.numericColumns.length === 0) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <Toolbar kind={kind} onKind={setKind} onClose={onClose} chart={chart} result={result}
-          labelColumn={labelColumn} onLabelColumn={setLabelColumn}
-          valueColumn={valueColumn} onValueColumn={setValueColumn} />
+        <Toolbar
+          kind={kind}
+          onKind={setKind}
+          onClose={onClose}
+          chart={chart}
+          result={result}
+          labelColumn={labelColumn}
+          onLabelColumn={setLabelColumn}
+          valueColumn={valueColumn}
+          onValueColumn={setValueColumn}
+        />
         <div className="flex flex-1 items-center justify-center px-6 text-center">
           <p className="text-[12px] text-text-muted">
-            Nothing here can be plotted — a chart needs a column of numbers, and this
-            result has none.
+            Nothing here can be plotted — a chart needs a column of numbers, and this result has
+            none.
           </p>
         </div>
       </div>
@@ -87,9 +95,7 @@ export function ChartView({ result, onClose }: { result: ResultSet; onClose: () 
   const count = chart.labels.length;
   /** The centre of a category's slot. */
   const x = (index: number) =>
-    count <= 1
-      ? PADDING.left + plotWidth / 2
-      : PADDING.left + (index / (count - 1)) * plotWidth;
+    count <= 1 ? PADDING.left + plotWidth / 2 : PADDING.left + (index / (count - 1)) * plotWidth;
 
   /** Bars share a slot between the series, so each gets a share of it. */
   const slot = count > 0 ? plotWidth / count : plotWidth;
@@ -106,9 +112,17 @@ export function ChartView({ result, onClose }: { result: ResultSet; onClose: () 
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <Toolbar kind={kind} onKind={setKind} onClose={onClose} chart={chart} result={result}
-        labelColumn={labelColumn} onLabelColumn={setLabelColumn}
-        valueColumn={valueColumn} onValueColumn={setValueColumn} />
+      <Toolbar
+        kind={kind}
+        onKind={setKind}
+        onClose={onClose}
+        chart={chart}
+        result={result}
+        labelColumn={labelColumn}
+        onLabelColumn={setLabelColumn}
+        valueColumn={valueColumn}
+        onValueColumn={setValueColumn}
+      />
 
       {result.truncated && (
         <div className="shrink-0 px-2 pt-2">
@@ -116,8 +130,8 @@ export function ChartView({ result, onClose }: { result: ResultSet; onClose: () 
               what was fetched, and a chart of part of a result looks exactly
               like a chart of all of it. */}
           <Banner tone="info">
-            This charts the rows loaded so far, not the whole result. Raise the page size
-            or add a GROUP BY to chart everything.
+            This charts the rows loaded so far, not the whole result. Raise the page size or add a
+            GROUP BY to chart everything.
           </Banner>
         </div>
       )}
@@ -163,12 +177,7 @@ export function ChartView({ result, onClose }: { result: ResultSet; onClose: () 
                     point === null ? null : (
                       <rect
                         key={i}
-                        x={
-                          PADDING.left +
-                          i * slot +
-                          slot * 0.15 +
-                          s * barWidth
-                        }
+                        x={PADDING.left + i * slot + slot * 0.15 + s * barWidth}
                         y={Math.min(y(point.value), y(0))}
                         width={barWidth}
                         height={Math.max(1, Math.abs(y(point.value) - y(0)))}
@@ -280,8 +289,7 @@ export function ChartView({ result, onClose }: { result: ResultSet; onClose: () 
         {/* The exact text, never the plotted float — the float is a position. */}
         {hovered && (
           <span className="font-mono text-text">
-            {hovered.label} · {hovered.name} ={" "}
-            <span className="font-medium">{hovered.exact}</span>
+            {hovered.label} · {hovered.name} = <span className="font-medium">{hovered.exact}</span>
           </span>
         )}
       </div>

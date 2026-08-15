@@ -41,7 +41,12 @@ describe("buildChart", () => {
     const chart = buildChart(
       result(
         ["name", "balance"],
-        [[{ kind: "text", value: "a" }, { kind: "numeric", value: wide }]],
+        [
+          [
+            { kind: "text", value: "a" },
+            { kind: "numeric", value: wide },
+          ],
+        ],
       ),
     );
 
@@ -75,8 +80,14 @@ describe("buildChart", () => {
       result(
         ["x", "y"],
         [
-          [{ kind: "int", value: 1 }, { kind: "int", value: 10 }],
-          [{ kind: "int", value: 2 }, { kind: "int", value: 20 }],
+          [
+            { kind: "int", value: 1 },
+            { kind: "int", value: 10 },
+          ],
+          [
+            { kind: "int", value: 2 },
+            { kind: "int", value: 20 },
+          ],
         ],
       ),
     );
@@ -88,10 +99,7 @@ describe("buildChart", () => {
     // It is not a numeric column; it is no column, and plotting a flat line of
     // nothing suggests data that is not there.
     const chart = buildChart(
-      result(
-        ["name", "empty"],
-        [[{ kind: "text", value: "a" }, { kind: "null" }]],
-      ),
+      result(["name", "empty"], [[{ kind: "text", value: "a" }, { kind: "null" }]]),
     );
     expect(chart.numericColumns).toEqual([]);
     expect(chart.series).toEqual([]);
@@ -104,7 +112,10 @@ describe("buildChart", () => {
       result(
         ["name", "n"],
         [
-          [{ kind: "text", value: "a" }, { kind: "int", value: 5 }],
+          [
+            { kind: "text", value: "a" },
+            { kind: "int", value: 5 },
+          ],
           [{ kind: "text", value: "b" }, { kind: "null" }],
         ],
       ),
@@ -128,7 +139,15 @@ describe("buildChart", () => {
   it("ignores a chosen column that cannot be plotted", () => {
     // Asking for a text column should give no series rather than a row of NaN.
     const chart = buildChart(
-      result(["name", "n"], [[{ kind: "text", value: "a" }, { kind: "int", value: 1 }]]),
+      result(
+        ["name", "n"],
+        [
+          [
+            { kind: "text", value: "a" },
+            { kind: "int", value: 1 },
+          ],
+        ],
+      ),
       { valueColumns: [0] },
     );
     expect(chart.series).toEqual([]);

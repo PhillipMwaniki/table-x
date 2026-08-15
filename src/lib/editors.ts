@@ -113,7 +113,9 @@ export function hexDump(bytes: number[], perLine = 16): string {
       .padEnd(perLine * 3 - 1, " ");
     // Anything outside printable ASCII shows as a dot: a control character
     // would move the cursor and break the alignment the dump exists for.
-    const ascii = slice.map((b) => (b >= 0x20 && b <= 0x7e ? String.fromCharCode(b) : ".")).join("");
+    const ascii = slice
+      .map((b) => (b >= 0x20 && b <= 0x7e ? String.fromCharCode(b) : "."))
+      .join("");
     lines.push(`${offset.toString(16).padStart(8, "0")}  ${hex}  ${ascii}`);
   }
   return lines.join("\n");

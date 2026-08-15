@@ -9,8 +9,9 @@
      Column values, SQL, and type names must align vertically to be scannable.
      Both are overridden at runtime by the settings store, which writes the
      chosen stack onto <html> as an inline custom property. */
-  --font-sans: "Inter var", "Segoe UI Variable", "Segoe UI", system-ui, -apple-system,
-    "Helvetica Neue", sans-serif;
+  --font-sans:
+    "Inter var", "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, "Helvetica Neue",
+    sans-serif;
   --font-mono: "JetBrains Mono", "Cascadia Code", "SF Mono", "Consolas", ui-monospace, monospace;
 
   /* Size of everything that is data: SQL, cell values, column types. Chrome
@@ -25,20 +26,20 @@
   --color-surface-0: oklch(100% 0 0);
   --color-surface-1: oklch(98.4% 0.001 250);
   --color-surface-2: oklch(96.2% 0.002 250);
-  --color-surface-3: oklch(93.0% 0.003 250);
-  --color-border: oklch(89.0% 0.004 250);
-  --color-text: oklch(24.0% 0.008 250);
-  --color-text-muted: oklch(52.0% 0.010 250);
+  --color-surface-3: oklch(93% 0.003 250);
+  --color-border: oklch(89% 0.004 250);
+  --color-text: oklch(24% 0.008 250);
+  --color-text-muted: oklch(52% 0.01 250);
 
   /* Accent */
-  --color-accent: oklch(58.0% 0.170 255);
-  --color-accent-fg: oklch(99.0% 0 0);
+  --color-accent: oklch(58% 0.17 255);
+  --color-accent-fg: oklch(99% 0 0);
 
   /* Semantic — also used to tint result-grid cells by value kind */
-  --color-ok: oklch(62.0% 0.150 150);
-  --color-warn: oklch(72.0% 0.160 75);
-  --color-danger: oklch(58.0% 0.200 25);
-  --color-null: oklch(60.0% 0.030 290);
+  --color-ok: oklch(62% 0.15 150);
+  --color-warn: oklch(72% 0.16 75);
+  --color-danger: oklch(58% 0.2 25);
+  --color-null: oklch(60% 0.03 290);
 
   --radius-sm: 3px;
   --radius-md: 5px;
@@ -47,21 +48,21 @@
 
 /* Dark theme reassigns the same tokens, so components never branch on theme. */
 .dark {
-  --color-surface-0: oklch(17.0% 0.006 255);
+  --color-surface-0: oklch(17% 0.006 255);
   --color-surface-1: oklch(20.5% 0.007 255);
-  --color-surface-2: oklch(24.0% 0.008 255);
+  --color-surface-2: oklch(24% 0.008 255);
   --color-surface-3: oklch(28.5% 0.009 255);
-  --color-border: oklch(33.0% 0.010 255);
-  --color-text: oklch(93.0% 0.004 255);
-  --color-text-muted: oklch(66.0% 0.012 255);
+  --color-border: oklch(33% 0.01 255);
+  --color-text: oklch(93% 0.004 255);
+  --color-text-muted: oklch(66% 0.012 255);
 
-  --color-accent: oklch(68.0% 0.155 255);
-  --color-accent-fg: oklch(17.0% 0.006 255);
+  --color-accent: oklch(68% 0.155 255);
+  --color-accent-fg: oklch(17% 0.006 255);
 
-  --color-ok: oklch(70.0% 0.145 150);
-  --color-warn: oklch(78.0% 0.150 75);
-  --color-danger: oklch(66.0% 0.185 25);
-  --color-null: oklch(64.0% 0.040 290);
+  --color-ok: oklch(70% 0.145 150);
+  --color-warn: oklch(78% 0.15 75);
+  --color-danger: oklch(66% 0.185 25);
+  --color-null: oklch(64% 0.04 290);
 }
 
 /* ---------------------------------------------------------------------------

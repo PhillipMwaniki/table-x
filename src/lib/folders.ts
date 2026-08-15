@@ -64,7 +64,5 @@ export function folderNames(connections: ConnectionConfig[]): string[] {
     const folder = normalizeFolder(c.folder);
     if (folder && !seen.has(folder.toLowerCase())) seen.set(folder.toLowerCase(), folder);
   }
-  return [...seen.values()].sort((a, b) =>
-    a.localeCompare(b, undefined, { sensitivity: "base" }),
-  );
+  return [...seen.values()].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
 }

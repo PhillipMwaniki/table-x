@@ -52,13 +52,7 @@ export interface QueryError {
  * is the whole point and a modal would put it in front of the work instead.
  */
 export type TabKind =
-  | "query"
-  | "table"
-  | "activity"
-  | "diagram"
-  | "diff"
-  | "privileges"
-  | "notebook";
+  "query" | "table" | "activity" | "diagram" | "diff" | "privileges" | "notebook";
 
 export interface Tab {
   id: string;
@@ -315,8 +309,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     }));
   },
 
-  setCells: (id, tabId, cells) =>
-    set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { cells }) })),
+  setCells: (id, tabId, cells) => set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { cells }) })),
 
   renameNotebookTab: (id, tabId, notebookId, name) =>
     set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { notebookId, title: name }) })),

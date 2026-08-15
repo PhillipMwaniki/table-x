@@ -130,8 +130,7 @@ export function SshHopFields({
 
       {hop.auth === "agent" && (
         <p className="text-[11px] text-text-muted">
-          Signing is delegated to your SSH agent, so no private key is loaded into this
-          application.
+          Signing is delegated to your SSH agent, so no private key is loaded into this application.
         </p>
       )}
 
@@ -140,7 +139,10 @@ export function SshHopFields({
           <span className="min-w-0 flex-1">
             <span className="block text-[11px] font-medium text-text">Host key</span>
             {hop.host_key_fingerprint ? (
-              <span className="mt-0.5 block font-mono text-[10px] break-all text-ok" data-selectable>
+              <span
+                className="mt-0.5 block font-mono text-[10px] break-all text-ok"
+                data-selectable
+              >
                 {hop.host_key_fingerprint}
               </span>
             ) : (
@@ -166,8 +168,7 @@ export function SshHopFields({
 
         {unreachable && (
           <p className="mt-1.5 text-[10.5px] text-text-muted">
-            This host is reached through the hops above it, so those have to be verified
-            first.
+            This host is reached through the hops above it, so those have to be verified first.
           </p>
         )}
 
@@ -193,8 +194,8 @@ export function SshHopFields({
           >
             {hop.host_key_fingerprint && (
               <p className="mb-1 text-[11px] font-semibold text-danger">
-                This host is presenting a different key than the one you trusted. Do not
-                accept it unless you know the server was rebuilt or rekeyed.
+                This host is presenting a different key than the one you trusted. Do not accept it
+                unless you know the server was rebuilt or rekeyed.
               </p>
             )}
             <p className="text-[10.5px] text-text-muted">

@@ -74,10 +74,7 @@ export const useConnections = create<ConnectionState>((set, get) => ({
 
   refresh: async () => {
     try {
-      const [connections, open] = await Promise.all([
-        ipc.listConnections(),
-        ipc.openConnections(),
-      ]);
+      const [connections, open] = await Promise.all([ipc.listConnections(), ipc.openConnections()]);
       set({ connections, open: new Set(open) });
     } catch (e) {
       set({ error: message(e) });

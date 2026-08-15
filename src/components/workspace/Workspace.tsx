@@ -325,7 +325,6 @@ export function Workspace({
     }
   };
 
-
   /**
    * Dump a whole database to one SQL file.
    *
@@ -527,11 +526,7 @@ export function Workspace({
    * side it would be run against. Generating it in the other side's dialect
    * would produce statements that are correct about the wrong database.
    */
-  const runCompare = async (to: {
-    connectionId: string;
-    schema: string | null;
-    label: string;
-  }) => {
+  const runCompare = async (to: { connectionId: string; schema: string | null; label: string }) => {
     const from = compare;
     setCompare(null);
     if (!from) return;
@@ -597,7 +592,6 @@ export function Workspace({
     }
   };
 
-
   /**
    * Keep the current statement under a name.
    *
@@ -620,7 +614,6 @@ export function Workspace({
     });
   };
 
-
   /**
    * Reformat the tab's SQL in place.
    *
@@ -640,7 +633,6 @@ export function Workspace({
 
   const active = tab?.outcome?.statements[tab.activeStatement];
 
-
   // Ctrl+Shift+F formats, matching every editor people arrive from. Bound on
   // the window so it works with the caret in the editor, where it is used.
   useEffect(() => {
@@ -652,7 +644,6 @@ export function Workspace({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
-
 
   // Registered while this workspace is mounted, so the palette offers running
   // a query only when there is something to run it against.
@@ -800,9 +791,7 @@ export function Workspace({
           }
           onSelectDatabase={(name) => void switchDatabase(connection.id, name)}
           onOpenScript={(node) => void openScript(node)}
-          onContextMenu={(node, at, refresh) =>
-            setMenu({ node, x: at.x, y: at.y, refresh })
-          }
+          onContextMenu={(node, at, refresh) => setMenu({ node, x: at.x, y: at.y, refresh })}
         />
       </aside>
 
@@ -833,96 +822,96 @@ export function Workspace({
                 </span>
               ) : (
                 <>
-              <Button
-                variant="primary"
-                onClick={() => void runGuarded(tab.id)}
-                busy={tab.running}
-                disabled={!tab.sql.trim()}
-                className="h-6"
-              >
-                {tab.kind === "table" ? "Refresh" : "Run"}
-              </Button>
-              {tab.kind === "query" && (
-                <span className="text-[10.5px] text-text-muted">Ctrl+Enter</span>
-              )}
+                  <Button
+                    variant="primary"
+                    onClick={() => void runGuarded(tab.id)}
+                    busy={tab.running}
+                    disabled={!tab.sql.trim()}
+                    className="h-6"
+                  >
+                    {tab.kind === "table" ? "Refresh" : "Run"}
+                  </Button>
+                  {tab.kind === "query" && (
+                    <span className="text-[10.5px] text-text-muted">Ctrl+Enter</span>
+                  )}
 
-              {connection.read_only && (
-                <span className="rounded bg-warn/15 px-1.5 py-0.5 text-[10px] font-medium text-warn">
-                  READ-ONLY
-                </span>
-              )}
+                  {connection.read_only && (
+                    <span className="rounded bg-warn/15 px-1.5 py-0.5 text-[10px] font-medium text-warn">
+                      READ-ONLY
+                    </span>
+                  )}
 
-              <div className="flex-1" />
+                  <div className="flex-1" />
 
-              {tab.kind === "query" && (
-                <Button
-                  variant="ghost"
-                  className="h-6"
-                  disabled={!tab.sql.trim()}
-                  onClick={() => void formatCurrentSql()}
-                  title="Format SQL (Ctrl+Shift+F)"
-                >
-                  Format
-                </Button>
-              )}
-              {tab.kind === "query" && driver?.capabilities.explain && (
-                <Button
-                  variant="ghost"
-                  className="h-6"
-                  disabled={!tab.sql.trim()}
-                  onClick={() => void explain(connection.id, tab.id, false)}
-                  title="Show how the engine intends to run this (Ctrl+Shift+E)"
-                >
-                  Explain
-                </Button>
-              )}
-              {tab.kind === "query" && driver?.capabilities.explain_analyze && (
-                <Button
-                  variant="ghost"
-                  className="h-6"
-                  disabled={!tab.sql.trim()}
-                  onClick={() => void explain(connection.id, tab.id, true)}
-                  title="Run it inside a transaction that is rolled back, and measure"
-                >
-                  Analyze
-                </Button>
-              )}
-              <Button
-                variant="ghost"
-                className="h-6"
-                disabled={!tab.sql.trim()}
-                onClick={saveCurrentQuery}
-                title="Keep this statement under a name"
-              >
-                Save query
-              </Button>
-              <Button
-                variant="ghost"
-                className={cx("h-6", historyOpen && "bg-surface-3 text-text")}
-                onClick={() => setHistoryOpen(!historyOpen)}
-                aria-pressed={historyOpen}
-                title="Query history (Ctrl+H)"
-              >
-                History
-              </Button>
-              <Button
-                variant="ghost"
-                className="h-6"
-                disabled={tab.undo.length === 0}
-                onClick={() => void undo(connection.id, tab.id)}
-                title="Undo last cell edit (Ctrl+Z)"
-              >
-                Undo{tab.undo.length > 0 && ` (${tab.undo.length})`}
-              </Button>
-              <Button
-                variant="ghost"
-                className="h-6"
-                disabled={tab.redo.length === 0}
-                onClick={() => void redo(connection.id, tab.id)}
-                title="Redo (Ctrl+Shift+Z)"
-              >
-                Redo
-              </Button>
+                  {tab.kind === "query" && (
+                    <Button
+                      variant="ghost"
+                      className="h-6"
+                      disabled={!tab.sql.trim()}
+                      onClick={() => void formatCurrentSql()}
+                      title="Format SQL (Ctrl+Shift+F)"
+                    >
+                      Format
+                    </Button>
+                  )}
+                  {tab.kind === "query" && driver?.capabilities.explain && (
+                    <Button
+                      variant="ghost"
+                      className="h-6"
+                      disabled={!tab.sql.trim()}
+                      onClick={() => void explain(connection.id, tab.id, false)}
+                      title="Show how the engine intends to run this (Ctrl+Shift+E)"
+                    >
+                      Explain
+                    </Button>
+                  )}
+                  {tab.kind === "query" && driver?.capabilities.explain_analyze && (
+                    <Button
+                      variant="ghost"
+                      className="h-6"
+                      disabled={!tab.sql.trim()}
+                      onClick={() => void explain(connection.id, tab.id, true)}
+                      title="Run it inside a transaction that is rolled back, and measure"
+                    >
+                      Analyze
+                    </Button>
+                  )}
+                  <Button
+                    variant="ghost"
+                    className="h-6"
+                    disabled={!tab.sql.trim()}
+                    onClick={saveCurrentQuery}
+                    title="Keep this statement under a name"
+                  >
+                    Save query
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    className={cx("h-6", historyOpen && "bg-surface-3 text-text")}
+                    onClick={() => setHistoryOpen(!historyOpen)}
+                    aria-pressed={historyOpen}
+                    title="Query history (Ctrl+H)"
+                  >
+                    History
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    className="h-6"
+                    disabled={tab.undo.length === 0}
+                    onClick={() => void undo(connection.id, tab.id)}
+                    title="Undo last cell edit (Ctrl+Z)"
+                  >
+                    Undo{tab.undo.length > 0 && ` (${tab.undo.length})`}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    className="h-6"
+                    disabled={tab.redo.length === 0}
+                    onClick={() => void redo(connection.id, tab.id)}
+                    title="Redo (Ctrl+Shift+Z)"
+                  >
+                    Redo
+                  </Button>
                 </>
               )}
             </div>
@@ -962,138 +951,145 @@ export function Workspace({
                 onOpenQuery={(sql) => openScriptTab(connection.id, { title: "Statement", sql })}
               />
             ) : (
-            <div ref={splitRef} className="flex min-h-0 flex-1 flex-col">
-              {tab.kind === "query" && (
-                <>
-                  <div
-                    style={{ height: `${ratio * 100}%` }}
-                    className="min-h-0 shrink-0 overflow-hidden"
-                  >
-                    <SqlEditor
-                      value={tab.sql}
-                      onChange={(sql) => setSql(connection.id, tab.id, sql)}
-                      onRun={(text) => void runGuarded(tab.id, text)}
-                      driver={connection.driver}
-                      completion={completion}
-                      errorPosition={tab.error?.position}
+              <div ref={splitRef} className="flex min-h-0 flex-1 flex-col">
+                {tab.kind === "query" && (
+                  <>
+                    <div
+                      style={{ height: `${ratio * 100}%` }}
+                      className="min-h-0 shrink-0 overflow-hidden"
+                    >
+                      <SqlEditor
+                        value={tab.sql}
+                        onChange={(sql) => setSql(connection.id, tab.id, sql)}
+                        onRun={(text) => void runGuarded(tab.id, text)}
+                        driver={connection.driver}
+                        completion={completion}
+                        errorPosition={tab.error?.position}
+                      />
+                    </div>
+
+                    <SplitHandle
+                      containerRef={splitRef}
+                      ratio={ratio}
+                      onPreview={setDragRatio}
+                      onCommit={(next) => {
+                        setEditorRatio(next);
+                        setDragRatio(null);
+                      }}
                     />
-                  </div>
+                  </>
+                )}
 
-                  <SplitHandle
-                    containerRef={splitRef}
-                    ratio={ratio}
-                    onPreview={setDragRatio}
-                    onCommit={(next) => {
-                      setEditorRatio(next);
-                      setDragRatio(null);
-                    }}
-                  />
-                </>
-              )}
+                <div className="flex min-h-0 flex-1 flex-col border-t border-border">
+                  {tab.error && (
+                    <div
+                      role="alert"
+                      className="shrink-0 border-b border-danger/30 bg-danger/10 px-2 py-1.5"
+                    >
+                      <p className="font-mono text-[11px] text-danger" data-selectable>
+                        {tab.error.message}
+                      </p>
+                      {tab.error.code && (
+                        <p className="mt-0.5 text-[10px] text-danger/70">
+                          SQLSTATE {tab.error.code}
+                          {tab.error.position !== undefined && ` · position ${tab.error.position}`}
+                        </p>
+                      )}
+                    </div>
+                  )}
 
-              <div className="flex min-h-0 flex-1 flex-col border-t border-border">
-              {tab.error && (
-                <div
-                  role="alert"
-                  className="shrink-0 border-b border-danger/30 bg-danger/10 px-2 py-1.5"
-                >
-                  <p className="font-mono text-[11px] text-danger" data-selectable>
-                    {tab.error.message}
-                  </p>
-                  {tab.error.code && (
-                    <p className="mt-0.5 text-[10px] text-danger/70">
-                      SQLSTATE {tab.error.code}
-                      {tab.error.position !== undefined && ` · position ${tab.error.position}`}
+                  {tab.notice && (
+                    <p
+                      role="status"
+                      className="shrink-0 border-b border-ok/30 bg-ok/10 px-2 py-1.5 text-[11px] text-ok"
+                      data-selectable
+                    >
+                      {tab.notice}
                     </p>
                   )}
-                </div>
-              )}
 
-              {tab.notice && (
-                <p
-                  role="status"
-                  className="shrink-0 border-b border-ok/30 bg-ok/10 px-2 py-1.5 text-[11px] text-ok"
-                  data-selectable
-                >
-                  {tab.notice}
-                </p>
-              )}
+                  {tab.outcome && tab.outcome.statements.length > 1 && (
+                    <StatementTabs
+                      statements={tab.outcome.statements}
+                      active={tab.activeStatement}
+                      onSelect={(i) => setActiveStatement(connection.id, tab.id, i)}
+                    />
+                  )}
 
-              {tab.outcome && tab.outcome.statements.length > 1 && (
-                <StatementTabs
-                  statements={tab.outcome.statements}
-                  active={tab.activeStatement}
-                  onSelect={(i) => setActiveStatement(connection.id, tab.id, i)}
-                />
-              )}
+                  {tab.plan ? (
+                    <PlanView plan={tab.plan} onClose={() => clearPlan(connection.id, tab.id)} />
+                  ) : tab.running && !tab.outcome ? (
+                    <div className="flex flex-1 items-center justify-center">
+                      <Spinner className="text-text-muted" />
+                    </div>
+                  ) : active?.type === "rows" ? (
+                    <ResultGrid
+                      result={active}
+                      onEdit={(row, col, next) => applyEdit(connection.id, tab.id, row, col, next)}
+                      paging={{
+                        offset: tab.offset,
+                        limit: tab.limit || pageSize,
+                        ordered: hasOrderBy(tab.sql),
+                        busy: tab.running,
+                        onGoTo: (offset) => void goToPage(connection.id, tab.id, offset),
+                        onPageSize: (rows) => {
+                          // Back to the first page: keeping the offset would land
+                          // somewhere unrelated to where the reader was.
+                          setPageSize(rows);
+                          void goToPage(connection.id, tab.id, 0);
+                        },
+                        orderableBy: active.key_columns,
+                        onOrderBy:
+                          active.key_columns.length > 0
+                            ? () => {
+                                const quote = driver?.capabilities.identifier_quote ?? '"';
+                                const close = quote === "[" ? "]" : quote;
+                                const keys = active.key_columns
+                                  .map(
+                                    (c) => `${quote}${c.replaceAll(close, close + close)}${close}`,
+                                  )
+                                  .join(", ");
+                                setSql(
+                                  connection.id,
+                                  tab.id,
+                                  `${tab.sql.trimEnd()} ORDER BY ${keys}`,
+                                );
+                                void goToPage(connection.id, tab.id, 0);
+                              }
+                            : undefined,
+                      }}
+                      onExportRows={(rows) => setExporting(rows)}
+                      readOnlyDetail={readOnlyDetail}
+                    />
+                  ) : active?.type === "affected" ? (
+                    <div className="flex flex-1 items-center justify-center text-[12px] text-text-muted">
+                      {active.rows_affected} row{active.rows_affected === 1 ? "" : "s"} affected
+                      {active.last_insert_id != null &&
+                        ` · last insert id ${active.last_insert_id}`}
+                    </div>
+                  ) : (
+                    <div className="flex flex-1 items-center justify-center px-6 text-center text-[12px] text-text-muted">
+                      {tab.error
+                        ? "Fix the statement and run again."
+                        : "Write a query and press Ctrl+Enter, or click a table in the sidebar."}
+                    </div>
+                  )}
 
-              {tab.plan ? (
-                <PlanView plan={tab.plan} onClose={() => clearPlan(connection.id, tab.id)} />
-              ) : tab.running && !tab.outcome ? (
-                <div className="flex flex-1 items-center justify-center">
-                  <Spinner className="text-text-muted" />
+                  {tab.outcome && (
+                    <div className="flex h-5 shrink-0 items-center gap-3 border-t border-border bg-surface-1 px-2 text-[10.5px] text-text-muted">
+                      <span>{tab.outcome.elapsed_ms} ms</span>
+                      {tab.outcome.statements.length > 1 && (
+                        <span>{tab.outcome.statements.length} statements</span>
+                      )}
+                      {tab.outcome.notices.map((n, i) => (
+                        <span key={i} className="truncate text-warn">
+                          {n}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              ) : active?.type === "rows" ? (
-                <ResultGrid
-                  result={active}
-                  onEdit={(row, col, next) => applyEdit(connection.id, tab.id, row, col, next)}
-                  paging={{
-                    offset: tab.offset,
-                    limit: tab.limit || pageSize,
-                    ordered: hasOrderBy(tab.sql),
-                    busy: tab.running,
-                    onGoTo: (offset) => void goToPage(connection.id, tab.id, offset),
-                    onPageSize: (rows) => {
-                      // Back to the first page: keeping the offset would land
-                      // somewhere unrelated to where the reader was.
-                      setPageSize(rows);
-                      void goToPage(connection.id, tab.id, 0);
-                    },
-                    orderableBy: active.key_columns,
-                    onOrderBy:
-                      active.key_columns.length > 0
-                        ? () => {
-                            const quote = driver?.capabilities.identifier_quote ?? '"';
-                            const close = quote === "[" ? "]" : quote;
-                            const keys = active.key_columns
-                              .map((c) => `${quote}${c.replaceAll(close, close + close)}${close}`)
-                              .join(", ");
-                            setSql(connection.id, tab.id, `${tab.sql.trimEnd()} ORDER BY ${keys}`);
-                            void goToPage(connection.id, tab.id, 0);
-                          }
-                        : undefined,
-                  }}
-                  onExportRows={(rows) => setExporting(rows)}
-                  readOnlyDetail={readOnlyDetail}
-                />
-              ) : active?.type === "affected" ? (
-                <div className="flex flex-1 items-center justify-center text-[12px] text-text-muted">
-                  {active.rows_affected} row{active.rows_affected === 1 ? "" : "s"} affected
-                  {active.last_insert_id != null && ` · last insert id ${active.last_insert_id}`}
-                </div>
-              ) : (
-                <div className="flex flex-1 items-center justify-center px-6 text-center text-[12px] text-text-muted">
-                  {tab.error
-                    ? "Fix the statement and run again."
-                    : "Write a query and press Ctrl+Enter, or click a table in the sidebar."}
-                </div>
-              )}
-
-                {tab.outcome && (
-                  <div className="flex h-5 shrink-0 items-center gap-3 border-t border-border bg-surface-1 px-2 text-[10.5px] text-text-muted">
-                    <span>{tab.outcome.elapsed_ms} ms</span>
-                    {tab.outcome.statements.length > 1 && (
-                      <span>{tab.outcome.statements.length} statements</span>
-                    )}
-                    {tab.outcome.notices.map((n, i) => (
-                      <span key={i} className="truncate text-warn">
-                        {n}
-                      </span>
-                    ))}
-                  </div>
-                )}
               </div>
-            </div>
             )}
           </>
         ) : (

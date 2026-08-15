@@ -146,8 +146,8 @@ export function NotebookView({
         <div className="mx-auto max-w-4xl space-y-2">
           {cells.length === 0 && (
             <p className="py-8 text-center text-[12px] text-text-muted">
-              An empty notebook. Add a note to say what you are looking into, or a query to
-              start looking.
+              An empty notebook. Add a note to say what you are looking into, or a query to start
+              looking.
             </p>
           )}
 
@@ -305,13 +305,7 @@ export function NotebookView({
   );
 }
 
-function CellButton({
-  onClick,
-  children,
-}: {
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
+function CellButton({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
   return (
     <button
       onClick={onClick}

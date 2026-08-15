@@ -64,16 +64,12 @@ export function Dialog({
         <h2 id="dialog-title" className="text-[13px] font-semibold">
           {title}
         </h2>
-        {description && (
-          <p className="mt-0.5 text-[11px] text-text-muted">{description}</p>
-        )}
+        {description && <p className="mt-0.5 text-[11px] text-text-muted">{description}</p>}
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">{children}</div>
 
-      {footer && (
-        <footer className="shrink-0 border-t border-border px-4 py-2.5">{footer}</footer>
-      )}
+      {footer && <footer className="shrink-0 border-t border-border px-4 py-2.5">{footer}</footer>}
     </dialog>
   );
 }

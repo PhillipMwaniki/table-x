@@ -9,13 +9,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Dialog } from "./ui/Dialog";
 import { Button, Field, Input, Select, cx } from "./ui/primitives";
 import { useSettings } from "@/store/settings";
-import {
-  DATA_FONTS,
-  MAX_FONT_SIZE,
-  MIN_FONT_SIZE,
-  THEMES,
-  UI_FONTS,
-} from "@/lib/settings";
+import { DATA_FONTS, MAX_FONT_SIZE, MIN_FONT_SIZE, THEMES, UI_FONTS } from "@/lib/settings";
 
 /**
  * Whether a stack's first family is actually installed.
@@ -128,7 +122,10 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
           </Select>
         </Field>
 
-        <Field label="Data size" hint={`${MIN_FONT_SIZE}–${MAX_FONT_SIZE} px. Grid rows grow to match.`}>
+        <Field
+          label="Data size"
+          hint={`${MIN_FONT_SIZE}–${MAX_FONT_SIZE} px. Grid rows grow to match.`}
+        >
           <div className="flex items-center gap-2">
             <input
               type="range"
@@ -168,7 +165,8 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
           <pre className="overflow-x-auto font-mono text-[length:var(--text-data)] text-text">
             <span className="text-accent">SELECT</span> id, email, balance
             {"\n"}
-            <span className="text-accent">FROM</span> customers <span className="text-accent">WHERE</span> active;
+            <span className="text-accent">FROM</span> customers{" "}
+            <span className="text-accent">WHERE</span> active;
           </pre>
           <p className="mt-1 font-mono text-[length:var(--text-data)] text-text-muted">
             123456789012345678.1234567890 · NULL · 2026-08-14

@@ -134,7 +134,6 @@ export function readOnlyExplanation(options: {
 
   return {
     reason: "This result draws from more than one table.",
-    remedy:
-      "A join gives no single target for an UPDATE. Query one table to edit its rows.",
+    remedy: "A join gives no single target for an UPDATE. Query one table to edit its rows.",
   };
 }

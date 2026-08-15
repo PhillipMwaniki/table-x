@@ -125,86 +125,84 @@ export function HistoryPanel({
       </div>
 
       {tab === "snippets" && <SnippetList onPick={onPick} onRun={onRun} />}
-      {tab === "notebooks" && (
-        <NotebookList connectionId={connectionId} onOpen={onOpenNotebook} />
-      )}
+      {tab === "notebooks" && <NotebookList connectionId={connectionId} onOpen={onOpenNotebook} />}
 
       {tab === "history" && (
         <>
-      <div className="flex shrink-0 flex-col gap-1.5 border-b border-border p-2">
-        <Input
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="Search statements…"
-          aria-label="Search query history"
-        />
-        <div className="flex items-center gap-1">
-          <ScopeTab active={scope === "connection"} onClick={() => setScope("connection")}>
-            This connection
-          </ScopeTab>
-          <ScopeTab active={scope === "all"} onClick={() => setScope("all")}>
-            All
-          </ScopeTab>
-          <div className="flex-1" />
-          <Button
-            variant="ghost"
-            className="h-6"
-            disabled={entries.length === 0}
-            onClick={() => void exportEntries()}
-            title="Write what is listed to a file — an audit trail that can leave this machine"
-          >
-            Export…
-          </Button>
-          <Button
-            variant="ghost"
-            className="h-6"
-            disabled={entries.length === 0}
-            onClick={() => void clear(connectionId)}
-            title={
-              scope === "connection"
-                ? "Delete this connection's history"
-                : "Delete all query history"
-            }
-          >
-            Clear
-          </Button>
-        </div>
-      </div>
+          <div className="flex shrink-0 flex-col gap-1.5 border-b border-border p-2">
+            <Input
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder="Search statements…"
+              aria-label="Search query history"
+            />
+            <div className="flex items-center gap-1">
+              <ScopeTab active={scope === "connection"} onClick={() => setScope("connection")}>
+                This connection
+              </ScopeTab>
+              <ScopeTab active={scope === "all"} onClick={() => setScope("all")}>
+                All
+              </ScopeTab>
+              <div className="flex-1" />
+              <Button
+                variant="ghost"
+                className="h-6"
+                disabled={entries.length === 0}
+                onClick={() => void exportEntries()}
+                title="Write what is listed to a file — an audit trail that can leave this machine"
+              >
+                Export…
+              </Button>
+              <Button
+                variant="ghost"
+                className="h-6"
+                disabled={entries.length === 0}
+                onClick={() => void clear(connectionId)}
+                title={
+                  scope === "connection"
+                    ? "Delete this connection's history"
+                    : "Delete all query history"
+                }
+              >
+                Clear
+              </Button>
+            </div>
+          </div>
 
-      {error && (
-        <p
-          role="alert"
-          className="border-b border-danger/30 bg-danger/10 px-2 py-1 text-[11px] text-danger"
-        >
-          {error}
-        </p>
-      )}
+          {error && (
+            <p
+              role="alert"
+              className="border-b border-danger/30 bg-danger/10 px-2 py-1 text-[11px] text-danger"
+            >
+              {error}
+            </p>
+          )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {entries.length === 0 && !loading ? (
-          <p className="px-2 py-3 text-[11px] text-text-muted">
-            {text.trim() ? "Nothing matches that search." : "No queries recorded yet."}
-          </p>
-        ) : (
-          <ul>
-            {entries.map((entry) => (
-              <Row
-                key={entry.id}
-                entry={entry}
-                showConnection={scope === "all"}
-                onPick={() => onPick(entry.sql)}
-                onRun={() => onRun(entry.sql)}
-              />
-            ))}
-          </ul>
-        )}
-      </div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {entries.length === 0 && !loading ? (
+              <p className="px-2 py-3 text-[11px] text-text-muted">
+                {text.trim() ? "Nothing matches that search." : "No queries recorded yet."}
+              </p>
+            ) : (
+              <ul>
+                {entries.map((entry) => (
+                  <Row
+                    key={entry.id}
+                    entry={entry}
+                    showConnection={scope === "all"}
+                    onPick={() => onPick(entry.sql)}
+                    onRun={() => onRun(entry.sql)}
+                  />
+                ))}
+              </ul>
+            )}
+          </div>
 
-      {/* Stated rather than left as a mystery: a user who rotates a password
+          {/* Stated rather than left as a mystery: a user who rotates a password
           from the editor should know why it is not in this list. */}
-      <p className="shrink-0 border-t border-border px-2 py-1 text-[10px] text-text-muted/70">
-        Statements that set a password are never recorded.
-      </p>
+          <p className="shrink-0 border-t border-border px-2 py-1 text-[10px] text-text-muted/70">
+            Statements that set a password are never recorded.
+          </p>
         </>
       )}
     </aside>
@@ -278,7 +276,9 @@ function Row({
       >
         {/* Two lines of SQL: enough to recognise a statement without turning the
             list into a page of scrolling text. */}
-        <span className="line-clamp-2 font-mono text-[11px] break-words text-text">{entry.sql}</span>
+        <span className="line-clamp-2 font-mono text-[11px] break-words text-text">
+          {entry.sql}
+        </span>
         <span className="mt-0.5 flex items-center gap-1.5 text-[10px] text-text-muted">
           {!entry.succeeded && <span className="font-medium text-danger">failed</span>}
           <span>{relativeTime(entry.ran_at)}</span>

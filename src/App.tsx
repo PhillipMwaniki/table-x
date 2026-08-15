@@ -163,9 +163,7 @@ export default function App() {
                 <div className="text-center">
                   <h2 className="text-[13px] font-semibold">{selected.name}</h2>
                   <p className="mt-1 font-mono text-[11px] text-text-muted">{selected.driver}</p>
-                  <p className="mt-4 max-w-sm text-[12px] text-text-muted">
-                    Not connected yet.
-                  </p>
+                  <p className="mt-4 max-w-sm text-[12px] text-text-muted">Not connected yet.</p>
                   <Button
                     variant="primary"
                     className="mt-3"

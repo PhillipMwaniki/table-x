@@ -112,7 +112,9 @@ function Node({
             {analyzed && node.actual_rows != null
               ? `${formatRows(node.actual_rows)} of ${formatRows(node.rows)}`
               : formatRows(node.rows)}
-            {bad && <span className="ml-1 font-medium">×{Math.round(error!).toLocaleString()}</span>}
+            {bad && (
+              <span className="ml-1 font-medium">×{Math.round(error!).toLocaleString()}</span>
+            )}
           </span>
         )}
 

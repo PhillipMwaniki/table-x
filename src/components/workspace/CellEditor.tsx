@@ -127,9 +127,7 @@ export function ValuePanel({
       >
         <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
           <span className="text-[12px] font-medium text-text">{title}</span>
-          <span className="text-[10.5px] text-text-muted">
-            Ctrl+Enter saves · Escape cancels
-          </span>
+          <span className="text-[10.5px] text-text-muted">Ctrl+Enter saves · Escape cancels</span>
           <div className="flex-1" />
           {json && (
             <Button

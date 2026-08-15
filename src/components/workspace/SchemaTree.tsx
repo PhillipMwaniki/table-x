@@ -250,13 +250,11 @@ function TreeNode({
 
   // Anything with rows to show opens as a tab. Functions, triggers, and
   // sequences are listed but not opened: there is nothing to select from them.
-  const opens =
-    node.kind === "table" || node.kind === "view" || node.kind === "materialized_view";
+  const opens = node.kind === "table" || node.kind === "view" || node.kind === "materialized_view";
   // For a routine or a trigger the script *is* the object: there are no rows to
   // show, so a click that did nothing would be the only thing this list does
   // nothing for.
-  const scripted =
-    node.kind === "function" || node.kind === "procedure" || node.kind === "trigger";
+  const scripted = node.kind === "function" || node.kind === "procedure" || node.kind === "trigger";
   const isDatabase = node.kind === "database";
   const isActiveDatabase = isDatabase && node.name === activeDatabase;
 
@@ -351,7 +349,10 @@ function TreeNode({
       </div>
 
       {expanded && error && (
-        <p style={{ paddingLeft: (depth + 1) * 12 + 20 }} className="py-1 text-[10.5px] text-danger">
+        <p
+          style={{ paddingLeft: (depth + 1) * 12 + 20 }}
+          className="py-1 text-[10.5px] text-danger"
+        >
           {error}
         </p>
       )}

@@ -55,7 +55,11 @@ describe("menuFor", () => {
   });
 
   it("offers a table everything a table can do", () => {
-    const items = labels(node("table"), { driver: "mysql", tableScripts: true, foreignKeys: true, privileges: true }, actions);
+    const items = labels(
+      node("table"),
+      { driver: "mysql", tableScripts: true, foreignKeys: true, privileges: true },
+      actions,
+    );
 
     expect(items).toContain("Open rows");
     expect(items).toContain("New tab: SELECT");
@@ -71,7 +75,11 @@ describe("menuFor", () => {
   it("does not offer to import into a view", () => {
     // Many views are not insertable at all, and which ones are is a question
     // the menu cannot answer — so it does not ask it.
-    const items = labels(node("view"), { driver: "mysql", tableScripts: true, foreignKeys: true, privileges: true }, actions);
+    const items = labels(
+      node("view"),
+      { driver: "mysql", tableScripts: true, foreignKeys: true, privileges: true },
+      actions,
+    );
     expect(items).not.toContain("Import CSV file…");
   });
 
@@ -79,14 +87,22 @@ describe("menuFor", () => {
     // PostgreSQL has no catalogue function that renders a table, and SQL
     // Server's OBJECT_DEFINITION returns nothing for one. An item that fails
     // when clicked is worse than an item that is not there.
-    const items = labels(node("table"), { driver: "postgres", tableScripts: false, foreignKeys: true, privileges: true }, actions);
+    const items = labels(
+      node("table"),
+      { driver: "postgres", tableScripts: false, foreignKeys: true, privileges: true },
+      actions,
+    );
     expect(items).not.toContain("Show CREATE statement");
     expect(items).toContain("Open rows");
   });
 
   it("does not offer to truncate a view", () => {
     // A view holds no rows of its own; the statement would be a category error.
-    const items = labels(node("view"), { driver: "mysql", tableScripts: true, foreignKeys: true, privileges: true }, actions);
+    const items = labels(
+      node("view"),
+      { driver: "mysql", tableScripts: true, foreignKeys: true, privileges: true },
+      actions,
+    );
     expect(items).not.toContain("Truncate table…");
     expect(items).toContain("Drop view…");
     // A view's rows export exactly as well as a table's.
@@ -94,7 +110,11 @@ describe("menuFor", () => {
   });
 
   it("offers a routine its script and nothing about rows", () => {
-    const items = labels(node("function"), { driver: "mysql", tableScripts: true, foreignKeys: true, privileges: true }, actions);
+    const items = labels(
+      node("function"),
+      { driver: "mysql", tableScripts: true, foreignKeys: true, privileges: true },
+      actions,
+    );
     expect(items).toContain("Edit script");
     expect(items).not.toContain("Open rows");
     expect(items).not.toContain("Drop table…");
@@ -103,10 +123,14 @@ describe("menuFor", () => {
   });
 
   it("omits refresh for a node with no children to re-fetch", () => {
-    const items = labels(node("function"), { driver: "mysql", tableScripts: true, foreignKeys: true, privileges: true }, {
-      ...actions,
-      onRefresh: null,
-    });
+    const items = labels(
+      node("function"),
+      { driver: "mysql", tableScripts: true, foreignKeys: true, privileges: true },
+      {
+        ...actions,
+        onRefresh: null,
+      },
+    );
     expect(items).not.toContain("Refresh");
   });
 
@@ -124,8 +148,13 @@ describe("menuFor", () => {
   it("gives every menu at least one usable item or none at all", () => {
     // A menu that opens empty is a menu that should not have opened.
     for (const kind of ["table", "view", "function", "trigger"] as NodeKind[]) {
-      expect(labels(node(kind), { driver: "mysql", tableScripts: true, foreignKeys: true, privileges: true }, actions).length)
-        .toBeGreaterThan(0);
+      expect(
+        labels(
+          node(kind),
+          { driver: "mysql", tableScripts: true, foreignKeys: true, privileges: true },
+          actions,
+        ).length,
+      ).toBeGreaterThan(0);
     }
   });
 });

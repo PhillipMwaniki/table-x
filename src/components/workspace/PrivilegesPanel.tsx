@@ -113,7 +113,9 @@ export function PrivilegesPanel({
                   onClick={() => setSelected(p.name)}
                   className={cx(
                     "flex w-full items-center gap-1.5 px-2 py-1 text-left text-[12px]",
-                    selected === p.name ? "bg-surface-3 text-text" : "text-text-muted hover:bg-surface-2",
+                    selected === p.name
+                      ? "bg-surface-3 text-text"
+                      : "text-text-muted hover:bg-surface-2",
                   )}
                 >
                   <PrincipalIcon principal={p} />
@@ -181,19 +183,14 @@ export function PrivilegesPanel({
                     >
                       <td className="w-44 px-2 py-1 align-top">
                         <span
-                          className={cx(
-                            "font-medium",
-                            grant.denied ? "text-danger" : "text-text",
-                          )}
+                          className={cx("font-medium", grant.denied ? "text-danger" : "text-text")}
                         >
                           {grant.denied && "DENY "}
                           {grant.privilege}
                         </span>
                       </td>
                       <td className="px-2 py-1 align-top font-mono text-text-muted">
-                        {grant.object ?? (
-                          <span className="italic">server-wide</span>
-                        )}
+                        {grant.object ?? <span className="italic">server-wide</span>}
                       </td>
                       <td className="w-24 px-2 py-1 align-top text-[10.5px] text-text-muted">
                         {grant.grantable && "may re-grant"}
@@ -204,10 +201,7 @@ export function PrivilegesPanel({
                           // Opened rather than run: revoking is not something
                           // to do by clicking a row in a list.
                           onClick={() =>
-                            onOpenScript(
-                              `Revoke — ${grant.grantee}`,
-                              revokeSql(grant, quote),
-                            )
+                            onOpenScript(`Revoke — ${grant.grantee}`, revokeSql(grant, quote))
                           }
                           className="text-[10.5px] text-text-muted opacity-0 transition-opacity hover:text-danger group-hover:opacity-100"
                         >

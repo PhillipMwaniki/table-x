@@ -61,10 +61,7 @@ describe("groupConnections", () => {
   });
 
   it("keeps the order connections arrived in within a folder", () => {
-    const groups = groupConnections([
-      connection("second", "Work"),
-      connection("first", "Work"),
-    ]);
+    const groups = groupConnections([connection("second", "Work"), connection("first", "Work")]);
     expect(groups[0]!.connections.map((c) => c.name)).toEqual(["second", "first"]);
   });
 

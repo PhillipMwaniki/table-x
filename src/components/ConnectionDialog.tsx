@@ -325,9 +325,7 @@ export function ConnectionDialog({
             >
               <Select
                 value={config.tls.mode}
-                onChange={(e) =>
-                  patch({ tls: { ...config.tls, mode: e.target.value as TlsMode } })
-                }
+                onChange={(e) => patch({ tls: { ...config.tls, mode: e.target.value as TlsMode } })}
               >
                 <option value="prefer">Prefer</option>
                 <option value="verify_full">Require and verify</option>
@@ -350,7 +348,7 @@ export function ConnectionDialog({
                 return next;
               })
             }
-            storedCount={editing ? ((config.ssh?.via?.length ?? 0) + 1) : 0}
+            storedCount={editing ? (config.ssh?.via?.length ?? 0) + 1 : 0}
           />
         )}
 

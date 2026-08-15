@@ -59,14 +59,7 @@ export type Value =
 // ---------------------------------------------------------------------------
 
 export type ErrorCategory =
-  | "connection"
-  | "auth"
-  | "query"
-  | "cancelled"
-  | "timeout"
-  | "unsupported"
-  | "config"
-  | "internal";
+  "connection" | "auth" | "query" | "cancelled" | "timeout" | "unsupported" | "config" | "internal";
 
 /** The single error shape every command rejects with. */
 export interface ErrorPayload {

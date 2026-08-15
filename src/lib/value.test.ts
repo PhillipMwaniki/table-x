@@ -7,7 +7,15 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { cellClass, editText, formatValue, isNumeric, kindOf, parseEdit, previewValue } from "./value";
+import {
+  cellClass,
+  editText,
+  formatValue,
+  isNumeric,
+  kindOf,
+  parseEdit,
+  previewValue,
+} from "./value";
 import type { Value } from "./types";
 
 describe("formatValue", () => {
@@ -38,9 +46,9 @@ describe("formatValue", () => {
   });
 
   it("shows unsupported types as their raw value", () => {
-    expect(
-      formatValue({ kind: "unsupported", value: { type_name: "point", raw: "(1,2)" } }),
-    ).toBe("(1,2)");
+    expect(formatValue({ kind: "unsupported", value: { type_name: "point", raw: "(1,2)" } })).toBe(
+      "(1,2)",
+    );
   });
 
   it("renders arrays elementwise including nulls", () => {

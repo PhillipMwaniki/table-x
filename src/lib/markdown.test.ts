@@ -98,7 +98,10 @@ describe("inline", () => {
 
     for (const href of ["data:text/html,<script>", "vbscript:x", "JavaScript:x"]) {
       const nodes = parseInline(`[x](${href})`);
-      expect(nodes.every((n) => n.kind !== "link"), href).toBe(true);
+      expect(
+        nodes.every((n) => n.kind !== "link"),
+        href,
+      ).toBe(true);
     }
   });
 

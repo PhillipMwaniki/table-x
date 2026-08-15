@@ -123,11 +123,9 @@ export const useSettings = create<SettingsState>((set, get) => {
 
       // Following the OS means following it while the app is open, not only at
       // launch.
-      window
-        .matchMedia?.("(prefers-color-scheme: dark)")
-        .addEventListener("change", () => {
-          if (get().theme === "system") apply(get());
-        });
+      window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener("change", () => {
+        if (get().theme === "system") apply(get());
+      });
     },
 
     setTheme: (theme) => commit({ theme }),

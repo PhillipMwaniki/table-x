@@ -92,14 +92,10 @@ function TabButton({
       </span>
 
       <span className="flex min-w-0 flex-col leading-tight">
-        <span
-          className={cx("truncate text-[11.5px]", active ? "text-text" : "text-text-muted")}
-        >
+        <span className={cx("truncate text-[11.5px]", active ? "text-text" : "text-text-muted")}>
           {tab.title}
         </span>
-        {context && (
-          <span className="truncate text-[9.5px] text-text-muted/80">{context}</span>
-        )}
+        {context && <span className="truncate text-[9.5px] text-text-muted/80">{context}</span>}
       </span>
 
       {tab.running && (

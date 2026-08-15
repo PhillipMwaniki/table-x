@@ -58,8 +58,8 @@ export function DiffView({
       <div className="flex shrink-0 items-center gap-2 border-b border-border bg-surface-1 px-2 py-1">
         <span className="text-[11px] text-text-muted">
           <span className="font-medium text-text">{report.from}</span> →{" "}
-          <span className="font-medium text-text">{report.to}</span> ·{" "}
-          {report.changes.length} change{report.changes.length === 1 ? "" : "s"}
+          <span className="font-medium text-text">{report.to}</span> · {report.changes.length}{" "}
+          change{report.changes.length === 1 ? "" : "s"}
         </span>
         {destructive > 0 && (
           <span className="rounded bg-danger/15 px-1.5 py-0.5 text-[10px] font-medium text-danger">
