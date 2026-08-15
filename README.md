@@ -121,7 +121,7 @@ Milestone 1 ("core + power features") is the current target.
 | ✅ | **Schema browser** | Lazily expanded object tree with per-node caching. |
 | ✅ | **SQL editor** | CodeMirror 6, schema-aware autocomplete, run-selection, error positioning. |
 | ✅ | **Result grid** | Virtualized rows, inline editing, sorting, filtering, undo/redo. |
-| ✅ | **SSH tunnels** | Password / private key / agent auth, mandatory host key verification with a confirmation flow. |
+| ✅ | **SSH tunnels** | Password / private key / agent auth, multi-hop chains (ProxyJump), mandatory per-hop host key verification. Tested end to end against an in-process SSH server. |
 | ✅ | **Query history** | Every run persisted with its timing and outcome, searchable across connections. 10 tests. |
 | ✅ | **Appearance** | Six themes plus follow-system, data and interface fonts, adjustable data size. 12 tests. |
 | 🚧 | **Multi-tab workspace** | Query and table tabs, each carrying its database; resizable editor/results split. Session restore not started. |
