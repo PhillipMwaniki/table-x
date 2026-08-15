@@ -11,6 +11,7 @@ use rusqlite::OptionalExtension;
 use std::sync::{Arc, Mutex};
 use tablex_core::{
     config::ConnectionConfig,
+    plan::{Plan, PlanRow},
     driver::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
         PlaceholderStyle, RowEdit, RowSink, STREAM_BATCH,
@@ -50,6 +51,7 @@ impl Driver for SqliteDriver {
                 transactions: true,
                 multi_statement: true,
                 explain: true,
+                explain_analyze: false,
                 foreign_keys: true,
                 views: true,
                 // SQLite has no schemas; attached databases are a different
@@ -207,6 +209,49 @@ impl Connection for SqliteConnection {
         // The file path is the closest thing to a database name here, and the
         // UI already shows it. Reporting none keeps the database switcher off.
         Ok(None)
+    }
+
+    /// `EXPLAIN QUERY PLAN` — rows carrying their own parent pointers.
+    ///
+    /// SQLite prints no costs and no row estimates, and this does not invent
+    /// any. What it does print is a readable sentence per step — `SCAN users`,
+    /// `SEARCH orders USING INDEX ix_user (user_id=?)` — which is kept whole
+    /// rather than split into a label and a detail. Splitting it would mean
+    /// guessing where the verb ends, and every guess reads worse than the
+    /// sentence SQLite already wrote.
+    async fn explain(&mut self, sql: &str, _analyze: bool) -> Result<Plan> {
+        let statement = format!("EXPLAIN QUERY PLAN {sql}");
+        let rows = self
+            .with_conn(move |conn| {
+                let mut stmt = conn.prepare(&statement).map_err(map_err)?;
+                let mapped = stmt
+                    .query_map([], |row| {
+                        Ok(PlanRow {
+                            id: row.get(0)?,
+                            parent: row.get(1)?,
+                            label: row.get::<_, String>(3)?,
+                            detail: None,
+                            rows: None,
+                            cost: None,
+                        })
+                    })
+                    .map_err(map_err)?
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(map_err)?;
+                Ok(mapped)
+            })
+            .await?;
+
+        let raw = rows
+            .iter()
+            .map(|r| format!("{}|{}|{}", r.id, r.parent, r.label))
+            .collect::<Vec<_>>()
+            .join("\n");
+        Ok(Plan {
+            root: tablex_core::plan::from_parent_rows(rows, "Query"),
+            analyzed: false,
+            raw,
+        })
     }
 
     /// Stream rows straight off the statement.

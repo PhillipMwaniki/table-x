@@ -13,6 +13,7 @@ import type {
   ConnectionConfig,
   CsvPreview,
   DriverInfo,
+  Plan,
   ServerActivity,
   ErrorCategory,
   ErrorPayload,
@@ -168,6 +169,10 @@ export const ipc = {
     database: string;
     path: string;
   }) => call<number>("export_database", { request: args }),
+
+  /** How the engine intends to run a statement. */
+  explain: (connection_id: string, sql: string, analyze: boolean) =>
+    call<Plan>("explain", { connection_id, sql, analyze }),
 
   /** What the server is doing right now. Never cached — that is the point. */
   serverActivity: (connection_id: string) =>

@@ -16,6 +16,7 @@ use futures_util::StreamExt;
 use tablex_core::{
     activity::ServerActivity,
     config::{ConnectionConfig, TlsMode},
+    plan::Plan,
     driver::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
         PlaceholderStyle, RowEdit, RowSink, STREAM_BATCH,
@@ -55,6 +56,7 @@ impl Driver for PostgresDriver {
                 transactions: true,
                 multi_statement: true,
                 explain: true,
+                explain_analyze: true,
                 schemas: true,
                 databases: true,
                 foreign_keys: true,
@@ -182,6 +184,24 @@ where
     });
 }
 
+impl PostgresConnection {
+    /// Run an EXPLAIN and return its single JSON cell.
+    ///
+    /// `simple_query` rather than `query`: the result column has type `json`,
+    /// and the simple protocol hands back every value as text regardless of
+    /// type, which is exactly what a parser wants.
+    async fn explain_text(&self, sql: &str) -> Result<String> {
+        let messages = self.client.simple_query(sql).await.map_err(map_err)?;
+        messages
+            .iter()
+            .find_map(|m| match m {
+                tokio_postgres::SimpleQueryMessage::Row(row) => row.get(0).map(str::to_string),
+                _ => None,
+            })
+            .ok_or_else(|| Error::query("the server returned no plan"))
+    }
+}
+
 pub struct PostgresConnection {
     client: Client,
     /// The database this session is attached to. Fixed for its lifetime — the
@@ -223,6 +243,41 @@ impl Connection for PostgresConnection {
 
     async fn definition(&mut self, node_id: &str) -> Result<String> {
         introspect::definition(&self.client, node_id).await
+    }
+
+    /// Ask the planner, and — when asked to measure — take it back afterwards.
+    ///
+    /// `EXPLAIN ANALYZE` runs the statement. That is the whole point of it and
+    /// also its hazard: analyzing a DELETE deletes. Wrapping it in a
+    /// transaction that is unconditionally rolled back is what makes the
+    /// measured plan safe to offer on any statement rather than only on reads.
+    async fn explain(&mut self, sql: &str, analyze: bool) -> Result<Plan> {
+        if !analyze {
+            let raw = self
+                .explain_text(&format!("EXPLAIN (FORMAT JSON) {sql}"))
+                .await?;
+            return Ok(Plan {
+                root: tablex_core::plan::from_postgres_json(&raw)?,
+                analyzed: false,
+                raw,
+            });
+        }
+
+        self.client.batch_execute("BEGIN").await.map_err(map_err)?;
+        let measured = self
+            .explain_text(&format!("EXPLAIN (FORMAT JSON, ANALYZE, VERBOSE) {sql}"))
+            .await;
+        // Rolled back before the result is unwrapped, so a statement that
+        // failed halfway still leaves nothing behind.
+        let undone = self.client.batch_execute("ROLLBACK").await;
+
+        let raw = measured?;
+        undone.map_err(map_err)?;
+        Ok(Plan {
+            root: tablex_core::plan::from_postgres_json(&raw)?,
+            analyzed: true,
+            raw,
+        })
     }
 
     async fn activity(&mut self) -> Result<ServerActivity> {

@@ -7,6 +7,7 @@
 use crate::{
     activity::ServerActivity,
     config::ConnectionConfig,
+    plan::Plan,
     error::Result,
     result::{Column, QueryOutcome},
     schema::{SchemaNode, TableDetail},
@@ -26,6 +27,14 @@ pub struct Capabilities {
     pub multi_statement: bool,
     /// `EXPLAIN` or equivalent.
     pub explain: bool,
+    /// Whether the plan can be measured rather than estimated.
+    ///
+    /// Separate from `explain` because measuring means *running* the statement,
+    /// and only PostgreSQL can be asked to do that and then take it back — its
+    /// `EXPLAIN ANALYZE` works inside a transaction that this driver rolls
+    /// back, so explaining a DELETE does not perform one. Everywhere else the
+    /// toggle is not offered rather than offered and quietly ignored.
+    pub explain_analyze: bool,
     pub schemas: bool,
     /// Whether one server holds several databases the user can move between.
     /// False for file-backed engines, where the connection *is* the database.
@@ -65,6 +74,7 @@ impl Default for Capabilities {
             cancel: false,
             multi_statement: false,
             explain: false,
+            explain_analyze: false,
             schemas: false,
             databases: false,
             foreign_keys: false,
@@ -255,6 +265,17 @@ pub trait Connection: Send + Sync {
     async fn definition(&mut self, _node_id: &str) -> Result<String> {
         Err(crate::error::Error::Unsupported(
             "this driver cannot show object definitions".into(),
+        ))
+    }
+
+    /// How the engine intends to run this statement.
+    ///
+    /// `analyze` asks for measured numbers rather than estimated ones, and is
+    /// only ever passed to a driver that advertises
+    /// [`Capabilities::explain_analyze`].
+    async fn explain(&mut self, _sql: &str, _analyze: bool) -> Result<Plan> {
+        Err(crate::error::Error::Unsupported(
+            "this driver cannot explain a statement".into(),
         ))
     }
 

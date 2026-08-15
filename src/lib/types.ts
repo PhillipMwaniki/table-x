@@ -90,6 +90,7 @@ export interface Capabilities {
   cancel: boolean;
   multi_statement: boolean;
   explain: boolean;
+  explain_analyze: boolean;
   schemas: boolean;
   /** Whether one server holds several databases the user can move between. */
   databases: boolean;
@@ -240,6 +241,29 @@ export interface SchemaNode {
 
 /** File formats a table can be written out as. */
 export type ExportFormat = "csv" | "json" | "sql";
+
+/** One step in a query plan. */
+export interface PlanNode {
+  /** What this step does: `Seq Scan`, `Hash Join`. */
+  label: string;
+  detail: string | null;
+  /** Rows the planner expects. */
+  rows: number | null;
+  /** Rows there actually were. Only present when the statement was run. */
+  actual_rows: number | null;
+  /** Cost of this step *and everything below it*, in the engine's own units. */
+  cost: number | null;
+  actual_ms: number | null;
+  children: PlanNode[];
+}
+
+export interface Plan {
+  root: PlanNode;
+  /** Whether the numbers are measured rather than guessed. */
+  analyzed: boolean;
+  /** The engine's own output, unmodified. */
+  raw: string;
+}
 
 /** One session the server reports as connected. */
 export interface ServerSession {

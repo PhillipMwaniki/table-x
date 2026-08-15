@@ -13,7 +13,14 @@
 
 import { create } from "zustand";
 import { ipc, IpcError } from "@/lib/ipc";
-import type { CompletionScope, QueryOutcome, RowEdit, StatementResult, Value } from "@/lib/types";
+import type {
+  CompletionScope,
+  Plan,
+  QueryOutcome,
+  RowEdit,
+  StatementResult,
+  Value,
+} from "@/lib/types";
 
 /** One applied cell edit, retained so it can be reversed. */
 export interface AppliedEdit {
@@ -56,6 +63,8 @@ export interface Tab {
   error: QueryError | null;
   /** A one-off success message — an export that finished, say. */
   notice?: string | undefined;
+  /** A plan being shown in place of this tab's results. */
+  plan?: Plan | null;
   running: boolean;
   /** Index of the statement whose results are shown. */
   activeStatement: number;
@@ -146,6 +155,8 @@ interface WorkspaceState {
     columnIndex: number,
     next: Value,
   ) => Promise<void>;
+  explain: (connectionId: string, tabId: string, analyze: boolean) => Promise<void>;
+  clearPlan: (connectionId: string, tabId: string) => void;
   undo: (connectionId: string, tabId: string) => Promise<void>;
   redo: (connectionId: string, tabId: string) => Promise<void>;
   reset: (connectionId: string) => void;
@@ -349,6 +360,31 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     }
   },
 
+  explain: async (id, tabId, analyze) => {
+    const tab = tabsOf(get(), id).find((t) => t.id === tabId);
+    if (!tab) return;
+    const sql = tab.sql.trim();
+    if (!sql) return;
+
+    set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { running: true, error: null }) }));
+    try {
+      const plan = await ipc.explain(id, sql, analyze);
+      set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { plan, running: false }) }));
+    } catch (e) {
+      const error = e as IpcError;
+      set((s) => ({
+        tabs: patchTab(s.tabs, id, tabId, {
+          running: false,
+          error: { message: error.message, code: error.code, position: error.position },
+        }),
+      }));
+    }
+  },
+
+  clearPlan: (id, tabId) => {
+    set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { plan: null }) }));
+  },
+
   run: async (id, tabId, sqlOverride) => {
     const tab = tabsOf(get(), id).find((t) => t.id === tabId);
     if (!tab) return;
@@ -359,7 +395,12 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (tab.running) return;
 
     set((s) => ({
-      tabs: patchTab(s.tabs, id, tabId, { running: true, error: null, notice: undefined }),
+      tabs: patchTab(s.tabs, id, tabId, {
+        running: true,
+        error: null,
+        notice: undefined,
+        plan: null,
+      }),
     }));
     try {
       const outcome = await ipc.execute({ connection_id: id, sql });

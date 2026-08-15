@@ -954,3 +954,82 @@ async fn streaming_a_write_statement_is_refused() {
         .expect_err("a write has no rows to stream");
     assert!(err.to_string().contains("no rows"), "{err}");
 }
+
+#[tokio::test]
+async fn explains_a_query_as_a_tree() {
+    let mut conn = seeded().await;
+    let plan = conn
+        .explain("SELECT * FROM users WHERE email = 'a@example.com'", false)
+        .await
+        .expect("explain");
+
+    // SQLite plans a unique-index lookup for this, which is the whole reason the
+    // plan is worth showing: the same query without the index is a full scan.
+    assert!(
+        plan.root.label.contains("SEARCH") && plan.root.label.contains("users"),
+        "unexpected plan: {:?}",
+        plan.root
+    );
+    // Estimates are not invented where the engine reports none.
+    assert_eq!(plan.root.rows, None);
+    assert_eq!(plan.root.cost, None);
+    assert!(!plan.analyzed);
+    assert!(!plan.raw.is_empty());
+}
+
+#[tokio::test]
+async fn a_join_plan_has_a_step_per_table() {
+    let mut conn = seeded().await;
+    exec(
+        &mut conn,
+        "CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER, total DECIMAL(10,2))",
+    )
+    .await;
+
+    let plan = conn
+        .explain(
+            "SELECT u.email, o.total FROM users u JOIN orders o ON o.user_id = u.id",
+            false,
+        )
+        .await
+        .expect("explain");
+
+    // Both sides have to appear somewhere in the tree — a plan that lost one
+    // would be a plan of a different query. SQLite names them by their aliases
+    // rather than their tables, which is what it prints and what the user
+    // wrote, so that is what is checked.
+    let mut labels = Vec::new();
+    fn collect(node: &tablex_core::plan::PlanNode, out: &mut Vec<String>) {
+        out.push(node.label.clone());
+        for child in &node.children {
+            collect(child, out);
+        }
+    }
+    collect(&plan.root, &mut labels);
+    let all = labels.join(" | ");
+    assert!(all.contains("SCAN o"), "{all}");
+    assert!(all.contains("SEARCH u"), "{all}");
+
+    // Two tables being joined are siblings, not one under the other, so the
+    // wrapper root is kept rather than one of them being promoted over it.
+    assert_eq!(plan.root.label, "Query");
+    assert_eq!(plan.root.children.len(), 2);
+}
+
+#[tokio::test]
+async fn explaining_a_broken_statement_reports_the_syntax_error() {
+    // Not "could not read the plan": the statement is what is wrong, and the
+    // message has to say so or the user goes looking in the wrong place.
+    let mut conn = seeded().await;
+    let err = conn
+        .explain("SELECT * FROM", false)
+        .await
+        .expect_err("a broken statement has no plan");
+
+    // SQLite words this one "incomplete input" rather than "syntax error", so
+    // what is pinned is that the engine's own complaint survives — not that
+    // this became a "could not read the plan", which would send the user
+    // looking at the wrong thing.
+    assert!(matches!(err, Error::Query { .. }), "{err:?}");
+    assert!(err.to_string().contains("incomplete input"), "{err}");
+}

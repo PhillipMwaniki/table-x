@@ -877,6 +877,22 @@ pub async fn table_detail(
     Ok(guard.table_detail(schema.as_deref(), &table).await?)
 }
 
+/// How the engine intends to run a statement.
+///
+/// `analyze` measures instead of estimating, which means running the statement.
+/// Only offered where the driver can also undo it — see the capability.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn explain(
+    state: tauri::State<'_, AppState>,
+    connection_id: String,
+    sql: String,
+    analyze: bool,
+) -> IpcResult<tablex_core::plan::Plan> {
+    let session = state.sessions.get(&connection_id).await?;
+    let mut guard = session.connection.lock().await;
+    Ok(guard.explain(&sql, analyze).await?)
+}
+
 /// What the server is doing right now.
 ///
 /// Read fresh on every call and never cached: an activity list that is a minute

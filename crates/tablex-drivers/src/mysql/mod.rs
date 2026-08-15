@@ -15,6 +15,7 @@ use async_trait::async_trait;
 use tablex_core::{
     activity::ServerActivity,
     config::{ConnectionConfig, TlsMode},
+    plan::Plan,
     driver::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
         PlaceholderStyle, RowEdit, RowSink, STREAM_BATCH,
@@ -136,6 +137,7 @@ impl Driver for MysqlDriver {
                 transactions: true,
                 multi_statement: true,
                 explain: true,
+                explain_analyze: false,
                 foreign_keys: true,
                 views: true,
                 stored_procedures: true,
@@ -245,6 +247,26 @@ impl Connection for MysqlConnection {
 
     async fn current_database(&mut self) -> Result<Option<String>> {
         Ok(self.default_db.clone())
+    }
+
+    /// Estimates only.
+    ///
+    /// MySQL's `EXPLAIN ANALYZE` exists from 8.0.18 but returns a text tree in
+    /// a different format from the JSON one, refuses anything that is not a
+    /// SELECT, and does not exist on MariaDB at all. The capability says so
+    /// rather than the toggle being offered and doing nothing.
+    async fn explain(&mut self, sql: &str, _analyze: bool) -> Result<Plan> {
+        let raw: Option<String> = self
+            .conn
+            .query_first(format!("EXPLAIN FORMAT=JSON {sql}"))
+            .await
+            .map_err(map_err)?;
+        let raw = raw.ok_or_else(|| Error::query("the server returned no plan"))?;
+        Ok(Plan {
+            root: tablex_core::plan::from_mysql_json(&raw)?,
+            analyzed: false,
+            raw,
+        })
     }
 
     async fn activity(&mut self) -> Result<ServerActivity> {

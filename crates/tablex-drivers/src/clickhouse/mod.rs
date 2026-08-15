@@ -26,6 +26,7 @@ use futures_util::StreamExt;
 use tablex_core::{
     activity::ServerActivity,
     config::{ConnectionConfig, TlsMode},
+    plan::Plan,
     driver::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
         PlaceholderStyle, RowEdit, RowSink, STREAM_BATCH,
@@ -108,6 +109,7 @@ impl Driver for ClickhouseDriver {
                 // single partition, so they are not advertised.
                 transactions: false,
                 explain: true,
+                explain_analyze: false,
                 // ClickHouse's database is its only container level.
                 schemas: false,
                 databases: true,
@@ -242,6 +244,21 @@ impl Connection for ClickhouseConnection {
 
     async fn current_database(&mut self) -> Result<Option<String>> {
         Ok(Some(self.database.clone()))
+    }
+
+    /// ClickHouse prints an indented text plan, so depth is the indentation.
+    async fn explain(&mut self, sql: &str, _analyze: bool) -> Result<Plan> {
+        let rows = self.rows_of(&format!("EXPLAIN {sql}")).await?;
+        let raw = rows
+            .iter()
+            .filter_map(|r| r.first().cloned())
+            .collect::<Vec<_>>()
+            .join("\n");
+        Ok(Plan {
+            root: tablex_core::plan::from_indented(&raw, "Plan"),
+            analyzed: false,
+            raw,
+        })
     }
 
     async fn activity(&mut self) -> Result<ServerActivity> {

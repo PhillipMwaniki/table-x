@@ -19,6 +19,7 @@ use async_trait::async_trait;
 use tablex_core::{
     activity::ServerActivity,
     config::{ConnectionConfig, TlsMode},
+    plan::{Plan, PlanRow},
     driver::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
         PlaceholderStyle, RowEdit, RowSink, STREAM_BATCH,
@@ -130,6 +131,7 @@ impl Driver for MssqlDriver {
                 transactions: true,
                 multi_statement: true,
                 explain: true,
+                explain_analyze: false,
                 schemas: true,
                 databases: true,
                 foreign_keys: true,
@@ -256,6 +258,57 @@ impl Connection for MssqlConnection {
 
     async fn current_database(&mut self) -> Result<Option<String>> {
         Ok(Some(self.database.clone()))
+    }
+
+    /// `SHOWPLAN_ALL` — the plan as rows, with NodeId/Parent pointers.
+    ///
+    /// The XML plan carries more, but it carries it as a document that would
+    /// need its own parser; `SHOWPLAN_ALL` hands back the same tree already
+    /// flattened into rows, with the estimated row count and the cumulative
+    /// subtree cost on each one. Nothing is executed while it is on.
+    ///
+    /// It has to be its own batch, which is the awkward part: the setting stays
+    /// on for the session, and a session left with it on returns plans instead
+    /// of results for every query afterwards. So it is turned off in all cases,
+    /// including the one where the statement being explained was the thing that
+    /// failed.
+    async fn explain(&mut self, sql: &str, _analyze: bool) -> Result<Plan> {
+        self.client
+            .simple_query("SET SHOWPLAN_ALL ON")
+            .await
+            .map_err(map_err)?
+            .into_results()
+            .await
+            .map_err(map_err)?;
+
+        let planned = self.showplan_rows(sql).await;
+
+        let restored = self
+            .client
+            .simple_query("SET SHOWPLAN_ALL OFF")
+            .await
+            .map_err(map_err);
+        let rows = planned?;
+        restored?.into_results().await.map_err(map_err)?;
+
+        let raw = rows
+            .iter()
+            .map(|r| {
+                format!(
+                    "{}|{}|{}|{}",
+                    r.id,
+                    r.parent,
+                    r.label,
+                    r.cost.unwrap_or_default()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        Ok(Plan {
+            root: tablex_core::plan::from_parent_rows(rows, "Query"),
+            analyzed: false,
+            raw,
+        })
     }
 
     async fn activity(&mut self) -> Result<ServerActivity> {
@@ -615,6 +668,51 @@ impl MssqlConnection {
         Ok(rows
             .iter()
             .filter_map(|r| r.get::<&str, _>(0).map(str::to_string))
+            .collect())
+    }
+
+    /// The rows `SHOWPLAN_ALL` produces for one statement.
+    ///
+    /// The first row of a plan is the statement itself with no operator, and
+    /// its `Parent` is 0 — so it becomes the root by the same rule every other
+    /// row follows, without being special-cased.
+    async fn showplan_rows(&mut self, sql: &str) -> Result<Vec<PlanRow>> {
+        let rows = self
+            .client
+            .simple_query(sql)
+            .await
+            .map_err(map_err)?
+            .into_first_result()
+            .await
+            .map_err(map_err)?;
+
+        Ok(rows
+            .iter()
+            .map(|r| {
+                let text = |name: &str| r.get::<&str, _>(name).map(str::to_string);
+                // PhysicalOp is empty on the statement row, where StmtText is
+                // the statement; on every other row StmtText is a drawn tree
+                // fragment and the operator is the readable name.
+                let label = text("PhysicalOp")
+                    .filter(|op| !op.is_empty())
+                    .or_else(|| text("StmtText").map(|t| t.trim().to_string()))
+                    .unwrap_or_else(|| "?".into());
+                let detail = match (text("LogicalOp"), text("Argument")) {
+                    (Some(logical), Some(argument)) if !logical.is_empty() && !argument.is_empty() => {
+                        Some(format!("{logical} · {argument}"))
+                    }
+                    (logical, argument) => logical.filter(|v| !v.is_empty())
+                        .or(argument.filter(|v| !v.is_empty())),
+                };
+                PlanRow {
+                    id: r.get::<i32, _>("NodeId").unwrap_or_default() as i64,
+                    parent: r.get::<i32, _>("Parent").unwrap_or_default() as i64,
+                    label,
+                    detail,
+                    rows: r.get::<f64, _>("EstimateRows"),
+                    cost: r.get::<f64, _>("TotalSubtreeCost"),
+                }
+            })
             .collect())
     }
 

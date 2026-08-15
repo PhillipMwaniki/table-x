@@ -18,6 +18,7 @@ import { ExportProgress } from "./ExportProgress";
 import { SplitHandle } from "./SplitHandle";
 import { CsvImportDialog } from "./CsvImportDialog";
 import { ActivityPanel } from "./ActivityPanel";
+import { PlanView } from "./PlanView";
 import { Button, Spinner, cx } from "../ui/primitives";
 import { ContextMenu } from "../ui/ContextMenu";
 import type { MenuItem } from "../ui/ContextMenu";
@@ -79,6 +80,8 @@ export function Workspace({
     setTabNotice,
     useDatabase,
     applyEdit,
+    explain,
+    clearPlan,
     undo,
     redo,
   } = useWorkspace();
@@ -500,6 +503,16 @@ export function Workspace({
         },
       },
       {
+        id: "ws.explain",
+        title: "Explain statement",
+        group: "Query",
+        shortcut: "Ctrl+Shift+E",
+        run: () => {
+          const current = activeTab(connection.id);
+          if (current) void explain(connection.id, current.id, false);
+        },
+      },
+      {
         id: "ws.activity",
         title: "Show server activity",
         group: "Data",
@@ -607,6 +620,28 @@ export function Workspace({
                   title="Format SQL (Ctrl+Shift+F)"
                 >
                   Format
+                </Button>
+              )}
+              {tab.kind === "query" && driver?.capabilities.explain && (
+                <Button
+                  variant="ghost"
+                  className="h-6"
+                  disabled={!tab.sql.trim()}
+                  onClick={() => void explain(connection.id, tab.id, false)}
+                  title="Show how the engine intends to run this (Ctrl+Shift+E)"
+                >
+                  Explain
+                </Button>
+              )}
+              {tab.kind === "query" && driver?.capabilities.explain_analyze && (
+                <Button
+                  variant="ghost"
+                  className="h-6"
+                  disabled={!tab.sql.trim()}
+                  onClick={() => void explain(connection.id, tab.id, true)}
+                  title="Run it inside a transaction that is rolled back, and measure"
+                >
+                  Analyze
                 </Button>
               )}
               <Button
@@ -724,7 +759,9 @@ export function Workspace({
                 />
               )}
 
-              {tab.running && !tab.outcome ? (
+              {tab.plan ? (
+                <PlanView plan={tab.plan} onClose={() => clearPlan(connection.id, tab.id)} />
+              ) : tab.running && !tab.outcome ? (
                 <div className="flex flex-1 items-center justify-center">
                   <Spinner className="text-text-muted" />
                 </div>
