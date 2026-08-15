@@ -877,6 +877,17 @@ pub async fn table_detail(
     Ok(guard.table_detail(schema.as_deref(), &table).await?)
 }
 
+/// Who exists on this server, and what each of them can reach.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn privileges(
+    state: tauri::State<'_, AppState>,
+    connection_id: String,
+) -> IpcResult<tablex_core::privileges::Privileges> {
+    let session = state.sessions.get(&connection_id).await?;
+    let mut guard = session.connection.lock().await;
+    Ok(guard.privileges().await?)
+}
+
 /// One side of a comparison.
 #[derive(Deserialize)]
 pub struct CompareSide {

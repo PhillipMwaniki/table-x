@@ -16,6 +16,7 @@ import type {
   DiffReport,
   DriverInfo,
   Plan,
+  Privileges,
   ServerActivity,
   ErrorCategory,
   ErrorPayload,
@@ -171,6 +172,9 @@ export const ipc = {
     database: string;
     path: string;
   }) => call<number>("export_database", { request: args }),
+
+  /** Who exists on this server, and what each of them can reach. */
+  privileges: (connection_id: string) => call<Privileges>("privileges", { connection_id }),
 
   /**
    * Compare two schemas and generate the migration between them.

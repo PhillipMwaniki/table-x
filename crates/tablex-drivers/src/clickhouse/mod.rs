@@ -19,6 +19,7 @@
 //!   guarantee — this row, now, exactly once — that the engine does not make.
 
 mod activity;
+mod privileges;
 mod types;
 
 use async_trait::async_trait;
@@ -27,6 +28,7 @@ use tablex_core::{
     activity::ServerActivity,
     config::{ConnectionConfig, TlsMode},
     plan::Plan,
+    privileges::Privileges,
     driver::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
         PlaceholderStyle, RowEdit, RowSink, STREAM_BATCH,
@@ -127,6 +129,7 @@ impl Driver for ClickhouseDriver {
                 // response body arrives.
                 streaming: true,
                 activity: true,
+                privileges: true,
                 placeholder_style: PlaceholderStyle::Question,
                 identifier_quote: QUOTE,
             },
@@ -259,6 +262,14 @@ impl Connection for ClickhouseConnection {
             analyzed: false,
             raw,
         })
+    }
+
+    async fn privileges(&mut self) -> Result<Privileges> {
+        Ok(privileges::assemble(
+            self.rows_of(privileges::USERS_SQL).await?,
+            self.rows_of(privileges::ROLE_GRANTS_SQL).await?,
+            self.rows_of(privileges::GRANTS_SQL).await?,
+        ))
     }
 
     async fn activity(&mut self) -> Result<ServerActivity> {

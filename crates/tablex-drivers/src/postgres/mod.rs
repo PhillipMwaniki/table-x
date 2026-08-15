@@ -5,6 +5,7 @@
 //! difference is exactly what [`Capabilities`] exists to express.
 
 mod activity;
+mod privileges;
 mod introspect;
 mod numeric;
 mod types;
@@ -18,6 +19,7 @@ use tablex_core::{
     config::{ConnectionConfig, TlsMode},
     diagram::SchemaGraph,
     plan::Plan,
+    privileges::Privileges,
     driver::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
         PlaceholderStyle, RowEdit, RowSink, STREAM_BATCH,
@@ -76,6 +78,7 @@ impl Driver for PostgresDriver {
                 // query_raw yields rows as the server sends them.
                 streaming: true,
                 activity: true,
+                privileges: true,
                 placeholder_style: PlaceholderStyle::Dollar,
                 identifier_quote: QUOTE,
             },
@@ -283,6 +286,10 @@ impl Connection for PostgresConnection {
             analyzed: true,
             raw,
         })
+    }
+
+    async fn privileges(&mut self) -> Result<Privileges> {
+        privileges::privileges(&self.client).await
     }
 
     async fn activity(&mut self) -> Result<ServerActivity> {

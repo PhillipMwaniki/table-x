@@ -22,6 +22,7 @@ import { PlanView } from "./PlanView";
 import { DiagramView } from "./DiagramView";
 import { DiffView } from "./DiffView";
 import { CompareDialog } from "./CompareDialog";
+import { PrivilegesPanel } from "./PrivilegesPanel";
 import { Button, Spinner, cx } from "../ui/primitives";
 import { ContextMenu } from "../ui/ContextMenu";
 import type { MenuItem } from "../ui/ContextMenu";
@@ -80,6 +81,7 @@ export function Workspace({
     loadCompletionFor,
     openScript: openScriptTab,
     openActivity,
+    openPrivileges,
     openDiagram,
     openDiff,
     setTabError,
@@ -566,6 +568,12 @@ export function Workspace({
         },
       },
       {
+        id: "ws.privileges",
+        title: "Show privileges and roles",
+        group: "Data",
+        run: () => openPrivileges(connection.id),
+      },
+      {
         id: "ws.activity",
         title: "Show server activity",
         group: "Data",
@@ -637,13 +645,18 @@ export function Workspace({
             <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border bg-surface-1 px-2">
               {/* Every control here acts on a statement, and an activity tab has
                   none — it carries its own refresh instead. */}
-              {tab.kind === "activity" || tab.kind === "diagram" || tab.kind === "diff" ? (
+              {tab.kind === "activity" ||
+              tab.kind === "diagram" ||
+              tab.kind === "diff" ||
+              tab.kind === "privileges" ? (
                 <span className="text-[11px] text-text-muted">
                   {tab.kind === "activity"
                     ? "Live view of the server. Nothing here is cached."
                     : tab.kind === "diff"
                       ? "A comparison and the script that would settle it. Nothing here runs."
-                      : "Tables and the keys between them. Drag to pan, scroll to zoom."}
+                      : tab.kind === "privileges"
+                        ? "Principals and their grants, in the engine's own words."
+                        : "Tables and the keys between them. Drag to pan, scroll to zoom."}
                 </span>
               ) : (
                 <>
@@ -744,7 +757,13 @@ export function Workspace({
             {/* A table tab gives its whole height to the rows: there is no
                 statement to edit, and the SQL that produced them is one line
                 the tab's own context already describes. */}
-            {tab.kind === "diff" ? (
+            {tab.kind === "privileges" ? (
+              <PrivilegesPanel
+                connectionId={connection.id}
+                quote={driver?.capabilities.identifier_quote ?? '"'}
+                onOpenScript={(title, sql) => openScriptTab(connection.id, { title, sql })}
+              />
+            ) : tab.kind === "diff" ? (
               tab.diff ? (
                 <DiffView
                   report={tab.diff}
@@ -888,6 +907,7 @@ export function Workspace({
               driver: connection.driver,
               tableScripts: driver?.capabilities.table_scripts ?? false,
               foreignKeys: driver?.capabilities.foreign_keys ?? false,
+              privileges: driver?.capabilities.privileges ?? false,
             },
             {
               onOpen: () =>
@@ -902,6 +922,7 @@ export function Workspace({
               onExportDatabase: () => void exportDatabase(menu.node.name),
               onImport: () => void importSql(),
               onActivity: () => openActivity(connection.id),
+              onPrivileges: () => openPrivileges(connection.id),
               onDiagram: () =>
                 openDiagram(
                   connection.id,
@@ -974,7 +995,12 @@ export function Workspace({
  */
 export function menuFor(
   node: SchemaNode,
-  options: { driver: string; tableScripts: boolean; foreignKeys: boolean },
+  options: {
+    driver: string;
+    tableScripts: boolean;
+    foreignKeys: boolean;
+    privileges: boolean;
+  },
   actions: {
     onOpen: () => void;
     onScript: () => void;
@@ -985,6 +1011,7 @@ export function menuFor(
     onImport: () => void;
     onImportCsv: () => void;
     onActivity: () => void;
+    onPrivileges: () => void;
     onDiagram: () => void;
     onCompare: () => void;
     onRefresh: (() => void) | null;
@@ -1003,6 +1030,9 @@ export function menuFor(
     }
     items.push({ label: "Compare with…", onSelect: actions.onCompare });
     items.push({ label: "Server activity…", separated: true, onSelect: actions.onActivity });
+    if (options.privileges) {
+      items.push({ label: "Privileges and roles…", onSelect: actions.onPrivileges });
+    }
     if (actions.onRefresh) {
       items.push({ label: "Refresh", separated: true, onSelect: actions.onRefresh });
     }

@@ -91,6 +91,7 @@ export interface Capabilities {
   multi_statement: boolean;
   explain: boolean;
   explain_analyze: boolean;
+  privileges: boolean;
   schemas: boolean;
   /** Whether one server holds several databases the user can move between. */
   databases: boolean;
@@ -241,6 +242,37 @@ export interface SchemaNode {
 
 /** File formats a table can be written out as. */
 export type ExportFormat = "csv" | "json" | "sql";
+
+/** Someone or something that can hold a privilege. */
+export interface Principal {
+  name: string;
+  kind: "user" | "role" | "group";
+  /** Whether it can open a connection. */
+  can_login: boolean;
+  /** Whether it bypasses permission checks entirely. */
+  superuser: boolean;
+  member_of: string[];
+  /** Whatever else the engine says about it, in the engine's own words. */
+  attributes: string[];
+}
+
+/** One privilege held over one thing. */
+export interface Grant {
+  grantee: string;
+  /** The engine's own name for the privilege. */
+  privilege: string;
+  /** What it applies to. Null means server- or database-wide. */
+  object: string | null;
+  grantable: boolean;
+  /** A denial rather than a grant. Only SQL Server has these. */
+  denied: boolean;
+}
+
+export interface Privileges {
+  principals: Principal[];
+  grants: Grant[];
+  notes: string[];
+}
 
 /** One field of a column that differs between two schemas. */
 export interface FieldChange {

@@ -48,7 +48,7 @@ export interface QueryError {
  * a result — but it is still a tab, because watching the server while you work
  * is the whole point and a modal would put it in front of the work instead.
  */
-export type TabKind = "query" | "table" | "activity" | "diagram" | "diff";
+export type TabKind = "query" | "table" | "activity" | "diagram" | "diff" | "privileges";
 
 export interface Tab {
   id: string;
@@ -136,6 +136,7 @@ interface WorkspaceState {
   /** A query tab that opens with content already in it, e.g. an object's DDL. */
   openScript: (connectionId: string, script: { title: string; sql: string }) => void;
   openActivity: (connectionId: string) => void;
+  openPrivileges: (connectionId: string) => void;
   openDiagram: (connectionId: string, schema: string | null) => void;
   openDiff: (connectionId: string, title: string, report: DiffReport) => void;
   closeTab: (connectionId: string, tabId: string) => void;
@@ -276,6 +277,24 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       title,
       database: get().database[id] ?? null,
       schema: schema ?? undefined,
+    });
+    set((s) => ({
+      tabs: { ...s.tabs, [id]: [...list, tab] },
+      active: { ...s.active, [id]: tab.id },
+    }));
+  },
+
+  openPrivileges: (id) => {
+    const list = tabsOf(get(), id);
+    const existing = list.find((t) => t.kind === "privileges");
+    if (existing) {
+      set((s) => ({ active: { ...s.active, [id]: existing.id } }));
+      return;
+    }
+    const tab = blankTab({
+      kind: "privileges",
+      title: "Privileges",
+      database: get().database[id] ?? null,
     });
     set((s) => ({
       tabs: { ...s.tabs, [id]: [...list, tab] },

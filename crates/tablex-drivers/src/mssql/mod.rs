@@ -13,6 +13,7 @@
 //!   same session instead.
 
 mod activity;
+mod privileges;
 mod types;
 
 use async_trait::async_trait;
@@ -21,6 +22,7 @@ use tablex_core::{
     config::{ConnectionConfig, TlsMode},
     diagram::{GraphTable, SchemaGraph},
     plan::{Plan, PlanRow},
+    privileges::Privileges,
     driver::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
         PlaceholderStyle, RowEdit, RowSink, STREAM_BATCH,
@@ -146,6 +148,7 @@ impl Driver for MssqlDriver {
                 // QueryItems arrive as the server sends them.
                 streaming: true,
                 activity: true,
+                privileges: true,
                 placeholder_style: PlaceholderStyle::AtP,
                 identifier_quote: QUOTE,
             },
@@ -390,6 +393,10 @@ impl Connection for MssqlConnection {
             analyzed: false,
             raw,
         })
+    }
+
+    async fn privileges(&mut self) -> Result<Privileges> {
+        privileges::privileges(&mut self.client).await
     }
 
     async fn activity(&mut self) -> Result<ServerActivity> {

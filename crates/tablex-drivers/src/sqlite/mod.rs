@@ -72,6 +72,7 @@ impl Driver for SqliteDriver {
                 // whole result set.
                 streaming: true,
                 activity: false,
+                privileges: false,
                 column_provenance: true,
                 stored_procedures: false,
                 cancel: false,

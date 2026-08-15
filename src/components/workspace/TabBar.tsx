@@ -84,7 +84,9 @@ function TabButton({
               ? "⬡"
               : tab.kind === "diff"
                 ? "⇄"
-                : "›"}
+                : tab.kind === "privileges"
+                  ? "⚿"
+                  : "›"}
       </span>
 
       <span className="flex min-w-0 flex-col leading-tight">

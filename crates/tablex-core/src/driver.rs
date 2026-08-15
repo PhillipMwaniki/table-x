@@ -8,6 +8,7 @@ use crate::{
     activity::ServerActivity,
     config::ConnectionConfig,
     diagram::SchemaGraph,
+    privileges::Privileges,
     plan::Plan,
     error::Result,
     result::{Column, QueryOutcome},
@@ -56,6 +57,11 @@ pub struct Capabilities {
     pub column_provenance: bool,
     /// Whether streaming avoids buffering the whole result set in memory.
     pub streaming: bool,
+    /// Whether the server has principals and grants to report.
+    ///
+    /// False for file-backed engines: a SQLite file has no users, and its
+    /// permissions are the filesystem's.
+    pub privileges: bool,
     /// Whether the server can report its own connected sessions, and end one.
     ///
     /// False for file-backed engines, where there is no server to ask and no
@@ -85,6 +91,7 @@ impl Default for Capabilities {
             column_provenance: false,
             streaming: false,
             activity: false,
+            privileges: false,
             placeholder_style: PlaceholderStyle::Question,
             identifier_quote: '"',
         }
@@ -266,6 +273,13 @@ pub trait Connection: Send + Sync {
     async fn definition(&mut self, _node_id: &str) -> Result<String> {
         Err(crate::error::Error::Unsupported(
             "this driver cannot show object definitions".into(),
+        ))
+    }
+
+    /// Who exists on this server, and what each of them can reach.
+    async fn privileges(&mut self) -> Result<Privileges> {
+        Err(crate::error::Error::Unsupported(
+            "this driver cannot report privileges".into(),
         ))
     }
 

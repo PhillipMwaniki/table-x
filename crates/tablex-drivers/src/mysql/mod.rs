@@ -9,6 +9,7 @@
 //! they do not.
 
 mod activity;
+mod privileges;
 mod types;
 
 use async_trait::async_trait;
@@ -17,6 +18,7 @@ use tablex_core::{
     config::{ConnectionConfig, TlsMode},
     diagram::{GraphTable, SchemaGraph},
     plan::Plan,
+    privileges::Privileges,
     driver::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
         PlaceholderStyle, RowEdit, RowSink, STREAM_BATCH,
@@ -156,6 +158,7 @@ impl Driver for MysqlDriver {
                 // query_iter is a cursor over the wire, not a materialized set.
                 streaming: true,
                 activity: true,
+                privileges: true,
                 placeholder_style: PlaceholderStyle::Question,
                 identifier_quote: QUOTE,
             },
@@ -338,6 +341,10 @@ impl Connection for MysqlConnection {
             analyzed: false,
             raw,
         })
+    }
+
+    async fn privileges(&mut self) -> Result<Privileges> {
+        privileges::privileges(&mut self.conn).await
     }
 
     async fn activity(&mut self) -> Result<ServerActivity> {
