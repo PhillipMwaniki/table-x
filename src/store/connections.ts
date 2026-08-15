@@ -26,7 +26,11 @@ interface ConnectionState {
   init: () => Promise<void>;
   refresh: () => Promise<void>;
   select: (id: string | null) => void;
-  save: (config: ConnectionConfig, secret?: string, sshSecret?: string) => Promise<void>;
+  save: (
+    config: ConnectionConfig,
+    secret?: string,
+    sshSecrets?: (string | null)[],
+  ) => Promise<void>;
   remove: (id: string) => Promise<void>;
   connect: (id: string) => Promise<void>;
   disconnect: (id: string) => Promise<void>;
@@ -83,10 +87,10 @@ export const useConnections = create<ConnectionState>((set, get) => ({
   select: (id) => set({ selectedId: id }),
   clearError: () => set({ error: null }),
 
-  save: async (config, secret, sshSecret) => {
+  save: async (config, secret, sshSecrets) => {
     // Deliberately not caught: the dialog needs the failure so it can stay open
     // with the user's input intact rather than closing over a lost edit.
-    await ipc.saveConnection(config, secret, sshSecret);
+    await ipc.saveConnection(config, secret, sshSecrets);
     await get().refresh();
   },
 

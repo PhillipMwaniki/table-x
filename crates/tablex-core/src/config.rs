@@ -102,6 +102,31 @@ pub struct SshConfig {
     /// subsequent connect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_key_fingerprint: Option<String>,
+
+    /// Hosts to pass through *before* reaching this one, in order.
+    ///
+    /// A production database is often two hops away: a public bastion, then an
+    /// internal jump host that can actually see the subnet. Each hop
+    /// authenticates separately and has its own host key to verify — a chain is
+    /// only as trustworthy as its least-checked link, so there is no inherited
+    /// trust here.
+    ///
+    /// Empty for the ordinary single-hop case, which is why it defaults: a
+    /// connection saved before this existed still loads.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub via: Vec<SshConfig>,
+}
+
+impl SshConfig {
+    /// Every hop in the order they are traversed, ending with this one.
+    ///
+    /// The database is reachable from the last element, which is what makes
+    /// "the SSH config" and "the final hop" the same thing for a direct tunnel.
+    pub fn chain(&self) -> Vec<&SshConfig> {
+        let mut hops: Vec<&SshConfig> = self.via.iter().collect();
+        hops.push(self);
+        hops
+    }
 }
 
 fn default_ssh_port() -> u16 {
@@ -129,6 +154,34 @@ impl ConnectionConfig {
     /// password and a key passphrase never overwrite each other.
     pub fn ssh_keychain_key(&self) -> String {
         format!("connection.{}.ssh", self.id)
+    }
+
+    /// The keychain entry for each hop of the SSH chain, in chain order.
+    ///
+    /// The *last* hop keeps the original single-hop entry rather than the
+    /// first. That is the migration-safe assignment: adding a jump host in
+    /// front of a connection that already worked leaves the secret it already
+    /// had attached to the host it was always for. Keying by position from the
+    /// front would silently repoint it at the new hop, and the failure would
+    /// look like a wrong password on a server that never had one.
+    ///
+    /// Earlier hops get their own indexed entries, since a bastion's key
+    /// passphrase and a jump host's password are different secrets and must not
+    /// overwrite each other.
+    pub fn ssh_hop_keys(&self) -> Vec<String> {
+        let Some(ssh) = &self.ssh else {
+            return Vec::new();
+        };
+        let last = ssh.chain().len() - 1;
+        (0..=last)
+            .map(|i| {
+                if i == last {
+                    self.ssh_keychain_key()
+                } else {
+                    format!("connection.{}.ssh.{i}", self.id)
+                }
+            })
+            .collect()
     }
 
     /// A short summary for the connection list, e.g. `postgres@db.example.com:5432/app`.
@@ -205,6 +258,45 @@ mod tests {
     fn database_and_ssh_secrets_use_distinct_keychain_entries() {
         let c = base();
         assert_ne!(c.keychain_key(), c.ssh_keychain_key());
+    }
+
+    #[test]
+    fn adding_a_jump_host_does_not_move_the_secret_that_already_worked() {
+        // The last hop keeps the original entry. Keying from the front would
+        // repoint an existing secret at the newly added host, and the failure
+        // would look like a wrong password on a server that never had one.
+        let mut c = base();
+        c.ssh = Some(SshConfig {
+            host: "bastion.example.com".into(),
+            port: 22,
+            username: "deploy".into(),
+            auth: SshAuth::PublicKey,
+            key_path: None,
+            host_key_fingerprint: None,
+            via: Vec::new(),
+        });
+        let single = c.ssh_hop_keys();
+        assert_eq!(single, vec![c.ssh_keychain_key()]);
+
+        let jump = SshConfig {
+            host: "edge.example.com".into(),
+            port: 22,
+            username: "deploy".into(),
+            auth: SshAuth::PublicKey,
+            key_path: None,
+            host_key_fingerprint: None,
+            via: Vec::new(),
+        };
+        c.ssh.as_mut().expect("ssh").via = vec![jump];
+
+        let chained = c.ssh_hop_keys();
+        assert_eq!(chained.len(), 2);
+        assert_eq!(
+            chained[1],
+            c.ssh_keychain_key(),
+            "the bastion keeps the entry it already had"
+        );
+        assert_ne!(chained[0], chained[1], "each hop gets its own secret");
     }
 
     #[test]

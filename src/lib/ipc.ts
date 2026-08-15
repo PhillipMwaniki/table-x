@@ -91,14 +91,18 @@ export const ipc = {
    * that is what lets an edit dialog save without forcing the user to retype a
    * password it never displayed. Pass `""` to explicitly clear it.
    *
-   * `ssh_secret` is the SSH password or key passphrase, stored under a separate
-   * keychain entry so saving one credential never overwrites the other.
+   * `sshSecrets` holds one credential per SSH hop, in chain order, each under
+   * its own keychain entry so saving one never overwrites another.
    */
-  saveConnection: (config: ConnectionConfig, secret?: string, sshSecret?: string) =>
+  saveConnection: (
+    config: ConnectionConfig,
+    secret?: string,
+    sshSecrets?: (string | null)[],
+  ) =>
     call<void>("save_connection", {
       config,
       secret: secret ?? null,
-      ssh_secret: sshSecret ?? null,
+      ssh_secrets: sshSecrets ?? null,
     }),
 
   deleteConnection: (id: string) => call<void>("delete_connection", { id }),
@@ -107,11 +111,15 @@ export const ipc = {
   disconnect: (id: string) => call<void>("disconnect", { id }),
 
   /** Validate a config that may not be saved yet, tunnel included. */
-  testConnection: (config: ConnectionConfig, secret?: string, sshSecret?: string) =>
+  testConnection: (
+    config: ConnectionConfig,
+    secret?: string,
+    sshSecrets?: (string | null)[],
+  ) =>
     call<void>("test_connection", {
       config,
       secret: secret ?? null,
-      ssh_secret: sshSecret ?? null,
+      ssh_secrets: sshSecrets ?? null,
     }),
 
   execute: (request: {
@@ -255,7 +263,14 @@ export const ipc = {
    * Must be done before a tunnelled connection can be opened: `connect` refuses
    * to tunnel to a host whose key is not already known.
    */
-  sshHostFingerprint: (ssh: SshConfig) => call<string>("ssh_host_fingerprint", { ssh }),
+  /**
+   * Read a hop's host key so the user can confirm it.
+   *
+   * `secrets` are the credentials for the hops in front of it: a jump host is
+   * reached through them, so probing one means authenticating them first.
+   */
+  sshHostFingerprint: (ssh: SshConfig, secrets?: (string | null)[]) =>
+    call<string>("ssh_host_fingerprint", { ssh, secrets: secrets ?? null }),
 
   /** Pretty-print SQL. Whitespace and keyword case only — never the tokens. */
   formatSql: (sql: string) => call<string>("format_sql", { sql }),

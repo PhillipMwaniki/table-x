@@ -77,7 +77,9 @@ pub async fn save_connection(
     state: tauri::State<'_, AppState>,
     config: ConnectionConfig,
     secret: Option<String>,
-    ssh_secret: Option<String>,
+    // One per SSH hop, in chain order. A `None` entry leaves that hop's stored
+    // credential alone; `Some("")` clears it.
+    ssh_secrets: Option<Vec<Option<String>>>,
 ) -> IpcResult<()> {
     if config.id.trim().is_empty() {
         return Err(tablex_core::Error::Config("connection id is required".into()).into());
@@ -87,7 +89,18 @@ pub async fn save_connection(
     }
 
     store_secret(&config.keychain_key(), secret)?;
-    store_secret(&config.ssh_keychain_key(), ssh_secret)?;
+
+    // One entry per hop, with the backend deriving the names from the saved
+    // chain so a hop added or removed in the middle cannot end up reading the
+    // credential of whichever hop used to be in that position.
+    //
+    // Nothing supplied means nothing was edited, so every stored credential
+    // stays as it was — which is what an unchanged form should do.
+    if let Some(values) = &ssh_secrets {
+        for (index, key) in config.ssh_hop_keys().iter().enumerate() {
+            store_secret(key, values.get(index).cloned().flatten())?;
+        }
+    }
 
     let mut connections = state.connections.lock().await;
     match connections.iter_mut().find(|c| c.id == config.id) {
@@ -196,7 +209,16 @@ pub async fn delete_connection(state: tauri::State<'_, AppState>, id: String) ->
 
     // Best effort: a stale keychain entry is untidy but not dangerous, and
     // failing here would leave the config and the keychain inconsistent.
+    //
+    // Every hop, not just the first: a chained connection stores one credential
+    // per hop, and leaving the jump hosts' behind would orphan secrets nothing
+    // can reach or clean up afterwards.
     let _ = secrets::delete(&removed.keychain_key());
+    for key in removed.ssh_hop_keys() {
+        let _ = secrets::delete(&key);
+    }
+    // Removed unconditionally: a connection that once had a tunnel and no
+    // longer does still has the entry, and `ssh_hop_keys` is empty for it.
     let _ = secrets::delete(&removed.ssh_keychain_key());
     Ok(())
 }
@@ -236,7 +258,7 @@ async fn establish_tunnel(
 /// typed into the form and not saved yet.
 async fn establish_tunnel_with(
     config: &ConnectionConfig,
-    ssh_secret: Option<String>,
+    ssh_secrets: Option<Vec<Option<String>>>,
 ) -> IpcResult<(ConnectionConfig, Option<tablex_tunnel::Tunnel>)> {
     let Some(ssh) = &config.ssh else {
         return Ok((config.clone(), None));
@@ -247,18 +269,24 @@ async fn establish_tunnel_with(
         tablex_core::Error::Config("a tunnelled connection needs a target port".into())
     })?;
 
-    // The SSH credential lives under its own keychain entry, so a key passphrase
-    // and a database password never overwrite each other.
-    let stored;
-    let secret = match ssh_secret {
-        Some(ref s) if !s.is_empty() => Some(s.as_str()),
-        _ => {
-            stored = secrets::get(&config.ssh_keychain_key())?;
-            stored.as_deref()
+    // One credential per hop, each under its own keychain entry, so a bastion's
+    // key passphrase and a jump host's password never overwrite each other.
+    // A secret typed into the form wins for its hop; a blank one falls back to
+    // the keychain, which is what "leave it alone to keep the saved credential"
+    // has to mean for a field that never displays what it is holding.
+    let mut hop_secrets: Vec<Option<String>> = Vec::new();
+    for (index, key) in config.ssh_hop_keys().iter().enumerate() {
+        let typed = ssh_secrets
+            .as_ref()
+            .and_then(|values| values.get(index).cloned().flatten())
+            .filter(|s| !s.is_empty());
+        match typed {
+            Some(value) => hop_secrets.push(Some(value)),
+            None => hop_secrets.push(secrets::get(key)?),
         }
-    };
+    }
 
-    let tunnel = tablex_tunnel::open(ssh, &target_host, target_port, secret).await?;
+    let tunnel = tablex_tunnel::open(ssh, &target_host, target_port, &hop_secrets).await?;
 
     let mut tunnelled = config.clone();
     tunnelled.host = Some("127.0.0.1".into());
@@ -271,8 +299,15 @@ async fn establish_tunnel_with(
 /// Connecting requires a stored fingerprint, so this is the first step when
 /// setting up a tunnelled connection. Nothing is authenticated or forwarded.
 #[tauri::command(rename_all = "snake_case")]
-pub async fn ssh_host_fingerprint(ssh: tablex_core::config::SshConfig) -> IpcResult<String> {
-    Ok(tablex_tunnel::probe_host_key(&ssh).await?)
+pub async fn ssh_host_fingerprint(
+    ssh: tablex_core::config::SshConfig,
+    #[allow(unused_variables)] secrets: Option<Vec<Option<String>>>,
+) -> IpcResult<String> {
+    // Reaching a jump host means authenticating everything in front of it, so
+    // probing one needs those hops' secrets. A directly reachable host needs
+    // none, which is why this is optional.
+    let secrets = secrets.unwrap_or_default();
+    Ok(tablex_tunnel::probe_host_key(&ssh, &secrets).await?)
 }
 
 /// Try a connection without saving a session — the "Test connection" button.
@@ -284,7 +319,7 @@ pub async fn test_connection(
     state: tauri::State<'_, AppState>,
     config: ConnectionConfig,
     secret: Option<String>,
-    ssh_secret: Option<String>,
+    ssh_secrets: Option<Vec<Option<String>>>,
 ) -> IpcResult<()> {
     let driver = state.drivers.get(&config.driver)?;
 
@@ -303,7 +338,7 @@ pub async fn test_connection(
     // Tunnel too, so "Test connection" exercises the same path a real connect
     // takes rather than reporting success on a route that will not be used —
     // including the SSH credential typed into the form but not yet saved.
-    let (config, tunnel) = establish_tunnel_with(&config, ssh_secret).await?;
+    let (config, tunnel) = establish_tunnel_with(&config, ssh_secrets).await?;
 
     let mut connection = driver.connect(&config, secret).await?;
     let result = connection.ping().await;

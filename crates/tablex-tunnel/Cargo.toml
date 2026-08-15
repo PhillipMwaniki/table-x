@@ -22,4 +22,9 @@ tracing.workspace = true
 russh = { version = "0.62", default-features = false, features = ["ring", "rsa", "flate2"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "io-util"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "io-util", "time"] }
+# The in-process SSH server the tunnel tests run against generates a fresh host
+# key per run, and russh re-exports the key types but not an RNG to make one
+# with. Pinned to the version russh itself uses so there is one CryptoRng trait
+# in the tree rather than two that look identical and do not unify.
+rand = { version = "0.10", features = ["thread_rng"] }

@@ -4564,7 +4564,7 @@ dependencies = [
  "security-framework 3.7.0",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5484,6 +5484,7 @@ dependencies = [
 name = "tablex-tunnel"
 version = "0.1.0"
 dependencies = [
+ "rand 0.10.2",
  "russh",
  "tablex-core",
  "tokio",

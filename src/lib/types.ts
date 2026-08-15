@@ -142,6 +142,14 @@ export interface SshConfig {
    * gives no protection against the attacker a bastion exists to defend against.
    */
   host_key_fingerprint?: string | undefined;
+  /**
+   * Hosts passed through before reaching this one, in order.
+   *
+   * Each authenticates and is verified separately: a chain is only as
+   * trustworthy as its least-checked link, so reaching a host through an
+   * already-trusted one earns it nothing.
+   */
+  via?: SshConfig[] | undefined;
 }
 
 /**
