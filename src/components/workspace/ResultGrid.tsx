@@ -23,6 +23,9 @@ import { FILTER_HINT, matchesFilter, parseFilter } from "@/lib/filter";
 import { editorFor } from "@/lib/editors";
 import { BinaryViewer, BoolEditor, InlineEditor, ValuePanel } from "./CellEditor";
 import { PAGE_SIZES, rowHeightFor } from "@/lib/settings";
+import { guaranteesFor } from "@/lib/guarantees";
+import type { Precision } from "@/lib/guarantees";
+import { GuaranteesPanel } from "./GuaranteesPanel";
 import { useSettings } from "@/store/settings";
 import type { Column, ResultSet, Value } from "@/lib/types";
 
@@ -86,18 +89,18 @@ function compareValues(a: Value, b: Value): number {
 export function ResultGrid({
   result,
   onEdit,
-  readOnlyReason,
   paging,
   onExportRows,
+  readOnlyDetail,
 }: {
   result: ResultSet;
   onEdit: (rowIndex: number, columnIndex: number, next: Value) => Promise<void>;
-  /** Why editing is unavailable, shown when a user tries. */
-  readOnlyReason?: string | undefined;
   /** Page controls, absent for results that are not a page of anything. */
   paging?: PagingProps | undefined;
   /** Write the given rows to a file. Absent where there is nothing to write to. */
   onExportRows?: ((rows: Value[][]) => void) | undefined;
+  /** Why editing is off, and what would turn it on. */
+  readOnlyDetail?: { reason: string; remedy: string } | undefined;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   // Row height and column widths are both measured in characters, so they have
@@ -118,6 +121,11 @@ export function ResultGrid({
   const [selected, setSelected] = useState<ReadonlySet<number>>(EMPTY_SELECTION);
   /** Where the last plain click landed, so shift-click has a range to extend. */
   const anchor = useRef<number | null>(null);
+  const [showGuarantees, setShowGuarantees] = useState(false);
+
+  // Derived from the values that arrived rather than the declared types, so it
+  // is evidence rather than a claim — see `precisionOf`.
+  const guarantees = useMemo(() => guaranteesFor(result), [result]);
 
   // A new result set is a different set of rows; carrying a selection across
   // would leave row 4 of the old result selected in the new one, which is a
@@ -373,10 +381,10 @@ export function ResultGrid({
         visible={view.length}
         columnFilterCount={Object.keys(columnFilters).length}
         onClearColumnFilters={() => setColumnFilters({})}
-        readOnlyReason={readOnlyReason}
         selectedCount={selected.size}
         onClearSelection={() => setSelected(EMPTY_SELECTION)}
         onExportSelected={onExportRows ? () => onExportRows(selectedRows) : undefined}
+        onExplain={() => setShowGuarantees(true)}
       />
 
       {cellError && (
@@ -421,6 +429,7 @@ export function ResultGrid({
                 width={widths[i] ?? MIN_COL_WIDTH}
                 sort={sort?.columnIndex === i ? sort.direction : null}
                 isKey={result.key_columns.includes(col.name)}
+                precision={guarantees.columns[i]?.precision ?? "none"}
                 onSort={() =>
                   setSort((s) =>
                     s?.columnIndex === i && s.direction === "asc"
@@ -547,6 +556,13 @@ export function ResultGrid({
       </div>
 
       {paging && <PagingBar paging={paging} rows={result.rows.length} />}
+
+      <GuaranteesPanel
+        open={showGuarantees}
+        onClose={() => setShowGuarantees(false)}
+        guarantees={guarantees}
+        readOnly={result.editable ? undefined : readOnlyDetail}
+      />
     </div>
   );
 }
@@ -650,10 +666,10 @@ function GridToolbar({
   visible,
   columnFilterCount,
   onClearColumnFilters,
-  readOnlyReason,
   selectedCount,
   onClearSelection,
   onExportSelected,
+  onExplain,
 }: {
   result: ResultSet;
   filter: string;
@@ -661,10 +677,10 @@ function GridToolbar({
   visible: number;
   columnFilterCount: number;
   onClearColumnFilters: () => void;
-  readOnlyReason?: string | undefined;
   selectedCount: number;
   onClearSelection: () => void;
   onExportSelected?: (() => void) | undefined;
+  onExplain: () => void;
 }) {
   return (
     <div className="flex h-7 shrink-0 items-center gap-2 border-b border-border bg-surface-1 px-2 text-[11px]">
@@ -734,13 +750,13 @@ function GridToolbar({
 
       <div className="flex-1" />
 
-      {result.editable ? (
-        <span className="text-text-muted">Double-click to edit</span>
-      ) : (
-        <span className="text-text-muted" title={readOnlyReason}>
-          Read-only
-        </span>
-      )}
+      <button
+        onClick={onExplain}
+        className="rounded px-1.5 py-0.5 text-text-muted underline decoration-dotted underline-offset-2 hover:bg-surface-3 hover:text-text"
+        title="What is guaranteed about these rows"
+      >
+        {result.editable ? "Double-click to edit" : "Read-only"}
+      </button>
     </div>
   );
 }
@@ -750,12 +766,15 @@ function HeaderCell({
   width,
   sort,
   isKey,
+  precision,
   onSort,
 }: {
   column: Column;
   width: number;
   sort: SortDirection | null;
   isKey: boolean;
+  /** How this column's numbers survived the trip — see `precisionOf`. */
+  precision: Precision;
   onSort: () => void;
 }) {
   return (
@@ -773,6 +792,18 @@ function HeaderCell({
             </span>
           )}
           {column.name}
+          {/* Only "exact" gets a mark. An approximate column is the ordinary
+              case and badging every one of them would be noise; the panel
+              names them when it matters. */}
+          {precision === "exact" && (
+            <span
+              aria-label="Exact — carried without rounding"
+              title="Carried as text from the server, digit for digit. Nothing on the path converts this column to a floating-point number."
+              className="text-ok"
+            >
+              ≡
+            </span>
+          )}
         </span>
         {/* The type line sits a fixed ratio under the column name, so it stays
             legible rather than vanishing as the data size grows. */}

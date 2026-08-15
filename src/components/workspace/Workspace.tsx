@@ -29,6 +29,7 @@ import { Dialog } from "../ui/Dialog";
 import type { MenuItem } from "../ui/ContextMenu";
 import { ipc, IpcError } from "@/lib/ipc";
 import { hasOrderBy } from "@/lib/paging";
+import { readOnlyExplanation } from "@/lib/guarantees";
 import { drop, selectFrom, truncate } from "@/lib/statements";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useHistory } from "@/store/history";
@@ -651,13 +652,23 @@ export function Workspace({
     undo,
   ]);
 
-  const readOnlyReason = useMemo(() => {
-    if (connection.read_only) return "This connection is marked read-only.";
-    if (!driver?.capabilities.column_provenance) {
-      return `${driver?.name ?? "This driver"} does not report which table each column came from, so results cannot be edited in place.`;
-    }
-    return "This result has no single source table with a usable key — joins and aggregates are read-only.";
-  }, [connection.read_only, driver]);
+  /**
+   * The same question answered specifically enough to act on.
+   *
+   * Three situations render as "read-only" and the remedy differs for each, so
+   * this needs the result's own key columns rather than only the connection and
+   * the driver.
+   */
+  const readOnlyDetail = useMemo(
+    () =>
+      readOnlyExplanation({
+        connectionReadOnly: connection.read_only,
+        driverName: driver?.name ?? "This driver",
+        hasProvenance: driver?.capabilities.column_provenance ?? false,
+        keyColumns: active?.type === "rows" ? active.key_columns : [],
+      }),
+    [connection.read_only, driver, active],
+  );
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -901,7 +912,6 @@ export function Workspace({
               ) : active?.type === "rows" ? (
                 <ResultGrid
                   result={active}
-                  readOnlyReason={readOnlyReason}
                   onEdit={(row, col, next) => applyEdit(connection.id, tab.id, row, col, next)}
                   paging={{
                     offset: tab.offset,
@@ -930,6 +940,7 @@ export function Workspace({
                         : undefined,
                   }}
                   onExportRows={(rows) => setExporting(rows)}
+                  readOnlyDetail={readOnlyDetail}
                 />
               ) : active?.type === "affected" ? (
                 <div className="flex flex-1 items-center justify-center text-[12px] text-text-muted">
