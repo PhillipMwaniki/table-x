@@ -25,8 +25,10 @@ import { CompareDialog } from "./CompareDialog";
 import { PrivilegesPanel } from "./PrivilegesPanel";
 import { Button, Spinner, cx } from "../ui/primitives";
 import { ContextMenu } from "../ui/ContextMenu";
+import { Dialog } from "../ui/Dialog";
 import type { MenuItem } from "../ui/ContextMenu";
 import { ipc, IpcError } from "@/lib/ipc";
+import { hasOrderBy } from "@/lib/paging";
 import { drop, selectFrom, truncate } from "@/lib/statements";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useHistory } from "@/store/history";
@@ -42,6 +44,7 @@ import type {
   DriverInfo,
   ExportFormat,
   NodeKind,
+  Value,
   SchemaNode,
   StatementResult,
 } from "@/lib/types";
@@ -88,6 +91,7 @@ export function Workspace({
     setTabNotice,
     useDatabase,
     applyEdit,
+    goToPage,
     explain,
     clearPlan,
     undo,
@@ -105,10 +109,15 @@ export function Workspace({
   // not write a preferences file sixty times a second.
   const storedRatio = useSettings((s) => s.editorRatio);
   const setEditorRatio = useSettings((s) => s.setEditorRatio);
+  const pageSize = useSettings((s) => s.pageSize);
+  const setPageSize = useSettings((s) => s.setPageSize);
   const [dragRatio, setDragRatio] = useState<number | null>(null);
   const watchExports = useExports((s) => s.watch);
   const beginExport = useExports((s) => s.begin);
   const endExport = useExports((s) => s.end);
+  /** Rows picked in the grid, waiting for a format to be chosen. */
+  const [exporting, setExporting] = useState<Value[][] | null>(null);
+
   /** The schema a comparison is being set up for, if any. */
   // Selected straight off the store rather than derived: a selector that
   // builds an array returns a new one every call, and zustand compares by
@@ -215,6 +224,43 @@ export function Workspace({
       if (current) {
         setTabError(connection.id, current.id, (e as Error).message);
       }
+    }
+  };
+
+  /**
+   * Write the rows picked out of the grid.
+   *
+   * The rows go to the backend rather than being re-queried: the selection was
+   * made on rows already on screen, and no WHERE clause generally reproduces an
+   * arbitrary set of them. What was shown is what gets written.
+   */
+  const exportSelection = async (rows: Value[][], format: ExportFormat, extension: string) => {
+    const current = activeTab(connection.id);
+    const result = current?.outcome?.statements[current.activeStatement];
+    if (!current || result?.type !== "rows" || rows.length === 0) return;
+
+    const path = await save({
+      defaultPath: `${current.title}-selection.${extension}`,
+      filters: [{ name: format.toUpperCase(), extensions: [extension] }],
+    });
+    if (!path) return;
+
+    try {
+      const written = await ipc.exportRows({
+        connection_id: connection.id,
+        path,
+        format,
+        table: current.title,
+        columns: result.columns,
+        rows,
+      });
+      setTabNotice(
+        connection.id,
+        current.id,
+        `Exported ${written.toLocaleString()} selected row${written === 1 ? "" : "s"} to ${path}`,
+      );
+    } catch (e) {
+      reportJobFailure(e as IpcError, current.id, "Export of the selection");
     }
   };
 
@@ -857,6 +903,33 @@ export function Workspace({
                   result={active}
                   readOnlyReason={readOnlyReason}
                   onEdit={(row, col, next) => applyEdit(connection.id, tab.id, row, col, next)}
+                  paging={{
+                    offset: tab.offset,
+                    limit: tab.limit || pageSize,
+                    ordered: hasOrderBy(tab.sql),
+                    busy: tab.running,
+                    onGoTo: (offset) => void goToPage(connection.id, tab.id, offset),
+                    onPageSize: (rows) => {
+                      // Back to the first page: keeping the offset would land
+                      // somewhere unrelated to where the reader was.
+                      setPageSize(rows);
+                      void goToPage(connection.id, tab.id, 0);
+                    },
+                    orderableBy: active.key_columns,
+                    onOrderBy:
+                      active.key_columns.length > 0
+                        ? () => {
+                            const quote = driver?.capabilities.identifier_quote ?? '"';
+                            const close = quote === "[" ? "]" : quote;
+                            const keys = active.key_columns
+                              .map((c) => `${quote}${c.replaceAll(close, close + close)}${close}`)
+                              .join(", ");
+                            setSql(connection.id, tab.id, `${tab.sql.trimEnd()} ORDER BY ${keys}`);
+                            void goToPage(connection.id, tab.id, 0);
+                          }
+                        : undefined,
+                  }}
+                  onExportRows={(rows) => setExporting(rows)}
                 />
               ) : active?.type === "affected" ? (
                 <div className="flex flex-1 items-center justify-center text-[12px] text-text-muted">
@@ -943,6 +1016,31 @@ export function Workspace({
           )}
           onClose={() => setMenu(null)}
         />
+      )}
+
+      {exporting && exporting.length > 0 && (
+        <Dialog
+          open
+          onClose={() => setExporting(null)}
+          title={`Export ${exporting.length.toLocaleString()} selected row${exporting.length === 1 ? "" : "s"}`}
+          description="Written from what is on screen, in the same formats a whole table exports to."
+        >
+          <div className="flex flex-col gap-1">
+            {EXPORT_FORMATS.map(({ format, label, extension }) => (
+              <button
+                key={format}
+                onClick={() => {
+                  const rows = exporting;
+                  setExporting(null);
+                  void exportSelection(rows, format, extension);
+                }}
+                className="rounded-md border border-border px-3 py-2 text-left text-[12px] hover:border-accent hover:bg-surface-2"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </Dialog>
       )}
 
       {compare && (

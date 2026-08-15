@@ -13,6 +13,7 @@ import { load as loadStore } from "@tauri-apps/plugin-store";
 import type { Store } from "@tauri-apps/plugin-store";
 import {
   clampFontSize,
+  clampPageSize,
   clampRatio,
   DEFAULT_SETTINGS,
   normalize,
@@ -34,6 +35,7 @@ interface SettingsState extends Settings {
   setDataFont: (stack: string) => void;
   setDataFontSize: (size: number) => void;
   setEditorRatio: (ratio: number) => void;
+  setPageSize: (rows: number) => void;
   reset: () => void;
 }
 
@@ -85,13 +87,14 @@ export const useSettings = create<SettingsState>((set, get) => {
     // Destructured rather than spread from `get()`, which also carries the
     // actions: writing those into the persisted file would put function-shaped
     // holes in it that `normalize` then has to throw away on the next launch.
-    const { theme, uiFont, dataFont, dataFontSize, editorRatio } = get();
+    const { theme, uiFont, dataFont, dataFontSize, editorRatio, pageSize } = get();
     const next: Settings = {
       theme,
       uiFont,
       dataFont,
       dataFontSize,
       editorRatio,
+      pageSize,
       ...changes,
     };
     set(next);
@@ -135,6 +138,7 @@ export const useSettings = create<SettingsState>((set, get) => {
     // live position is the dragging component's own state, and a store write
     // per frame would mean a file write per frame.
     setEditorRatio: (editorRatio) => commit({ editorRatio: clampRatio(editorRatio) }),
+    setPageSize: (pageSize) => commit({ pageSize: clampPageSize(pageSize) }),
     reset: () => commit(DEFAULT_SETTINGS),
   };
 });

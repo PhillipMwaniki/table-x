@@ -81,6 +81,27 @@ export interface Settings {
    * not a property of any particular query.
    */
   editorRatio: number;
+  /**
+   * Rows fetched per page.
+   *
+   * A cap rather than a preference about how much you can see: the grid is
+   * virtualized and would render a million rows happily, but the *transfer*
+   * is what costs, especially through a tunnel. Paging keeps the first screen
+   * fast and lets someone who wants more ask for it.
+   */
+  pageSize: number;
+}
+
+/** Page sizes offered in the grid. */
+export const PAGE_SIZES = [100, 500, 1000, 5000, 10000] as const;
+
+const MIN_PAGE_SIZE = 10;
+const MAX_PAGE_SIZE = 100_000;
+
+/** Keep a stored or typed page size inside what a single fetch should carry. */
+export function clampPageSize(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_SETTINGS.pageSize;
+  return Math.min(MAX_PAGE_SIZE, Math.max(MIN_PAGE_SIZE, Math.round(value)));
 }
 
 /** Empty string means "whatever `styles.css` already specifies". */
@@ -90,6 +111,7 @@ export const DEFAULT_SETTINGS: Settings = {
   dataFont: "",
   dataFontSize: 12,
   editorRatio: 0.38,
+  pageSize: 1000,
 };
 
 /**
@@ -186,5 +208,6 @@ export function normalize(stored: unknown): Settings {
     dataFont: typeof raw.dataFont === "string" ? raw.dataFont : DEFAULT_SETTINGS.dataFont,
     dataFontSize: clampFontSize(Number(raw.dataFontSize ?? DEFAULT_SETTINGS.dataFontSize)),
     editorRatio: clampRatio(Number(raw.editorRatio ?? DEFAULT_SETTINGS.editorRatio)),
+    pageSize: clampPageSize(Number(raw.pageSize ?? DEFAULT_SETTINGS.pageSize)),
   };
 }

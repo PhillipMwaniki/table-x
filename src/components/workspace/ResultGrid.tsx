@@ -22,12 +22,46 @@ import { cx } from "../ui/primitives";
 import { FILTER_HINT, matchesFilter, parseFilter } from "@/lib/filter";
 import { editorFor } from "@/lib/editors";
 import { BinaryViewer, BoolEditor, InlineEditor, ValuePanel } from "./CellEditor";
-import { rowHeightFor } from "@/lib/settings";
+import { PAGE_SIZES, rowHeightFor } from "@/lib/settings";
 import { useSettings } from "@/store/settings";
 import type { Column, ResultSet, Value } from "@/lib/types";
 
 const MIN_COL_WIDTH = 80;
 const MAX_INITIAL_COL_WIDTH = 320;
+
+/** Width of the row-number gutter, wide enough for five digits. */
+const GUTTER_WIDTH = 52;
+
+/**
+ * The empty selection, as one shared instance.
+ *
+ * A fresh `new Set()` on every clear would be a new object each time, and the
+ * memos that derive from the selection compare by identity — so clearing an
+ * already-empty selection would recompute everything downstream of it.
+ */
+const EMPTY_SELECTION: ReadonlySet<number> = new Set<number>();
+
+/** What the grid needs to draw page controls and say where it is. */
+export interface PagingProps {
+  /** Rows skipped to reach this page. */
+  offset: number;
+  /** Rows this page asked for. */
+  limit: number;
+  /** Whether the statement orders its rows — see `hasOrderBy`. */
+  ordered: boolean;
+  busy: boolean;
+  onGoTo: (offset: number) => void;
+  onPageSize: (rows: number) => void;
+  /**
+   * Columns that would make paging reliable, when the result has a key.
+   *
+   * A table tab has no editor, so telling its reader to add an `ORDER BY` would
+   * be advice they cannot take. Offering to add it for them is the same
+   * sentence with somewhere to go.
+   */
+  orderableBy?: string[] | undefined;
+  onOrderBy?: (() => void) | undefined;
+}
 
 type SortDirection = "asc" | "desc";
 
@@ -53,11 +87,17 @@ export function ResultGrid({
   result,
   onEdit,
   readOnlyReason,
+  paging,
+  onExportRows,
 }: {
   result: ResultSet;
   onEdit: (rowIndex: number, columnIndex: number, next: Value) => Promise<void>;
   /** Why editing is unavailable, shown when a user tries. */
   readOnlyReason?: string | undefined;
+  /** Page controls, absent for results that are not a page of anything. */
+  paging?: PagingProps | undefined;
+  /** Write the given rows to a file. Absent where there is nothing to write to. */
+  onExportRows?: ((rows: Value[][]) => void) | undefined;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   // Row height and column widths are both measured in characters, so they have
@@ -74,6 +114,18 @@ export function ResultGrid({
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const [cellError, setCellError] = useState<string | null>(null);
+  /** Source indices of the picked rows. */
+  const [selected, setSelected] = useState<ReadonlySet<number>>(EMPTY_SELECTION);
+  /** Where the last plain click landed, so shift-click has a range to extend. */
+  const anchor = useRef<number | null>(null);
+
+  // A new result set is a different set of rows; carrying a selection across
+  // would leave row 4 of the old result selected in the new one, which is a
+  // different row.
+  useEffect(() => {
+    setSelected(EMPTY_SELECTION);
+    anchor.current = null;
+  }, [result]);
 
   // Column widths are measured from a sample of rows rather than every row:
   // scanning 100k rows to size a column is not worth the frame it costs.
@@ -151,6 +203,57 @@ export function ResultGrid({
   useEffect(() => {
     virtualizer.measure();
   }, [rowHeight, virtualizer]);
+
+  /**
+   * Apply a click on the row gutter.
+   *
+   * The three modifiers do what they do in every file list: plain replaces,
+   * ctrl/cmd toggles one, shift extends from the last plain click. Ranges are
+   * taken in *view* order rather than source order, because the user is
+   * pointing at what they can see — with a sort applied, the rows between two
+   * clicks are the ones drawn between them.
+   */
+  const clickRow = useCallback(
+    (viewIndex: number, modifiers: { shift: boolean; toggle: boolean }) => {
+      const entry = view[viewIndex];
+      if (!entry) return;
+
+      setSelected((was) => {
+        if (modifiers.shift && anchor.current !== null) {
+          const from = view.findIndex((v) => v.index === anchor.current);
+          if (from !== -1) {
+            const [lo, hi] = from < viewIndex ? [from, viewIndex] : [viewIndex, from];
+            const next = new Set(was);
+            for (let i = lo; i <= hi; i++) {
+              const row = view[i];
+              if (row) next.add(row.index);
+            }
+            return next;
+          }
+        }
+
+        if (modifiers.toggle) {
+          const next = new Set(was);
+          if (!next.delete(entry.index)) next.add(entry.index);
+          anchor.current = entry.index;
+          return next;
+        }
+
+        anchor.current = entry.index;
+        // Clicking an already-alone selection clears it, so there is a way back
+        // to nothing selected that does not involve a modifier key.
+        if (was.size === 1 && was.has(entry.index)) return EMPTY_SELECTION;
+        return new Set([entry.index]);
+      });
+    },
+    [view],
+  );
+
+  /** The picked rows, in the order they are displayed. */
+  const selectedRows = useMemo(
+    () => view.filter((entry) => selected.has(entry.index)).map((entry) => entry.row),
+    [view, selected],
+  );
 
   const beginEdit = useCallback(
     (rowIndex: number, colIndex: number, value: Value) => {
@@ -271,6 +374,9 @@ export function ResultGrid({
         columnFilterCount={Object.keys(columnFilters).length}
         onClearColumnFilters={() => setColumnFilters({})}
         readOnlyReason={readOnlyReason}
+        selectedCount={selected.size}
+        onClearSelection={() => setSelected(EMPTY_SELECTION)}
+        onExportSelected={onExportRows ? () => onExportRows(selectedRows) : undefined}
       />
 
       {cellError && (
@@ -283,6 +389,31 @@ export function ResultGrid({
         <div style={{ width: totalWidth, minWidth: "100%" }}>
           {/* Header stays put while the body scrolls under it. */}
           <div className="sticky top-0 z-10 flex border-b border-border bg-surface-2">
+            <div
+              style={{ width: GUTTER_WIDTH }}
+              className="sticky left-0 z-20 shrink-0 border-r border-border bg-surface-2 p-0"
+            >
+              <button
+                type="button"
+                onClick={() =>
+                  setSelected((was) =>
+                    was.size === view.length && view.length > 0
+                      ? EMPTY_SELECTION
+                      : new Set(view.map((entry) => entry.index)),
+                  )
+                }
+                // Everything *visible*, which with a filter on is not
+                // everything fetched. The count beside it says which.
+                title={
+                  selected.size === view.length && view.length > 0
+                    ? "Clear the selection"
+                    : "Select every row shown"
+                }
+                className="flex h-full w-full items-center justify-center text-[10px] text-text-muted hover:text-text"
+              >
+                {selected.size > 0 && selected.size === view.length ? "■" : "□"}
+              </button>
+            </div>
             {result.columns.map((col, i) => (
               <HeaderCell
                 key={`${col.name}-${i}`}
@@ -306,6 +437,10 @@ export function ResultGrid({
           {/* Filter row, directly under the names it filters — the association
               is positional, so it needs no labels of its own. */}
           <div className="sticky top-[var(--header-height,2.6rem)] z-10 flex border-b border-border bg-surface-1">
+            <div
+              style={{ width: GUTTER_WIDTH }}
+              className="sticky left-0 z-20 shrink-0 border-r border-border bg-surface-1"
+            />
             {result.columns.map((col, i) => (
               <div
                 key={`filter-${col.name}-${i}`}
@@ -343,10 +478,14 @@ export function ResultGrid({
               const entry = view[virtual.index];
               if (!entry) return null;
               const { row, index: sourceIndex } = entry;
+              const isSelected = selected.has(sourceIndex);
               return (
                 <div
                   key={virtual.key}
-                  className="absolute flex border-b border-border/40 hover:bg-surface-1"
+                  className={cx(
+                    "absolute flex border-b border-border/40",
+                    isSelected ? "bg-accent/15" : "hover:bg-surface-1",
+                  )}
                   style={{
                     top: 0,
                     left: 0,
@@ -354,6 +493,32 @@ export function ResultGrid({
                     transform: `translateY(${virtual.start}px)`,
                   }}
                 >
+                  <div
+                    style={{ width: GUTTER_WIDTH }}
+                    onMouseDown={(e) => {
+                      // A shift-click inside a scroller selects text as well as
+                      // rows unless the default is refused.
+                      if (e.shiftKey) e.preventDefault();
+                      clickRow(virtual.index, {
+                        shift: e.shiftKey,
+                        toggle: e.ctrlKey || e.metaKey,
+                      });
+                    }}
+                    className={cx(
+                      "sticky left-0 z-10 shrink-0 cursor-pointer border-r border-border select-none",
+                      "text-right font-mono text-[10px] leading-[var(--row-height)] tabular-nums",
+                      isSelected
+                        ? "bg-accent/25 text-text"
+                        : "bg-surface-1 text-text-muted/60 hover:text-text",
+                    )}
+                    // The number is the row's place in the page, not its id —
+                    // and with an offset it continues from where the last page
+                    // ended rather than restarting at one.
+                    title={`Row ${(paging?.offset ?? 0) + sourceIndex + 1}`}
+                  >
+                    <span className="px-1">{(paging?.offset ?? 0) + sourceIndex + 1}</span>
+                  </div>
+
                   {row.map((cell, colIndex) => {
                     const isEditing =
                       editing?.row === sourceIndex && editing.col === colIndex;
@@ -380,6 +545,100 @@ export function ResultGrid({
           </div>
         </div>
       </div>
+
+      {paging && <PagingBar paging={paging} rows={result.rows.length} />}
+    </div>
+  );
+}
+
+/**
+ * Where this page sits, and how to move.
+ *
+ * No total is shown, because there is not one to show: counting the rows a
+ * statement would return means running it to the end, which on a large table is
+ * the very thing paging exists to avoid. What can be known honestly is where
+ * this page starts, how many came back, and whether a full page came back —
+ * which is the only sound way to tell there may be more.
+ */
+function PagingBar({ paging, rows }: { paging: PagingProps; rows: number }) {
+  const { offset, limit, ordered, busy, onGoTo, onPageSize, orderableBy, onOrderBy } = paging;
+  const first = rows === 0 ? 0 : offset + 1;
+  const last = offset + rows;
+  // A short page is the end of the result. A full one only *might* have more,
+  // and saying "might" is the accurate version.
+  const maybeMore = rows > 0 && rows >= limit;
+
+  return (
+    <div className="flex h-7 shrink-0 items-center gap-2 border-t border-border bg-surface-1 px-2 text-[11px]">
+      <button
+        onClick={() => onGoTo(0)}
+        disabled={offset === 0 || busy}
+        className="rounded px-1.5 py-0.5 text-text-muted hover:bg-surface-3 hover:text-text disabled:opacity-30 disabled:hover:bg-transparent"
+        title="First page"
+      >
+        ⇤
+      </button>
+      <button
+        onClick={() => onGoTo(Math.max(0, offset - limit))}
+        disabled={offset === 0 || busy}
+        className="rounded px-1.5 py-0.5 text-text-muted hover:bg-surface-3 hover:text-text disabled:opacity-30 disabled:hover:bg-transparent"
+      >
+        ← Previous
+      </button>
+
+      <span className="tabular-nums text-text-muted">
+        {rows === 0 ? "No rows" : `Rows ${first.toLocaleString()}–${last.toLocaleString()}`}
+      </span>
+
+      <button
+        onClick={() => onGoTo(offset + limit)}
+        disabled={!maybeMore || busy}
+        className="rounded px-1.5 py-0.5 text-text-muted hover:bg-surface-3 hover:text-text disabled:opacity-30 disabled:hover:bg-transparent"
+      >
+        Next →
+      </button>
+
+      {!ordered && maybeMore && (
+        // Worth saying every time the page can move: no engine here promises a
+        // stable row order for an unordered query, so page two can repeat rows
+        // from page one and skip others, and nothing in the result says so.
+        <span className="flex items-center gap-1">
+          <span
+            className="rounded bg-warn/15 px-1.5 py-0.5 text-warn"
+            title="Without an ORDER BY the server may return rows in a different order each time, so pages can overlap or miss rows."
+          >
+            unordered — pages may overlap
+          </span>
+          {onOrderBy && orderableBy && orderableBy.length > 0 && (
+            <button
+              onClick={onOrderBy}
+              disabled={busy}
+              className="rounded px-1.5 py-0.5 text-accent hover:bg-accent/15 disabled:opacity-40"
+              title={`Add ORDER BY ${orderableBy.join(", ")} and run again`}
+            >
+              Order by {orderableBy.join(", ")}
+            </button>
+          )}
+        </span>
+      )}
+
+      <div className="flex-1" />
+
+      <label className="flex items-center gap-1 text-text-muted">
+        Page size
+        <select
+          value={limit}
+          onChange={(e) => onPageSize(Number(e.target.value))}
+          disabled={busy}
+          className="h-5 rounded border border-border bg-surface-0 px-1 text-[11px] outline-none focus:border-accent"
+        >
+          {PAGE_SIZES.map((size) => (
+            <option key={size} value={size}>
+              {size.toLocaleString()}
+            </option>
+          ))}
+        </select>
+      </label>
     </div>
   );
 }
@@ -392,6 +651,9 @@ function GridToolbar({
   columnFilterCount,
   onClearColumnFilters,
   readOnlyReason,
+  selectedCount,
+  onClearSelection,
+  onExportSelected,
 }: {
   result: ResultSet;
   filter: string;
@@ -400,6 +662,9 @@ function GridToolbar({
   columnFilterCount: number;
   onClearColumnFilters: () => void;
   readOnlyReason?: string | undefined;
+  selectedCount: number;
+  onClearSelection: () => void;
+  onExportSelected?: (() => void) | undefined;
 }) {
   return (
     <div className="flex h-7 shrink-0 items-center gap-2 border-b border-border bg-surface-1 px-2 text-[11px]">
@@ -416,6 +681,29 @@ function GridToolbar({
           : `${result.rows.length}`}{" "}
         rows
       </span>
+
+      {selectedCount > 0 && (
+        <span className="flex items-center gap-1.5">
+          <span className="rounded bg-accent/20 px-1.5 py-0.5 font-medium text-accent">
+            {selectedCount} selected
+          </span>
+          {onExportSelected && (
+            <button
+              onClick={onExportSelected}
+              className="rounded px-1.5 py-0.5 text-text-muted hover:bg-surface-3 hover:text-text"
+            >
+              Export…
+            </button>
+          )}
+          <button
+            onClick={onClearSelection}
+            className="rounded px-1 py-0.5 text-text-muted hover:text-text"
+            title="Clear the selection"
+          >
+            ✕
+          </button>
+        </span>
+      )}
 
       {/* A filter typed into a narrow column is easy to lose track of; saying
           how many are on, with one click to clear them, is the antidote. */}

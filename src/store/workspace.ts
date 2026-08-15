@@ -13,6 +13,7 @@
 
 import { create } from "zustand";
 import { ipc, IpcError } from "@/lib/ipc";
+import { useSettings } from "@/store/settings";
 import type {
   CompletionScope,
   DiffReport,
@@ -71,6 +72,17 @@ export interface Tab {
   running: boolean;
   /** Index of the statement whose results are shown. */
   activeStatement: number;
+  /**
+   * Rows skipped by the last fetch — the page this tab is showing.
+   *
+   * Kept on the tab rather than in the grid because it is a property of the
+   * fetch, not of the display: changing it means going back to the server,
+   * and the grid's own filtering and sorting only ever reach the rows already
+   * here.
+   */
+  offset: number;
+  /** Rows the last fetch asked for, so "is there a next page" has an answer. */
+  limit: number;
   undo: AppliedEdit[];
   redo: AppliedEdit[];
 }
@@ -107,6 +119,8 @@ function blankTab(overrides: Partial<Tab> = {}): Tab {
     error: null,
     running: false,
     activeStatement: 0,
+    offset: 0,
+    limit: 0,
     undo: [],
     redo: [],
     ...overrides,
@@ -149,6 +163,8 @@ interface WorkspaceState {
   setTabNotice: (connectionId: string, tabId: string, message: string) => void;
   setActiveStatement: (connectionId: string, tabId: string, index: number) => void;
   run: (connectionId: string, tabId: string, sqlOverride?: string) => Promise<void>;
+  /** Re-run this tab's statement at a different offset. */
+  goToPage: (connectionId: string, tabId: string, offset: number) => Promise<void>;
 
   loadSession: (connectionId: string) => Promise<void>;
   useDatabase: (connectionId: string, database: string) => Promise<void>;
@@ -367,7 +383,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     }
   },
 
-  setSql: (id, tabId, sql) => set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { sql }) })),
+  setSql: (id, tabId, sql) =>
+    // Back to the first page: an offset counts rows of the statement that
+    // produced it, and editing the statement makes that count meaningless.
+    set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { sql, offset: 0 }) })),
 
   setTabError: (id, tabId, message) =>
     set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { error: { message } }) })),
@@ -445,6 +464,13 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { plan: null }) }));
   },
 
+  goToPage: async (id, tabId, offset) => {
+    // Written before the run so the fetch reads it, and clamped because a
+    // "previous" from the first page is a request for row minus one thousand.
+    set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { offset: Math.max(0, offset) }) }));
+    await get().run(id, tabId);
+  },
+
   run: async (id, tabId, sqlOverride) => {
     const tab = tabsOf(get(), id).find((t) => t.id === tabId);
     if (!tab) return;
@@ -463,12 +489,28 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       }),
     }));
     try {
-      const outcome = await ipc.execute({ connection_id: id, sql });
+      // Read at call time rather than closed over: a page change writes the
+      // offset immediately before calling this.
+      const current = tabsOf(get(), id).find((t) => t.id === tabId);
+      const offset = sqlOverride ? 0 : (current?.offset ?? 0);
+      // Read off the settings store rather than passed in: page size is a
+      // preference, and threading it through every caller of run() would make
+      // every one of them responsible for a decision none of them makes.
+      const limit = useSettings.getState().pageSize;
+
+      const outcome = await ipc.execute({
+        connection_id: id,
+        sql,
+        max_rows: limit,
+        offset,
+      });
       set((s) => ({
         tabs: patchTab(s.tabs, id, tabId, {
           outcome,
           running: false,
           activeStatement: 0,
+          offset,
+          limit,
           // A new result invalidates the edit history: the undo statements
           // reference rows that may no longer be on screen.
           undo: [],

@@ -912,6 +912,45 @@ pub async fn table_detail(
     Ok(guard.table_detail(schema.as_deref(), &table).await?)
 }
 
+/// Write the rows the user selected in the grid.
+///
+/// The rows come from the frontend rather than being re-queried: the selection
+/// was made on rows already on screen, and no `WHERE` clause generally
+/// reproduces an arbitrary set of them. Writing what was shown is both faster
+/// and the only version that is certainly what the user picked.
+#[derive(Deserialize)]
+pub struct RowExportArgs {
+    pub connection_id: String,
+    pub path: String,
+    pub format: tablex_core::export::Format,
+    pub table: String,
+    pub columns: Vec<tablex_core::result::Column>,
+    pub rows: Vec<Vec<tablex_core::Value>>,
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn export_rows(
+    state: tauri::State<'_, AppState>,
+    request: RowExportArgs,
+) -> IpcResult<u64> {
+    let config = state.config_for(&request.connection_id).await?;
+    let quote = state
+        .drivers
+        .get(&config.driver)?
+        .info()
+        .capabilities
+        .identifier_quote;
+
+    Ok(crate::export::run_rows(crate::export::RowExportRequest {
+        path: request.path,
+        format: request.format,
+        table: request.table,
+        columns: request.columns,
+        rows: request.rows,
+        quote,
+    })?)
+}
+
 /// Who exists on this server, and what each of them can reach.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn privileges(

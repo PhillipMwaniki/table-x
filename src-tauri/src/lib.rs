@@ -70,6 +70,7 @@ pub fn run() {
             ipc::object_definition,
             ipc::export_table,
             ipc::export_database,
+            ipc::export_rows,
             ipc::import_sql,
             ipc::import_csv,
             ipc::preview_csv,

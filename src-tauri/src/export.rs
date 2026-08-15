@@ -389,6 +389,48 @@ async fn collect_tables(
     Ok(found)
 }
 
+/// Rows the user picked out of a result, written with the same writers a full
+/// export uses.
+///
+/// The rows travel from the frontend rather than being re-queried. They are
+/// already there — the selection was made on them — and re-running the
+/// statement to fetch them again would be both slower and wrong: a `WHERE` that
+/// reproduces an arbitrary set of picked rows does not generally exist, and the
+/// table may have changed since the page was fetched. What is on screen is what
+/// gets written.
+pub struct RowExportRequest {
+    pub path: String,
+    pub format: Format,
+    /// Used as the table name in generated `INSERT` statements.
+    pub table: String,
+    pub columns: Vec<Column>,
+    pub rows: Vec<Vec<Value>>,
+    pub quote: char,
+}
+
+pub fn run_rows(request: RowExportRequest) -> Result<u64> {
+    let file = std::fs::File::create(&request.path)
+        .map_err(|e| Error::Io(format!("could not create {}: {}", request.path, e)))?;
+
+    let mut writer = Writer::new(
+        BufWriter::new(file),
+        request.format,
+        &request.columns,
+        &request.table,
+        request.quote,
+    );
+
+    writer
+        .begin()
+        .map_err(|e| Error::Io(format!("could not write to {}: {}", request.path, e)))?;
+    writer
+        .write_batch(&request.rows)
+        .map_err(|e| Error::Io(format!("could not write to {}: {}", request.path, e)))?;
+    writer
+        .finish()
+        .map_err(|e| Error::Io(format!("could not finish {}: {}", request.path, e)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

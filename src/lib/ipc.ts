@@ -9,6 +9,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   BackendInfo,
+  Column,
   CompletionScope,
   ConnectionConfig,
   CsvPreview,
@@ -30,6 +31,7 @@ import type {
   Snippet,
   SshConfig,
   TableDetail,
+  Value,
 } from "./types";
 
 /** An error from the backend, carrying its category so callers can branch. */
@@ -180,6 +182,20 @@ export const ipc = {
     database: string;
     path: string;
   }) => call<number>("export_database", { request: args }),
+
+  /**
+   * Write rows picked out of the grid, using the same writers a whole-table
+   * export uses so the output is identical in form.
+   */
+  exportRows: (args: {
+    connection_id: string;
+    path: string;
+    format: ExportFormat;
+    /** Names the table in generated INSERT statements. */
+    table: string;
+    columns: Column[];
+    rows: Value[][];
+  }) => call<number>("export_rows", { request: args }),
 
   /** Who exists on this server, and what each of them can reach. */
   privileges: (connection_id: string) => call<Privileges>("privileges", { connection_id }),
