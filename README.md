@@ -138,6 +138,7 @@ Milestone 1 ("core + power features") is the current target.
 | ✅ | **ER diagram** | Deterministic layered layout computed in Rust, one bulk query per schema, pan and zoom. 11 layout tests. |
 | ✅ | **Schema diff + migration** | Compares two schemas on any connected pair, generates ordered DDL in the target engine's dialect, marks every destructive statement. Runs nothing. 17 tests. |
 | ✅ | **`tablex` CLI** | Same drivers, no window: `query`, `export`, `import`, `diff`, `tables`. `diff --exit-code` is a CI drift gate. 26 tests, 10 driving the real binary. |
+| ✅ | **Governance-lite** | Confirmation gate on destructive statements, driven by the colour tag; unbounded ones require typing the connection name. Exportable query-history audit trail. 13 tests. |
 | ✅ | **MCP server** | `tablex mcp` — query, list, describe and explain for an agent, read-only by default, row caps enforced, every call audited. 11 tests over real stdio. |
 | ✅ | **Correctness made visible** | Exact columns marked in the grid, a per-result panel explaining what is guaranteed, and "read-only" replaced by which of four reasons applies. |
 | ✅ | **Privileges and roles** | Principals, grants, role inheritance, and SQL Server denials on four engines. Privilege names stay in the engine's own words. 14 tests. |
