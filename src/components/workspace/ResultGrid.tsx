@@ -26,6 +26,7 @@ import { PAGE_SIZES, rowHeightFor } from "@/lib/settings";
 import { guaranteesFor } from "@/lib/guarantees";
 import type { Precision } from "@/lib/guarantees";
 import { GuaranteesPanel } from "./GuaranteesPanel";
+import { ChartView } from "./ChartView";
 import { useSettings } from "@/store/settings";
 import type { Column, ResultSet, Value } from "@/lib/types";
 
@@ -122,6 +123,9 @@ export function ResultGrid({
   /** Where the last plain click landed, so shift-click has a range to extend. */
   const anchor = useRef<number | null>(null);
   const [showGuarantees, setShowGuarantees] = useState(false);
+  /** Charting replaces the rows rather than sitting beside them: both want the
+      whole pane, and half a grid next to half a chart serves neither. */
+  const [charting, setCharting] = useState(false);
 
   // Derived from the values that arrived rather than the declared types, so it
   // is evidence rather than a claim — see `precisionOf`.
@@ -353,6 +357,10 @@ export function ResultGrid({
   const panelKind = panelValue ? editorFor(panelValue) : null;
   const viewingValue = viewing ? result.rows[viewing.row]?.[viewing.col] : undefined;
 
+  if (charting) {
+    return <ChartView result={result} onClose={() => setCharting(false)} />;
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {panelValue && (panelKind === "json" || panelKind === "text") && (
@@ -385,6 +393,7 @@ export function ResultGrid({
         onClearSelection={() => setSelected(EMPTY_SELECTION)}
         onExportSelected={onExportRows ? () => onExportRows(selectedRows) : undefined}
         onExplain={() => setShowGuarantees(true)}
+        onChart={() => setCharting(true)}
       />
 
       {cellError && (
@@ -670,6 +679,7 @@ function GridToolbar({
   onClearSelection,
   onExportSelected,
   onExplain,
+  onChart,
 }: {
   result: ResultSet;
   filter: string;
@@ -681,6 +691,7 @@ function GridToolbar({
   onClearSelection: () => void;
   onExportSelected?: (() => void) | undefined;
   onExplain: () => void;
+  onChart: () => void;
 }) {
   return (
     <div className="flex h-7 shrink-0 items-center gap-2 border-b border-border bg-surface-1 px-2 text-[11px]">
@@ -749,6 +760,14 @@ function GridToolbar({
       )}
 
       <div className="flex-1" />
+
+      <button
+        onClick={onChart}
+        className="rounded px-1.5 py-0.5 text-text-muted hover:bg-surface-3 hover:text-text"
+        title="Chart these rows"
+      >
+        Chart
+      </button>
 
       <button
         onClick={onExplain}
