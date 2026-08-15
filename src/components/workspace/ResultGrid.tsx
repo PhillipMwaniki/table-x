@@ -20,6 +20,8 @@ import {
 } from "@/lib/value";
 import { cx } from "../ui/primitives";
 import { FILTER_HINT, matchesFilter, parseFilter } from "@/lib/filter";
+import { editorFor } from "@/lib/editors";
+import { BinaryViewer, BoolEditor, InlineEditor, ValuePanel } from "./CellEditor";
 import { rowHeightFor } from "@/lib/settings";
 import { useSettings } from "@/store/settings";
 import type { Column, ResultSet, Value } from "@/lib/types";
@@ -67,6 +69,8 @@ export function ResultGrid({
   /** Per-column expressions, keyed by column index. */
   const [columnFilters, setColumnFilters] = useState<Record<number, string>>({});
   const [editing, setEditing] = useState<{ row: number; col: number } | null>(null);
+  /** A binary cell open for reading. Viewing is not editing. */
+  const [viewing, setViewing] = useState<{ row: number; col: number } | null>(null);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const [cellError, setCellError] = useState<string | null>(null);
@@ -150,6 +154,12 @@ export function ResultGrid({
 
   const beginEdit = useCallback(
     (rowIndex: number, colIndex: number, value: Value) => {
+      // Binary is shown rather than edited, and worth showing even when the
+      // result as a whole cannot be written to.
+      if (value.kind === "bytes") {
+        setViewing({ row: rowIndex, col: colIndex });
+        return;
+      }
       if (!result.editable) return;
       if (!isInlineEditable(value)) return;
       setEditing({ row: rowIndex, col: colIndex });
@@ -184,6 +194,34 @@ export function ResultGrid({
     }
   }, [editing, draft, result.rows, onEdit]);
 
+  /**
+   * Write a value that was chosen rather than typed.
+   *
+   * The text path exists to turn a draft string back into a value; a control
+   * with three options has already produced one, and routing it through text
+   * would only add a way to get it wrong.
+   */
+  const commitValue = useCallback(
+    async (rowIndex: number, colIndex: number, next: Value) => {
+      const original = result.rows[rowIndex]?.[colIndex];
+      if (!original) return;
+      if (formatValue(next) === formatValue(original) && next.kind === original.kind) {
+        setEditing(null);
+        return;
+      }
+      setSaving(true);
+      try {
+        await onEdit(rowIndex, colIndex, next);
+        setEditing(null);
+      } catch (e) {
+        setCellError((e as Error).message);
+      } finally {
+        setSaving(false);
+      }
+    },
+    [result.rows, onEdit],
+  );
+
   // Escape leaves edit mode from anywhere in the grid.
   useEffect(() => {
     if (!editing) return;
@@ -199,8 +237,32 @@ export function ResultGrid({
 
   const totalWidth = widths.reduce((sum, w) => sum + w, 0);
 
+  // The value under an open panel or viewer, if any.
+  const panelValue = editing ? result.rows[editing.row]?.[editing.col] : undefined;
+  const panelKind = panelValue ? editorFor(panelValue) : null;
+  const viewingValue = viewing ? result.rows[viewing.row]?.[viewing.col] : undefined;
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      {panelValue && (panelKind === "json" || panelKind === "text") && (
+        <ValuePanel
+          title={`${result.columns[editing!.col]?.name ?? "Value"} — row ${editing!.row + 1}`}
+          draft={draft}
+          json={panelKind === "json"}
+          saving={saving}
+          onDraft={setDraft}
+          onCommit={() => void commit()}
+          onCancel={() => {
+            setEditing(null);
+            setCellError(null);
+          }}
+        />
+      )}
+
+      {viewingValue?.kind === "bytes" && (
+        <BinaryViewer bytes={viewingValue.value} onClose={() => setViewing(null)} />
+      )}
+
       <GridToolbar
         result={result}
         filter={filter}
@@ -301,12 +363,14 @@ export function ResultGrid({
                         value={cell}
                         width={widths[colIndex] ?? MIN_COL_WIDTH}
                         editable={result.editable}
+                        nullable={result.columns[colIndex]?.nullable !== false}
                         editing={isEditing}
                         saving={isEditing && saving}
                         draft={draft}
                         onDraft={setDraft}
                         onBegin={() => beginEdit(sourceIndex, colIndex, cell)}
                         onCommit={commit}
+                        onCommitValue={(next) => void commitValue(sourceIndex, colIndex, next)}
                       />
                     );
                   })}
@@ -439,41 +503,66 @@ function Cell({
   value,
   width,
   editable,
+  nullable,
   editing,
   saving,
   draft,
   onDraft,
   onBegin,
   onCommit,
+  onCommitValue,
 }: {
   value: Value;
   width: number;
   editable: boolean;
+  /** Whether the column accepts NULL, so the boolean list can offer it. */
+  nullable: boolean;
   editing: boolean;
   saving: boolean;
   draft: string;
   onDraft: (value: string) => void;
   onBegin: () => void;
   onCommit: () => void;
+  /** Commit a value directly, for controls where choosing is the edit. */
+  onCommitValue: (next: Value) => void;
 }) {
   if (editing) {
+    const kind = editorFor(value);
+
+    // JSON and long text are edited in a panel, which renders above the grid;
+    // the cell keeps its place underneath so the row does not jump.
+    if (kind === "json" || kind === "text") {
+      return (
+        <div
+          style={{ width }}
+          className="shrink-0 truncate border border-accent px-2 font-mono text-[length:var(--text-data)] leading-[var(--row-height)]"
+        >
+          {formatValue(value)}
+        </div>
+      );
+    }
+
     return (
       <div style={{ width }} className="shrink-0 border-r border-border p-0">
-        <input
-          autoFocus
-          value={draft}
-          disabled={saving}
-          onChange={(e) => onDraft(e.target.value)}
-          onBlur={onCommit}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              onCommit();
-            }
-          }}
-          style={{ height: "var(--row-height)" }}
-          className="w-full border border-accent bg-surface-0 px-1.5 font-mono text-[length:var(--text-data)] outline-none"
-        />
+        {kind === "bool" ? (
+          <BoolEditor
+            value={value}
+            nullable={nullable}
+            saving={saving}
+            onChoose={(choice) => {
+              onDraft(choice === "null" ? "" : choice);
+              // Chosen from three options, so there is nothing to review: the
+              // choice is the edit.
+              onCommitValue(
+                choice === "null"
+                  ? { kind: "null" }
+                  : { kind: "bool", value: choice === "true" },
+              );
+            }}
+          />
+        ) : (
+          <InlineEditor draft={draft} saving={saving} onDraft={onDraft} onCommit={onCommit} />
+        )}
       </div>
     );
   }
@@ -481,7 +570,7 @@ function Cell({
   return (
     <div
       style={{ width }}
-      onDoubleClick={editable ? onBegin : undefined}
+      onDoubleClick={editable || value.kind === "bytes" ? onBegin : undefined}
       className={cx(
         "shrink-0 truncate border-r border-border px-2 font-mono",
         "text-[length:var(--text-data)] leading-[var(--row-height)]",
