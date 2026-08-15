@@ -162,6 +162,56 @@ export function parseEdit(text: string, original: Value): Value {
 }
 
 /** Tailwind classes tinting a cell by kind. NULL is muted and italic. */
+/** A decimal literal: sign, digits, optional fraction. No exponent. */
+const DECIMAL = /^[+-]?\d+(\.\d+)?$/;
+
+/**
+ * Compare two numbers held as text, without going through a float.
+ *
+ * Returns `null` when either side is not a plain decimal, so callers can fall
+ * back to text comparison.
+ *
+ * `Number()` is not an option here for the same reason `Value::Numeric` is a
+ * string in the first place: a 19-digit integer and its neighbour both round to
+ * the same double, so a sort would call them equal and a `>` filter would drop
+ * a row that belongs. Comparing digit by digit is exact for any length.
+ */
+export function compareDecimalText(a: string, b: string): number | null {
+  const left = a.trim();
+  const right = b.trim();
+  if (!DECIMAL.test(left) || !DECIMAL.test(right)) return null;
+
+  const negative = (s: string) => s.startsWith("-");
+  if (negative(left) !== negative(right)) return negative(left) ? -1 : 1;
+
+  const magnitude = compareMagnitude(strip(left), strip(right));
+  // Among negatives the larger magnitude is the smaller number.
+  return negative(left) ? -magnitude : magnitude;
+}
+
+/** Drop the sign and any leading zeros, so `007` and `7` compare equal. */
+function strip(literal: string): string {
+  const unsigned = literal.replace(/^[+-]/, "");
+  const [whole, fraction = ""] = unsigned.split(".");
+  return `${whole!.replace(/^0+(?=\d)/, "")}.${fraction}`;
+}
+
+function compareMagnitude(a: string, b: string): number {
+  const [aWhole = "", aFraction = ""] = a.split(".");
+  const [bWhole = "", bFraction = ""] = b.split(".");
+
+  // More digits before the point means larger, once leading zeros are gone.
+  if (aWhole.length !== bWhole.length) return aWhole.length - bWhole.length;
+  if (aWhole !== bWhole) return aWhole < bWhole ? -1 : 1;
+
+  // Pad so 0.9 compares against 0.75 rather than "9" against "75".
+  const width = Math.max(aFraction.length, bFraction.length);
+  const aPadded = aFraction.padEnd(width, "0");
+  const bPadded = bFraction.padEnd(width, "0");
+  if (aPadded === bPadded) return 0;
+  return aPadded < bPadded ? -1 : 1;
+}
+
 export function cellClass(value: Value): string {
   switch (kindOf(value)) {
     case "null":

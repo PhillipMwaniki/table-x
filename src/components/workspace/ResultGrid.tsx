@@ -9,8 +9,17 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { cellClass, editText, formatValue, isInlineEditable, isNumeric, parseEdit } from "@/lib/value";
+import {
+  cellClass,
+  compareDecimalText,
+  editText,
+  formatValue,
+  isInlineEditable,
+  isNumeric,
+  parseEdit,
+} from "@/lib/value";
 import { cx } from "../ui/primitives";
+import { FILTER_HINT, matchesFilter, parseFilter } from "@/lib/filter";
 import { rowHeightFor } from "@/lib/settings";
 import { useSettings } from "@/store/settings";
 import type { Column, ResultSet, Value } from "@/lib/types";
@@ -31,13 +40,10 @@ function compareValues(a: Value, b: Value): number {
   if (a.kind === "null") return 1;
   if (b.kind === "null") return -1;
 
-  if (isNumeric(a) && isNumeric(b)) {
-    // Exact numerics arrive as strings and can exceed Number's range, so fall
-    // back to a length-then-lexical comparison when parsing is lossy.
-    const na = Number(formatValue(a));
-    const nb = Number(formatValue(b));
-    if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
-  }
+  // Digit-by-digit where both sides are decimals, so sorting a NUMERIC column
+  // does not collapse values that differ past the 17th digit.
+  const exact = compareDecimalText(formatValue(a), formatValue(b));
+  if (exact !== null) return exact;
   return formatValue(a).localeCompare(formatValue(b), undefined, { numeric: true });
 }
 
@@ -58,6 +64,8 @@ export function ResultGrid({
   const rowHeight = rowHeightFor(fontSize);
   const [sort, setSort] = useState<Sort | null>(null);
   const [filter, setFilter] = useState("");
+  /** Per-column expressions, keyed by column index. */
+  const [columnFilters, setColumnFilters] = useState<Record<number, string>>({});
   const [editing, setEditing] = useState<{ row: number; col: number } | null>(null);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
@@ -96,6 +104,24 @@ export function ResultGrid({
       );
     }
 
+    // Column filters are parsed once per keystroke rather than once per cell:
+    // on a hundred thousand rows that is the difference between typing and
+    // waiting.
+    const active = Object.entries(columnFilters)
+      .map(([index, text]) => ({ index: Number(index), predicate: parseFilter(text) }))
+      .filter(({ predicate }) => predicate.kind !== "any");
+
+    if (active.length > 0) {
+      // Every filter must pass: adding a second one narrows, which is what a
+      // row of boxes above columns leads a person to expect.
+      indexed = indexed.filter(({ row }) =>
+        active.every(({ index, predicate }) => {
+          const cell = row[index];
+          return cell ? matchesFilter(cell, predicate) : false;
+        }),
+      );
+    }
+
     if (sort) {
       const { columnIndex, direction } = sort;
       indexed = [...indexed].sort((a, b) => {
@@ -107,7 +133,7 @@ export function ResultGrid({
       });
     }
     return indexed;
-  }, [result.rows, filter, sort]);
+  }, [result.rows, filter, columnFilters, sort]);
 
   const virtualizer = useVirtualizer({
     count: view.length,
@@ -180,6 +206,8 @@ export function ResultGrid({
         filter={filter}
         onFilter={setFilter}
         visible={view.length}
+        columnFilterCount={Object.keys(columnFilters).length}
+        onClearColumnFilters={() => setColumnFilters({})}
         readOnlyReason={readOnlyReason}
       />
 
@@ -210,6 +238,41 @@ export function ResultGrid({
                   )
                 }
               />
+            ))}
+          </div>
+
+          {/* Filter row, directly under the names it filters — the association
+              is positional, so it needs no labels of its own. */}
+          <div className="sticky top-[var(--header-height,2.6rem)] z-10 flex border-b border-border bg-surface-1">
+            {result.columns.map((col, i) => (
+              <div
+                key={`filter-${col.name}-${i}`}
+                style={{ width: widths[i] ?? MIN_COL_WIDTH }}
+                className="shrink-0 border-r border-border p-0.5"
+              >
+                <input
+                  value={columnFilters[i] ?? ""}
+                  onChange={(e) =>
+                    setColumnFilters((was) => {
+                      const next = { ...was };
+                      // Removed rather than stored empty, so the count of
+                      // active filters is simply the size of this object.
+                      if (e.target.value) next[i] = e.target.value;
+                      else delete next[i];
+                      return next;
+                    })
+                  }
+                  placeholder="filter"
+                  aria-label={`Filter ${col.name}`}
+                  title={FILTER_HINT}
+                  className={cx(
+                    "h-5 w-full rounded-sm border bg-surface-0 px-1 font-mono outline-none",
+                    "text-[length:calc(var(--text-data)*0.85)]",
+                    "placeholder:text-text-muted/40 focus:border-accent",
+                    columnFilters[i] ? "border-accent/60" : "border-transparent",
+                  )}
+                />
+              </div>
             ))}
           </div>
 
@@ -262,12 +325,16 @@ function GridToolbar({
   filter,
   onFilter,
   visible,
+  columnFilterCount,
+  onClearColumnFilters,
   readOnlyReason,
 }: {
   result: ResultSet;
   filter: string;
   onFilter: (value: string) => void;
   visible: number;
+  columnFilterCount: number;
+  onClearColumnFilters: () => void;
   readOnlyReason?: string | undefined;
 }) {
   return (
@@ -280,8 +347,22 @@ function GridToolbar({
       />
 
       <span className="text-text-muted">
-        {filter ? `${visible} of ${result.rows.length}` : `${result.rows.length}`} rows
+        {filter || columnFilterCount > 0
+          ? `${visible} of ${result.rows.length}`
+          : `${result.rows.length}`}{" "}
+        rows
       </span>
+
+      {/* A filter typed into a narrow column is easy to lose track of; saying
+          how many are on, with one click to clear them, is the antidote. */}
+      {columnFilterCount > 0 && (
+        <button
+          onClick={onClearColumnFilters}
+          className="rounded bg-accent/15 px-1.5 py-0.5 text-accent hover:bg-accent/25"
+        >
+          {columnFilterCount} column filter{columnFilterCount === 1 ? "" : "s"} · clear
+        </button>
+      )}
 
       {/* Being explicit that a capped page is not the whole table. Presenting a
           partial result as complete is the kind of thing that misleads someone
@@ -292,8 +373,9 @@ function GridToolbar({
         </span>
       )}
 
-      {/* Sorting a truncated page sorts only what was fetched, which is not the
-          same as the top N of the table. Say so rather than implying otherwise. */}
+      {/* Sorting or filtering a truncated page covers only what was fetched,
+          which is not the same as the top N of the table. Say so rather than
+          implying otherwise. */}
       {result.truncated && (
         <span className="text-text-muted/70">Sort and filter apply to loaded rows only</span>
       )}
