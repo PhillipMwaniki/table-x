@@ -143,6 +143,29 @@ Milestone 1 ("core + power features") is the current target.
 Deliberately **out of scope** for milestone 1, and tracked for later: the third-party
 plugin system, AI chat and query assistance, MCP server integration, and settings sync.
 
+### Why Oracle and MongoDB are not simply two more drivers
+
+Both are wanted, and neither is blocked on writing a `Driver` impl. They are blocked
+on things worth stating rather than discovering halfway through.
+
+**Oracle** has no pure-Rust client. Every crate available (`oracle`, `sibyl`) wraps
+OCI or ODPI-C, which needs Oracle Instant Client present at both build and run time.
+That collides directly with design goal 3: CI would need Instant Client installed on
+all five targets, and the packaged app would have to either bundle it — which its
+licence governs — or refuse to start until the user installs it themselves. The
+workable shape is an optional Cargo feature, off by default, with the driver registry
+reporting Oracle as unavailable in a standard build. That is a deliberate decision
+about distribution, not a missing afternoon of work.
+
+**MongoDB**'s driver is pure Rust and straightforward. The difficulty is that this app
+is SQL-shaped: the editor, autocomplete, formatter, `EXPLAIN`, schema diff, and
+privileges all assume a statement written in SQL, and MongoDB's query language is
+JSON. Supporting it honestly means the workspace learning to host a non-SQL query
+mode — not a sixth `Driver` implementation pretending its find filters are statements.
+The part that can be settled in advance already is: `tablex_core::documents` decides
+how heterogeneous documents become columns and rows, keeps absent fields distinct from
+null ones, and decodes extended JSON so an exact `$numberDecimal` stays exact.
+
 ## Architecture
 
 ```
