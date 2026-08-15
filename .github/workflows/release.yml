@@ -1,0 +1,170 @@
+name: Release
+
+# Two ways in, because they answer different questions.
+#
+# Pushing a `v*` tag builds the installers and opens a draft release — draft, so
+# a human reads the notes and checks the artifacts before anyone can download
+# them. `workflow_dispatch` builds the same installers and attaches them to the
+# run as artifacts without touching releases, which is how you find out whether
+# a change breaks packaging before committing to a version number.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing should not cancel the others: knowing that Windows
+      # packaged and Linux did not is the useful outcome, and rebuilding
+      # everything to learn it is an expensive way to find out.
+      fail-fast: false
+      matrix:
+        include:
+          # ubuntu-22.04 rather than the newest image on purpose: a binary built
+          # against glibc 2.35 runs on newer distributions, and one built
+          # against 2.39 does not run on older ones. The oldest image that is
+          # still supported is the widest audience.
+          - name: Linux (deb, AppImage, rpm)
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            args: ""
+
+          - name: Windows (msi, exe)
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            args: ""
+
+          # Split rather than a universal binary: two downloads half the size
+          # each, and a failure on one architecture names itself.
+          - name: macOS (Apple silicon)
+            os: macos-latest
+            target: aarch64-apple-darwin
+            args: "--target aarch64-apple-darwin"
+
+          - name: macOS (Intel)
+            os: macos-latest
+            target: x86_64-apple-darwin
+            args: "--target x86_64-apple-darwin"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Everything Tauri links against on Linux, plus libdbus for the keyring
+      # crate, which reaches the OS credential store through Secret Service.
+      - name: Install system libraries
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            libdbus-1-dev \
+            pkg-config \
+            build-essential \
+            patchelf \
+            file \
+            desktop-file-utils
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build the installers
+        uses: tauri-apps/tauri-action@v0
+        id: tauri
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signing is optional so an unsigned build still produces installers.
+          # Unsigned ones warn on first launch — SmartScreen on Windows,
+          # Gatekeeper on macOS — which is fine for a nightly and not fine for a
+          # public release. See the release notes in README.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          args: ${{ matrix.args }}
+
+      # Attached to the run regardless of how it was triggered, so a dispatch
+      # build is downloadable and a tagged one has a copy that outlives an
+      # abandoned draft release.
+      # Globbed from the bundle directory rather than read out of the action's
+      # `artifactPaths` output: that output is a JSON array, and joining it into
+      # the newline-separated list this input wants needs an escape that GitHub
+      # expressions do not have. The paths are deterministic, so a glob is both
+      # simpler and easier to check by eye.
+      #
+      # `**` matches zero segments too, which is what covers both the plain
+      # `target/release/bundle` of a native build and the
+      # `target/<triple>/release/bundle` of a cross-compiled one.
+      - name: Upload the installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: tablex-${{ matrix.target }}
+          path: |
+            target/**/release/bundle/**/*.deb
+            target/**/release/bundle/**/*.rpm
+            target/**/release/bundle/**/*.AppImage
+            target/**/release/bundle/**/*.msi
+            target/**/release/bundle/**/*.exe
+            target/**/release/bundle/**/*.dmg
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Draft release
+    # Only for a tag. A dispatch run stops at artifacts, which is the whole
+    # point of having the two triggers.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Draft the release
+        uses: softprops/action-gh-release@v2
+        with:
+          # Draft, so somebody reads the notes and checks the files before this
+          # is something people can install.
+          draft: true
+          generate_release_notes: true
+          files: artifacts/**/*
+          fail_on_unmatched_files: true

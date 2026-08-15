@@ -1,0 +1,95 @@
+# Checks that run on every push and pull request.
+#
+# Split into two jobs on purpose. The frontend job is fast and needs no system
+# libraries, so a typo in a component fails in under a minute rather than after
+# a full Rust build. The Rust job needs the GTK/WebKit stack that Tauri links
+# against, which is the slow part.
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+# A second push to the same branch makes the first run irrelevant, and a queue
+# of superseded runs is a queue somebody waits behind.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Debug info is the bulk of the target directory and nothing here reads a
+  # backtrace line number; dropping it makes the cache meaningfully smaller.
+  CARGO_PROFILE_DEV_DEBUG: 0
+
+jobs:
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Typecheck before tests: a type error is usually the cause of a test
+      # failure rather than a separate problem, and it reports better.
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+  rust:
+    name: Rust
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            libdbus-1-dev \
+            pkg-config \
+            build-essential
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Shared with the release job's Linux build, which compiles the same
+          # dependency graph.
+          shared-key: linux
+
+      - name: Formatting
+        run: cargo fmt --all --check
+
+      # --all-targets covers tests and benches, which is where most lint
+      # regressions actually appear. Warnings fail the build so they do not
+      # accumulate into noise nobody reads.
+      - name: Clippy
+        run: cargo clippy --workspace --all-features --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --all-features

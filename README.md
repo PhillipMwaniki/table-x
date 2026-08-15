@@ -15,10 +15,11 @@ Windows · Linux · macOS · iOS · Android
 ---
 
 > [!WARNING]
-> **Status: early development (v0.1.0).** The core type system, driver contract, and
-> application scaffold are in place and tested. Database drivers and the UI are being
-> built now — see [Roadmap](#roadmap) for exactly what works today. This is not yet
-> usable as a daily database client.
+> **Status: pre-release (v0.1.0).** Five drivers, the editor, the grid, tunnelling and
+> the power features are built and tested — see [Roadmap](#roadmap) for exactly what
+> works today. Installers are produced by CI but are **not code-signed yet**, so the
+> first launch warns on Windows and macOS. Nothing here has been through a release
+> anyone else has installed.
 
 ---
 
@@ -36,6 +37,7 @@ Windows · Linux · macOS · iOS · Android
 - [Development workflow](#development-workflow)
 - [Writing a driver](#writing-a-driver)
 - [Platform support](#platform-support)
+- [Releases and signing](#releases-and-signing)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -144,7 +146,7 @@ Milestone 1 ("core + power features") is the current target.
 | ✅ | **MCP server** | `tablex mcp` — query, list, describe and explain for an agent, read-only by default, row caps enforced, every call audited. 11 tests over real stdio. |
 | ✅ | **Correctness made visible** | Exact columns marked in the grid, a per-result panel explaining what is guaranteed, and "read-only" replaced by which of four reasons applies. |
 | ✅ | **Privileges and roles** | Principals, grants, role inheritance, and SQL Server denials on four engines. Privilege names stay in the engine's own words. 14 tests. |
-| ⬜ | **CI/CD + packaging** | MSI/NSIS, .dmg, .deb/.rpm/AppImage, mobile bundles. |
+| 🚧 | **CI/CD + packaging** | GitHub Actions builds MSI/NSIS, .dmg (Intel and Apple silicon), .deb, .rpm and AppImage on every tag. **Code signing and notarization are not set up**, and mobile bundles are not built — see [Releases and signing](#releases-and-signing). |
 
 Deliberately **out of scope** for milestone 1, and tracked for later: the third-party
 plugin system, AI chat and query assistance, MCP server integration, and settings sync.
@@ -447,6 +449,17 @@ pnpm app:dev              # Rust + Vite + window, with hot reload on both sides
 pnpm app:build            # release bundle
 ```
 
+CI runs exactly these on every push: `pnpm typecheck`, `pnpm test`, `pnpm build`,
+`cargo fmt --all --check`, `cargo clippy --workspace --all-features --all-targets`
+with warnings denied, and `cargo test --workspace --all-features`. Running them
+locally before pushing is the whole of the pre-flight.
+
+> [!NOTE]
+> `pnpm lint` and `pnpm fmt` are declared in `package.json` but ESLint and Prettier
+> are **not installed**, so both fail. They are not run by CI for that reason.
+> Either add the tools and a config, or drop the scripts — a command that only
+> exists to fail is worse than one that is not there.
+
 ### Database tests
 
 SQLite tests run everywhere with no setup — the engine is compiled in, and every
@@ -558,16 +571,71 @@ impl Driver for MyDriver {
 
 ## Platform support
 
-| Platform | Minimum | Bundle | Status |
+| Platform | Minimum | Bundle | Built by CI |
 |---|---|---|:---:|
-| Windows | 10 1809+ | `.msi`, `.exe` (NSIS) | 🚧 |
-| Linux | glibc 2.31+ | `.deb`, `.rpm`, `.AppImage` | 🚧 |
-| macOS | 10.15+ | `.dmg`, `.app` (universal) | 🚧 |
+| Windows | 10 1809+ | `.msi`, `.exe` (NSIS) | ✅ |
+| Linux | glibc 2.35+ | `.deb`, `.rpm`, `.AppImage` | ✅ |
+| macOS | 10.15+ | `.dmg` (Intel and Apple silicon) | ✅ |
 | iOS / iPadOS | 13+ | `.ipa` | ⬜ |
 | Android | 8.0+ (API 26) | `.apk`, `.aab` | ⬜ |
 
-Mobile targets share the entire Rust core; only layout differs. Drivers requiring native
-libraries that cannot be linked on mobile are excluded there via Cargo features.
+The Linux floor is glibc 2.35 because that is what the `ubuntu-22.04` runner links
+against, and a binary built against a newer glibc will not start on an older
+distribution. Moving the build to an older image is the only way to lower it.
+
+macOS ships as two separate downloads rather than one universal binary: each is half
+the size, and a failure on one architecture names itself instead of taking the other
+down with it.
+
+Mobile shares the entire Rust core, but it is not a build target away — see
+[Why mobile is not simply another build target](#why-mobile-is-not-simply-another-build-target).
+
+## Releases and signing
+
+Two workflows, in `.github/workflows`:
+
+| Workflow | Runs on | Does |
+|---|---|---|
+| `ci.yml` | every push and PR | typecheck, frontend tests, `cargo fmt --check`, clippy with warnings denied, full Rust test suite |
+| `release.yml` | a `v*` tag, or manually | builds every installer, then opens a **draft** release with them attached |
+
+Running `release.yml` from the Actions tab builds the same installers and attaches them
+to the run without touching releases — which is how to find out whether a change breaks
+packaging before committing to a version number.
+
+To cut a release:
+
+```bash
+# The tag and the version in tauri.conf.json and Cargo.toml must agree —
+# nothing enforces that yet, so check it by eye.
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+The release is left as a draft on purpose: somebody should read the generated notes and
+check the artifacts before they become something people can install.
+
+### Signing is not set up
+
+The installers CI produces are **unsigned**. Windows SmartScreen will warn on first run,
+and macOS Gatekeeper will refuse to open the `.dmg` without a right-click → Open. That is
+acceptable for a pre-release and not acceptable for something people are asked to trust
+with database credentials.
+
+Signing needs paid identities that have to be bought and held by whoever publishes:
+
+- **macOS** — an Apple Developer Program membership ($99/year) for a Developer ID
+  certificate, plus notarization. The workflow already passes `APPLE_CERTIFICATE`,
+  `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`
+  and `APPLE_TEAM_ID` through to the build; setting those repository secrets is all that
+  is needed to turn it on.
+- **Windows** — an OV or EV code-signing certificate from a CA. EV avoids the SmartScreen
+  reputation period; OV earns trust only after enough downloads. Wiring it up means
+  adding the certificate to `tauri.conf.json`'s `bundle.windows.signCommand` or
+  `certificateThumbprint`.
+
+There is no auto-updater, so no update signing key is needed. Adding one later means
+generating a keypair with `pnpm tauri signer generate` and holding the private half as a
+repository secret.
 
 ## Contributing
 
