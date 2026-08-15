@@ -171,6 +171,8 @@ export interface ConnectionConfig {
   folder?: string | undefined;
   color?: string | undefined;
   read_only: boolean;
+  /** Ask before destructive statements. Null follows the colour tag. */
+  confirm_destructive?: boolean | null | undefined;
   options: Record<string, string>;
 }
 
@@ -250,6 +252,19 @@ export interface SchemaNode {
 
 /** File formats a table can be written out as. */
 export type ExportFormat = "csv" | "json" | "sql";
+
+/** One thing a submission would destroy. */
+export interface HazardItem {
+  summary: string;
+  /** Affects everything rather than a chosen subset. */
+  unbounded: boolean;
+}
+
+export interface HazardReport {
+  /** Whether this connection is configured to ask before destroying data. */
+  confirms: boolean;
+  hazards: HazardItem[];
+}
 
 /** Someone or something that can hold a privilege. */
 export interface Principal {

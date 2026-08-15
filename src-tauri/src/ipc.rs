@@ -186,6 +186,7 @@ mod tests {
             folder: None,
             color: None,
             read_only: false,
+            confirm_destructive: None,
             options: IndexMap::new(),
         };
         // Saving a database password must never overwrite a key passphrase.
@@ -910,6 +911,97 @@ pub async fn table_detail(
     let session = state.sessions.get(&connection_id).await?;
     let mut guard = session.connection.lock().await;
     Ok(guard.table_detail(schema.as_deref(), &table).await?)
+}
+
+/// Write the query history to a file, as an audit trail that can leave.
+///
+/// The history is already every statement run, with its timing, its outcome and
+/// the connection it ran against. What it could not do was leave the machine —
+/// and a record that cannot be handed to somebody is not much of an audit.
+///
+/// CSV and JSON, the same two formats a result exports to, because the thing
+/// someone does next with it is open it in a spreadsheet or feed it to a script.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn export_history(
+    state: tauri::State<'_, AppState>,
+    path: String,
+    format: String,
+    query: HistoryQuery,
+) -> IpcResult<u64> {
+    let entries = state.history.lock().await.search(&query);
+
+    let text = if format == "json" {
+        serde_json::to_string_pretty(&entries)
+            .map_err(|e| tablex_core::Error::Other(e.to_string()))?
+    } else {
+        let mut out = String::from("ran_at,connection,driver,succeeded,elapsed_ms,rows,sql,error
+");
+        for entry in &entries {
+            out.push_str(&format!(
+                "{},{},{},{},{},{},{},{}
+",
+                csv_field(&entry.ran_at),
+                csv_field(&entry.connection_name),
+                csv_field(&entry.driver),
+                entry.succeeded,
+                entry.elapsed_ms,
+                entry.rows.map(|r| r.to_string()).unwrap_or_default(),
+                csv_field(&entry.sql),
+                csv_field(entry.error.as_deref().unwrap_or("")),
+            ));
+        }
+        out
+    };
+
+    std::fs::write(&path, text)
+        .map_err(|e| tablex_core::Error::Io(format!("could not write {path}: {e}")))?;
+    Ok(entries.len() as u64)
+}
+
+/// Quote a CSV field, doubling any quotes inside it.
+///
+/// SQL is full of commas, quotes and newlines, so every field is quoted rather
+/// than only the ones that look like they need it.
+fn csv_field(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
+}
+
+/// What a submission would destroy, and whether this connection asks first.
+///
+/// Analysed in Rust rather than the frontend because the same scanner backs the
+/// read-only guard and the MCP server's refusal: three answers to "does this
+/// destroy something" would eventually be three different answers.
+#[derive(Serialize)]
+pub struct HazardReport {
+    /// Whether this connection is configured to ask before destroying data.
+    pub confirms: bool,
+    pub hazards: Vec<HazardItem>,
+}
+
+#[derive(Serialize)]
+pub struct HazardItem {
+    pub summary: String,
+    /// Affects everything rather than a chosen subset.
+    pub unbounded: bool,
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn inspect_statement(
+    state: tauri::State<'_, AppState>,
+    connection_id: String,
+    sql: String,
+) -> IpcResult<HazardReport> {
+    let config = state.config_for(&connection_id).await?;
+    Ok(HazardReport {
+        confirms: config.confirms_destructive(),
+        hazards: tablex_core::sql::hazards(&sql)
+            .into_iter()
+            .map(|h| HazardItem {
+                summary: h.summary,
+                unbounded: h.unbounded,
+            })
+            .collect(),
+    })
 }
 
 /// Write the rows the user selected in the grid.

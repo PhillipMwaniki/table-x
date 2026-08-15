@@ -23,6 +23,7 @@ import { DiagramView } from "./DiagramView";
 import { DiffView } from "./DiffView";
 import { CompareDialog } from "./CompareDialog";
 import { PrivilegesPanel } from "./PrivilegesPanel";
+import { ConfirmDestructive } from "./ConfirmDestructive";
 import { Button, Spinner, cx } from "../ui/primitives";
 import { ContextMenu } from "../ui/ContextMenu";
 import { Dialog } from "../ui/Dialog";
@@ -44,6 +45,7 @@ import type {
   ConnectionConfig,
   DriverInfo,
   ExportFormat,
+  HazardItem,
   NodeKind,
   Value,
   SchemaNode,
@@ -116,6 +118,13 @@ export function Workspace({
   const watchExports = useExports((s) => s.watch);
   const beginExport = useExports((s) => s.begin);
   const endExport = useExports((s) => s.end);
+  /** A submission held back until its hazards are confirmed. */
+  const [pending, setPending] = useState<{
+    tabId: string;
+    sql: string;
+    hazards: HazardItem[];
+  } | null>(null);
+
   /** Rows picked in the grid, waiting for a format to be chosen. */
   const [exporting, setExporting] = useState<Value[][] | null>(null);
 
@@ -414,6 +423,45 @@ export function Workspace({
   };
 
   /**
+   * Run, unless this connection asks about destructive statements first.
+   *
+   * Every path that runs SQL goes through here rather than calling `run`
+   * directly — a gate that one button skips is not a gate. The check is a round
+   * trip, which is cheap next to the statement and is where the analysis lives
+   * anyway: the same scanner backs the read-only guard and the MCP refusal, and
+   * a second copy in the frontend would eventually disagree with them.
+   */
+  const runGuarded = async (tabId: string, sqlOverride?: string) => {
+    const current = activeTab(connection.id)?.id === tabId ? activeTab(connection.id) : null;
+    const sql = sqlOverride ?? current?.sql ?? "";
+    if (!sql.trim()) return;
+
+    try {
+      const report = await ipc.inspectStatement(connection.id, sql);
+      if (report.confirms && report.hazards.length > 0) {
+        setPending({ tabId, sql, hazards: report.hazards });
+        return;
+      }
+    } catch {
+      // A failed check must not become a way to run unchecked: if the question
+      // cannot be answered, the statement is held rather than waved through.
+      setPending({
+        tabId,
+        sql,
+        hazards: [
+          {
+            summary: "This statement could not be checked for destructive operations.",
+            unbounded: false,
+          },
+        ],
+      });
+      return;
+    }
+
+    await run(connection.id, tabId, sqlOverride);
+  };
+
+  /**
    * Compare this schema with another, and write the migration between them.
    *
    * The script is generated for *this* connection's engine, because this is the
@@ -557,7 +605,7 @@ export function Workspace({
         title: tab.kind === "table" ? "Refresh rows" : "Run query",
         group: "Query",
         shortcut: "Ctrl+Enter",
-        run: () => void run(connection.id, tab.id),
+        run: () => void runGuarded(tab.id),
       },
       {
         id: "ws.format",
@@ -719,7 +767,7 @@ export function Workspace({
                 <>
               <Button
                 variant="primary"
-                onClick={() => void run(connection.id, tab.id)}
+                onClick={() => void runGuarded(tab.id)}
                 busy={tab.running}
                 disabled={!tab.sql.trim()}
                 className="h-6"
@@ -848,7 +896,7 @@ export function Workspace({
                     <SqlEditor
                       value={tab.sql}
                       onChange={(sql) => setSql(connection.id, tab.id, sql)}
-                      onRun={(text) => void run(connection.id, tab.id, text)}
+                      onRun={(text) => void runGuarded(tab.id, text)}
                       driver={connection.driver}
                       completion={completion}
                       errorPosition={tab.error?.position}
@@ -1054,6 +1102,23 @@ export function Workspace({
         </Dialog>
       )}
 
+      {pending && (
+        <ConfirmDestructive
+          open
+          connectionName={connection.name}
+          hazards={pending.hazards}
+          sql={pending.sql}
+          onCancel={() => setPending(null)}
+          onConfirm={() => {
+            const held = pending;
+            setPending(null);
+            // The statement the dialog showed, not whatever the editor holds
+            // now — they can differ if something changed while it was open.
+            void run(connection.id, held.tabId, held.sql);
+          }}
+        />
+      )}
+
       {compare && (
         <CompareDialog
           open
@@ -1082,7 +1147,7 @@ export function Workspace({
         onRun={(sql) => {
           if (!tab) return;
           setSql(connection.id, tab.id, sql);
-          void run(connection.id, tab.id, sql);
+          void runGuarded(tab.id, sql);
         }}
       />
     </div>

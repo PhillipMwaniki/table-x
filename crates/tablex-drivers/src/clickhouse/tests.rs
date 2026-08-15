@@ -40,6 +40,7 @@ fn test_config() -> Option<(ConnectionConfig, String)> {
             folder: None,
             color: None,
             read_only: false,
+            confirm_destructive: None,
             options: IndexMap::new(),
         },
         password.to_string(),

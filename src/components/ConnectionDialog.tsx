@@ -399,6 +399,25 @@ export function ConnectionDialog({
             />
           </div>
         </div>
+
+        {/* A read-only connection refuses the write before it can destroy
+            anything, so a confirmation there would be a dialog for something
+            that will not happen — and those are how people learn to dismiss
+            dialogs without reading them. */}
+        {!config.read_only && (
+          <div className="border-t border-border pt-3">
+            <Checkbox
+              label="Confirm destructive statements"
+              hint={
+                config.confirm_destructive == null
+                  ? "Following the colour tag: on for tagged connections, off otherwise. Tick to set it explicitly."
+                  : "Asks before anything that drops, truncates, or deletes without a WHERE."
+              }
+              checked={config.confirm_destructive ?? Boolean(config.color)}
+              onChange={(on) => patch({ confirm_destructive: on })}
+            />
+          </div>
+        )}
       </div>
     </Dialog>
   );

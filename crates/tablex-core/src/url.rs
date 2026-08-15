@@ -139,6 +139,10 @@ pub fn parse(input: &str) -> Result<ParsedUrl> {
             folder: None,
             color: None,
             read_only: false,
+            // A CLI run has no dialog to confirm in. The MCP server's read-only
+            // default is the guard there, and it is enforced before the driver
+            // is reached rather than by asking.
+            confirm_destructive: Some(false),
             options,
         },
         password: url.password().map(decode),

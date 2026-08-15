@@ -71,6 +71,8 @@ pub fn run() {
             ipc::export_table,
             ipc::export_database,
             ipc::export_rows,
+            ipc::inspect_statement,
+            ipc::export_history,
             ipc::import_sql,
             ipc::import_csv,
             ipc::preview_csv,

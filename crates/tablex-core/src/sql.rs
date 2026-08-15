@@ -407,8 +407,22 @@ pub fn looks_like_write(sql: &str) -> bool {
 /// identifiers. Used for keyword scanning where a match inside a literal would
 /// be a false positive.
 fn bare_words(sql: &str) -> Vec<&str> {
+    bare_words_with_depth(sql)
+        .into_iter()
+        .map(|(word, _)| word)
+        .collect()
+}
+
+/// The same tokens, each with the parenthesis nesting it appeared at.
+///
+/// Depth is what separates a clause that governs the statement from one that
+/// governs a subquery: the `WHERE` in `DELETE FROM t WHERE id = 1` bounds the
+/// delete, and the one in `DELETE FROM t` — with a `WHERE` only inside some
+/// parenthesised expression — does not.
+fn bare_words_with_depth(sql: &str) -> Vec<(&str, usize)> {
     let bytes = sql.as_bytes();
     let mut words = Vec::new();
+    let mut depth = 0usize;
     let mut i = 0usize;
 
     while i < bytes.len() {
@@ -475,6 +489,14 @@ fn bare_words(sql: &str) -> Vec<&str> {
                     i += 1;
                 }
             }
+            b'(' => {
+                depth += 1;
+                i += 1;
+            }
+            b')' => {
+                depth = depth.saturating_sub(1);
+                i += 1;
+            }
             c if c.is_ascii_alphabetic() || c == b'_' => {
                 let start = i;
                 while i < bytes.len()
@@ -482,12 +504,133 @@ fn bare_words(sql: &str) -> Vec<&str> {
                 {
                     i += 1;
                 }
-                words.push(&sql[start..i]);
+                words.push((&sql[start..i], depth));
             }
             _ => i += 1,
         }
     }
     words
+}
+
+/// What a statement would destroy, if anything.
+///
+/// This is the input to a confirmation gate, so it answers a narrower question
+/// than [`looks_like_write`]: not "does this change the database" but "would
+/// this lose something, and how much". An `INSERT` is a write and not a hazard;
+/// a `DELETE` with no `WHERE` is the reason the gate exists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hazard {
+    /// What it would do, phrased for someone reading it under time pressure.
+    pub summary: String,
+    /// Whether it affects everything rather than a chosen subset.
+    ///
+    /// The distinction is the whole point. `DELETE FROM orders WHERE id = 5`
+    /// and `DELETE FROM orders` are the same statement missing seven
+    /// characters, and only one of them ends a career.
+    pub unbounded: bool,
+}
+
+/// Words that sit between a keyword and the name it applies to.
+const NOISE: &[&str] = &[
+    "IF", "EXISTS", "TABLE", "ONLY", "FROM", "INTO", "CONCURRENTLY", "CASCADE",
+];
+
+/// What one statement would destroy.
+///
+/// Conservative in the direction that costs least: a `WHERE` this cannot see as
+/// top-level is treated as absent, so an unusual statement is more likely to be
+/// flagged than waved through. A needless confirmation costs a click.
+pub fn hazard(statement: &str) -> Option<Hazard> {
+    let words = bare_words_with_depth(statement);
+    let top: Vec<&str> = words
+        .iter()
+        .filter(|(_, depth)| *depth == 0)
+        .map(|(word, _)| *word)
+        .collect();
+
+    let first = top.first()?.to_ascii_uppercase();
+    // A top-level WHERE is what bounds a statement; one inside parentheses
+    // belongs to a subquery and bounds nothing.
+    let bounded = top.iter().any(|w| w.eq_ignore_ascii_case("WHERE"));
+    let name = |after: usize| -> Option<String> {
+        top.iter()
+            .skip(after)
+            .find(|w| !NOISE.iter().any(|n| w.eq_ignore_ascii_case(n)))
+            .map(|w| w.to_string())
+    };
+
+    match first.as_str() {
+        "DROP" => {
+            let kind = top.get(1).map(|k| k.to_ascii_lowercase())?;
+            let what = name(2).map(|n| format!(" {n}")).unwrap_or_default();
+            Some(Hazard {
+                summary: format!("drops the {kind}{what} and everything in it"),
+                unbounded: true,
+            })
+        }
+
+        "TRUNCATE" => Some(Hazard {
+            summary: match name(1) {
+                Some(table) => format!("empties {table} completely"),
+                None => "empties the table completely".into(),
+            },
+            unbounded: true,
+        }),
+
+        "DELETE" => Some(Hazard {
+            summary: match (name(1), bounded) {
+                (Some(table), true) => format!("deletes matching rows from {table}"),
+                (Some(table), false) => format!("deletes every row in {table} — there is no WHERE"),
+                (None, true) => "deletes matching rows".into(),
+                (None, false) => "deletes every row — there is no WHERE".into(),
+            },
+            unbounded: !bounded,
+        }),
+
+        "UPDATE" => Some(Hazard {
+            summary: match (name(1), bounded) {
+                (Some(table), true) => format!("updates matching rows in {table}"),
+                (Some(table), false) => {
+                    format!("updates every row in {table} — there is no WHERE")
+                }
+                (None, true) => "updates matching rows".into(),
+                (None, false) => "updates every row — there is no WHERE".into(),
+            },
+            unbounded: !bounded,
+        }),
+
+        "ALTER" => {
+            // Only the destructive half of ALTER. Adding a column is a write
+            // and loses nothing; dropping one loses a column of data.
+            let drops_column = top
+                .windows(2)
+                .any(|pair| pair[0].eq_ignore_ascii_case("DROP") && pair[1].eq_ignore_ascii_case("COLUMN"));
+            drops_column.then(|| Hazard {
+                summary: match name(2) {
+                    Some(table) => format!("drops a column from {table}, and its values with it"),
+                    None => "drops a column, and its values with it".into(),
+                },
+                unbounded: true,
+            })
+        }
+
+        // MERGE always has an ON clause, so it is bounded by construction — but
+        // it can delete, so it is still worth confirming.
+        "MERGE" => Some(Hazard {
+            summary: match name(1) {
+                Some(table) => format!("merges into {table}, which may delete rows"),
+                None => "merges rows, which may delete some".into(),
+            },
+            unbounded: false,
+        }),
+
+        _ => None,
+    }
+}
+
+/// Every hazard in a submission, in the order the statements would run.
+pub fn hazards(sql: &str) -> Vec<Hazard> {
+    split_statements(sql).iter().filter_map(|s| hazard(s)).collect()
 }
 
 /// Quote an identifier for interpolation into generated SQL.
@@ -514,6 +657,98 @@ pub fn quote_ident(name: &str, quote: char) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_delete_without_a_where_is_the_case_the_gate_exists_for() {
+        // Seven characters apart, and only one of them ends a career.
+        let bounded = hazard("DELETE FROM orders WHERE id = 5").expect("a delete is a hazard");
+        assert!(!bounded.unbounded);
+        assert!(bounded.summary.contains("matching rows"), "{}", bounded.summary);
+
+        let unbounded = hazard("DELETE FROM orders").expect("a delete is a hazard");
+        assert!(unbounded.unbounded);
+        assert!(unbounded.summary.contains("every row"), "{}", unbounded.summary);
+        assert!(unbounded.summary.contains("orders"), "{}", unbounded.summary);
+    }
+
+    #[test]
+    fn an_update_without_a_where_is_flagged_the_same_way() {
+        assert!(hazard("UPDATE users SET active = false").expect("hazard").unbounded);
+        assert!(!hazard("UPDATE users SET active = false WHERE id = 1").expect("hazard").unbounded);
+    }
+
+    #[test]
+    fn a_where_inside_a_subquery_does_not_bound_the_statement() {
+        // It governs the subquery. Treating it as a bound is how an unbounded
+        // delete gets waved through by a scanner that only looks for the word.
+        let h = hazard("DELETE FROM orders WHERE user_id IN (SELECT id FROM users WHERE active)")
+            .expect("hazard");
+        assert!(!h.unbounded, "a real top-level WHERE was missed");
+
+        let h = hazard("UPDATE t SET x = (SELECT max(y) FROM u WHERE u.id = 1)").expect("hazard");
+        assert!(h.unbounded, "a subquery's WHERE bounded the update: {}", h.summary);
+    }
+
+    #[test]
+    fn a_where_in_a_comment_or_a_string_bounds_nothing() {
+        assert!(hazard("DELETE FROM t -- WHERE id = 1").expect("hazard").unbounded);
+        assert!(hazard("DELETE FROM t /* WHERE id = 1 */").expect("hazard").unbounded);
+        assert!(hazard("UPDATE t SET note = 'where'").expect("hazard").unbounded);
+    }
+
+    #[test]
+    fn drop_and_truncate_are_always_unbounded() {
+        let drop = hazard("DROP TABLE orders").expect("hazard");
+        assert!(drop.unbounded);
+        assert!(drop.summary.contains("orders"), "{}", drop.summary);
+
+        assert!(hazard("DROP TABLE IF EXISTS orders").expect("hazard").summary.contains("orders"));
+        assert!(hazard("TRUNCATE TABLE orders").expect("hazard").unbounded);
+        assert!(hazard("DROP DATABASE app").expect("hazard").summary.contains("database"));
+    }
+
+    #[test]
+    fn adding_a_column_is_not_a_hazard_and_dropping_one_is() {
+        // A write that loses nothing does not need a gate; the gate is for
+        // losing things, and a gate that fires on everything gets clicked
+        // through without reading.
+        assert_eq!(hazard("ALTER TABLE users ADD COLUMN nickname TEXT"), None);
+
+        let dropped = hazard("ALTER TABLE users DROP COLUMN nickname").expect("hazard");
+        assert!(dropped.unbounded);
+        assert!(dropped.summary.contains("users"), "{}", dropped.summary);
+    }
+
+    #[test]
+    fn reads_and_harmless_writes_are_not_hazards() {
+        for sql in [
+            "SELECT * FROM users",
+            "INSERT INTO users (id) VALUES (1)",
+            "CREATE TABLE t (id INTEGER)",
+            "CREATE INDEX ix ON t (id)",
+            "EXPLAIN SELECT * FROM users",
+        ] {
+            assert_eq!(hazard(sql), None, "{sql}");
+        }
+    }
+
+    #[test]
+    fn every_statement_in_a_submission_is_examined() {
+        // The dangerous one is rarely the first, and a gate that reads only the
+        // first statement is a gate that misses it.
+        let found = hazards("SELECT 1; INSERT INTO t VALUES (1); DELETE FROM t; SELECT 2");
+        assert_eq!(found.len(), 1);
+        assert!(found[0].unbounded);
+    }
+
+    #[test]
+    fn a_merge_is_confirmed_but_not_called_unbounded() {
+        // It always has an ON clause, so it is bounded by construction — and it
+        // can still delete, so it is still worth a look.
+        let h = hazard("MERGE INTO target USING source ON target.id = source.id").expect("hazard");
+        assert!(!h.unbounded);
+        assert!(h.summary.contains("target"), "{}", h.summary);
+    }
     #[test]
     fn select_into_creates_a_table_and_is_not_a_read() {
         // It reads as a SELECT until the third word, which is exactly why a

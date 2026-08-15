@@ -9,6 +9,8 @@
 import { useEffect, useRef } from "react";
 import type { ReactNode } from "react";
 import { Button, Input, Spinner, cx } from "../ui/primitives";
+import { save } from "@tauri-apps/plugin-dialog";
+import { ipc } from "@/lib/ipc";
 import { useHistory } from "@/store/history";
 import { SnippetList } from "./SnippetList";
 import { tabsOf, useWorkspace } from "@/store/workspace";
@@ -63,6 +65,37 @@ export function HistoryPanel({
     return () => clearTimeout(timer);
   }, [open, tab, text, scope, connectionId, running, refresh]);
 
+  /**
+   * Write what is currently listed, filters and scope included.
+   *
+   * What is on screen rather than everything stored: the panel is already the
+   * way someone narrows this down, and an export that quietly widened the
+   * search would be a different answer to the question they asked.
+   */
+  const exportEntries = async () => {
+    const path = await save({
+      defaultPath: `query-history.csv`,
+      filters: [
+        { name: "CSV", extensions: ["csv"] },
+        { name: "JSON", extensions: ["json"] },
+      ],
+    });
+    if (!path) return;
+
+    try {
+      const format = path.toLowerCase().endsWith(".json") ? "json" : "csv";
+      // The same scope and search the list is showing — see above.
+      await ipc.exportHistory(path, format, {
+        text: text || undefined,
+        connection_id: scope === "connection" ? connectionId : undefined,
+      });
+    } catch (e) {
+      // Reported in the panel rather than thrown: the list is still valid, and
+      // a failed write is not a reason to lose it.
+      console.error("could not export the history", e);
+    }
+  };
+
   if (!open) return null;
 
   return (
@@ -104,6 +137,15 @@ export function HistoryPanel({
             All
           </ScopeTab>
           <div className="flex-1" />
+          <Button
+            variant="ghost"
+            className="h-6"
+            disabled={entries.length === 0}
+            onClick={() => void exportEntries()}
+            title="Write what is listed to a file — an audit trail that can leave this machine"
+          >
+            Export…
+          </Button>
           <Button
             variant="ghost"
             className="h-6"

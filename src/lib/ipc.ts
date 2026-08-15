@@ -22,6 +22,7 @@ import type {
   ErrorCategory,
   ErrorPayload,
   ExportFormat,
+  HazardReport,
   HistoryEntry,
   HistoryQuery,
   QueryOutcome,
@@ -196,6 +197,18 @@ export const ipc = {
     columns: Column[];
     rows: Value[][];
   }) => call<number>("export_rows", { request: args }),
+
+  /**
+   * Write the query history to a file — an audit trail that can leave.
+   *
+   * Returns how many entries were written.
+   */
+  exportHistory: (path: string, format: "csv" | "json", query: HistoryQuery) =>
+    call<number>("export_history", { path, format, query }),
+
+  /** What a submission would destroy, and whether this connection asks first. */
+  inspectStatement: (connection_id: string, sql: string) =>
+    call<HazardReport>("inspect_statement", { connection_id, sql }),
 
   /** Who exists on this server, and what each of them can reach. */
   privileges: (connection_id: string) => call<Privileges>("privileges", { connection_id }),

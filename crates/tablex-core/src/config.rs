@@ -53,6 +53,15 @@ pub struct ConnectionConfig {
     #[serde(default)]
     pub read_only: bool,
 
+    /// Ask before running anything that would destroy data.
+    ///
+    /// `None` follows the colour tag, which is what people already use to mark
+    /// production — so an existing red connection gains the gate without anyone
+    /// setting a second flag that means the same thing. Set explicitly to
+    /// override in either direction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirm_destructive: Option<bool>,
+
     /// Driver-specific extras that do not warrant a first-class field.
     ///
     /// Always serialized, for the same reason as `QueryOutcome::notices`: the
@@ -184,6 +193,18 @@ impl ConnectionConfig {
             .collect()
     }
 
+    /// Whether a destructive statement should be confirmed on this connection.
+    ///
+    /// A read-only connection needs no gate: the write is refused before it can
+    /// destroy anything, and a confirmation for something that will not happen
+    /// is a dialog that teaches people to dismiss dialogs.
+    pub fn confirms_destructive(&self) -> bool {
+        if self.read_only {
+            return false;
+        }
+        self.confirm_destructive.unwrap_or(self.color.is_some())
+    }
+
     /// A short summary for the connection list, e.g. `postgres@db.example.com:5432/app`.
     pub fn summary(&self) -> String {
         if let Some(path) = &self.file_path {
@@ -212,6 +233,44 @@ impl ConnectionConfig {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_colour_tag_turns_the_gate_on_without_a_second_flag() {
+        // A red connection already means production to the person who set it;
+        // making them set another flag that means the same thing is how the two
+        // end up disagreeing.
+        let mut c = base();
+        c.read_only = false;
+        assert!(!c.confirms_destructive(), "an untagged connection stays quiet");
+
+        c.color = Some("#e5484d".into());
+        assert!(c.confirms_destructive());
+    }
+
+    #[test]
+    fn an_explicit_setting_wins_in_either_direction() {
+        let mut c = base();
+        c.read_only = false;
+        c.color = Some("#e5484d".into());
+        c.confirm_destructive = Some(false);
+        assert!(!c.confirms_destructive(), "an explicit no must be honoured");
+
+        c.color = None;
+        c.confirm_destructive = Some(true);
+        assert!(c.confirms_destructive());
+    }
+
+    #[test]
+    fn a_read_only_connection_needs_no_gate() {
+        // The write is refused before it can destroy anything, and a
+        // confirmation for something that will not happen is a dialog that
+        // teaches people to dismiss dialogs.
+        let mut c = base();
+        c.read_only = true;
+        c.color = Some("#e5484d".into());
+        c.confirm_destructive = Some(true);
+        assert!(!c.confirms_destructive());
+    }
     use super::*;
 
     fn base() -> ConnectionConfig {
@@ -229,6 +288,7 @@ mod tests {
             folder: None,
             color: None,
             read_only: true,
+            confirm_destructive: None,
             options: IndexMap::new(),
         }
     }

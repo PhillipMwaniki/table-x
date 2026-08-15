@@ -116,6 +116,7 @@ mod tests {
             folder: None,
             color: None,
             read_only: false,
+            confirm_destructive: None,
             options: IndexMap::new(),
         }
     }
