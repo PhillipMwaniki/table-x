@@ -16,6 +16,7 @@ use futures_util::StreamExt;
 use tablex_core::{
     activity::ServerActivity,
     config::{ConnectionConfig, TlsMode},
+    diagram::SchemaGraph,
     plan::Plan,
     driver::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
@@ -243,6 +244,10 @@ impl Connection for PostgresConnection {
 
     async fn definition(&mut self, node_id: &str) -> Result<String> {
         introspect::definition(&self.client, node_id).await
+    }
+
+    async fn schema_graph(&mut self, schema: Option<&str>) -> Result<SchemaGraph> {
+        introspect::schema_graph(&self.client, schema.unwrap_or("public")).await
     }
 
     /// Ask the planner, and — when asked to measure — take it back afterwards.

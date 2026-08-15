@@ -7,6 +7,7 @@
 use crate::{
     activity::ServerActivity,
     config::ConnectionConfig,
+    diagram::SchemaGraph,
     plan::Plan,
     error::Result,
     result::{Column, QueryOutcome},
@@ -265,6 +266,20 @@ pub trait Connection: Send + Sync {
     async fn definition(&mut self, _node_id: &str) -> Result<String> {
         Err(crate::error::Error::Unsupported(
             "this driver cannot show object definitions".into(),
+        ))
+    }
+
+    /// Every table in a schema and the foreign keys between them.
+    ///
+    /// One call rather than one per table: a diagram of a two-hundred-table
+    /// schema assembled from per-table lookups is two hundred round trips, and
+    /// over a tunnel that is the difference between a diagram and a wait.
+    ///
+    /// `schema` is the schema for engines that have them and the database for
+    /// engines that do not.
+    async fn schema_graph(&mut self, _schema: Option<&str>) -> Result<SchemaGraph> {
+        Err(crate::error::Error::Unsupported(
+            "this driver cannot describe relations between tables".into(),
         ))
     }
 

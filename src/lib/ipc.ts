@@ -12,6 +12,7 @@ import type {
   CompletionScope,
   ConnectionConfig,
   CsvPreview,
+  Diagram,
   DriverInfo,
   Plan,
   ServerActivity,
@@ -169,6 +170,10 @@ export const ipc = {
     database: string;
     path: string;
   }) => call<number>("export_database", { request: args }),
+
+  /** The schema as a laid-out diagram. */
+  schemaDiagram: (connection_id: string, schema?: string) =>
+    call<Diagram>("schema_diagram", { connection_id, schema: schema ?? null }),
 
   /** How the engine intends to run a statement. */
   explain: (connection_id: string, sql: string, analyze: boolean) =>

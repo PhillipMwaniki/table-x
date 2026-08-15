@@ -877,6 +877,23 @@ pub async fn table_detail(
     Ok(guard.table_detail(schema.as_deref(), &table).await?)
 }
 
+/// The schema as a diagram, already laid out.
+///
+/// The layout happens in Rust rather than in the view because it has to be the
+/// same every time — a diagram that reshuffles itself when reopened cannot be
+/// learned — and determinism is easier to pin down with a test than to promise.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn schema_diagram(
+    state: tauri::State<'_, AppState>,
+    connection_id: String,
+    schema: Option<String>,
+) -> IpcResult<tablex_core::diagram::Diagram> {
+    let session = state.sessions.get(&connection_id).await?;
+    let mut guard = session.connection.lock().await;
+    let graph = guard.schema_graph(schema.as_deref()).await?;
+    Ok(tablex_core::diagram::layout(&graph))
+}
+
 /// How the engine intends to run a statement.
 ///
 /// `analyze` measures instead of estimating, which means running the statement.

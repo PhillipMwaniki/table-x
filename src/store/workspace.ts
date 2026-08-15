@@ -47,7 +47,7 @@ export interface QueryError {
  * a result — but it is still a tab, because watching the server while you work
  * is the whole point and a modal would put it in front of the work instead.
  */
-export type TabKind = "query" | "table" | "activity";
+export type TabKind = "query" | "table" | "activity" | "diagram";
 
 export interface Tab {
   id: string;
@@ -133,6 +133,7 @@ interface WorkspaceState {
   /** A query tab that opens with content already in it, e.g. an object's DDL. */
   openScript: (connectionId: string, script: { title: string; sql: string }) => void;
   openActivity: (connectionId: string) => void;
+  openDiagram: (connectionId: string, schema: string | null) => void;
   closeTab: (connectionId: string, tabId: string) => void;
   selectTab: (connectionId: string, tabId: string) => Promise<void>;
 
@@ -240,6 +241,29 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       active: { ...s.active, [id]: tab.id },
     }));
     void get().run(id, tab.id);
+  },
+
+  openDiagram: (id, schema) => {
+    const list = tabsOf(get(), id);
+    const title = schema ? `Diagram — ${schema}` : "Diagram";
+    // One per schema. Two diagrams of the same schema would be two copies of
+    // the same picture, since the layout is deterministic.
+    const existing = list.find((t) => t.kind === "diagram" && t.title === title);
+    if (existing) {
+      set((s) => ({ active: { ...s.active, [id]: existing.id } }));
+      return;
+    }
+
+    const tab = blankTab({
+      kind: "diagram",
+      title,
+      database: get().database[id] ?? null,
+      schema: schema ?? undefined,
+    });
+    set((s) => ({
+      tabs: { ...s.tabs, [id]: [...list, tab] },
+      active: { ...s.active, [id]: tab.id },
+    }));
   },
 
   openActivity: (id) => {

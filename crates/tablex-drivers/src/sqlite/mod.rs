@@ -11,6 +11,7 @@ use rusqlite::OptionalExtension;
 use std::sync::{Arc, Mutex};
 use tablex_core::{
     config::ConnectionConfig,
+    diagram::{GraphTable, SchemaGraph},
     plan::{Plan, PlanRow},
     driver::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
@@ -209,6 +210,43 @@ impl Connection for SqliteConnection {
         // The file path is the closest thing to a database name here, and the
         // UI already shows it. Reporting none keeps the database switcher off.
         Ok(None)
+    }
+
+    /// Every table, and the keys between them.
+    ///
+    /// SQLite has no catalog view of foreign keys — `PRAGMA foreign_key_list`
+    /// answers for one table at a time and there is no bulk form. That is a
+    /// query per table, which on a server engine would be the thing this method
+    /// exists to avoid; here the database is a local file and the whole loop
+    /// costs less than one network round trip would.
+    async fn schema_graph(&mut self, _schema: Option<&str>) -> Result<SchemaGraph> {
+        self.with_conn(move |conn| {
+            let names: Vec<String> = conn
+                .prepare(
+                    "SELECT name FROM sqlite_master \
+                     WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+                )
+                .map_err(map_err)?
+                .query_map([], |r| r.get(0))
+                .map_err(map_err)?
+                .collect::<std::result::Result<_, _>>()
+                .map_err(map_err)?;
+
+            let tables = names
+                .into_iter()
+                .map(|name| {
+                    let foreign_keys = table_foreign_keys(conn, &name)?;
+                    Ok(GraphTable {
+                        schema: None,
+                        name,
+                        foreign_keys,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            Ok(SchemaGraph { tables })
+        })
+        .await
     }
 
     /// `EXPLAIN QUERY PLAN` — rows carrying their own parent pointers.

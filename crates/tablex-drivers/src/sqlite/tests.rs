@@ -1033,3 +1033,90 @@ async fn explaining_a_broken_statement_reports_the_syntax_error() {
     assert!(matches!(err, Error::Query { .. }), "{err:?}");
     assert!(err.to_string().contains("incomplete input"), "{err}");
 }
+
+#[tokio::test]
+async fn the_schema_graph_finds_every_table_and_key() {
+    let mut conn = seeded().await;
+    exec(
+        &mut conn,
+        "CREATE TABLE orders (
+            id      INTEGER PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id),
+            total   DECIMAL(10,2)
+        )",
+    )
+    .await;
+    exec(
+        &mut conn,
+        "CREATE TABLE order_items (
+            id       INTEGER PRIMARY KEY,
+            order_id INTEGER REFERENCES orders(id),
+            sku      TEXT
+        )",
+    )
+    .await;
+    // Unrelated to anything, and still part of the schema.
+    exec(&mut conn, "CREATE TABLE settings (key TEXT PRIMARY KEY)").await;
+
+    let graph = conn.schema_graph(None).await.expect("schema graph");
+    let names: Vec<&str> = graph.tables.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, vec!["order_items", "orders", "settings", "users"]);
+
+    let orders = graph.tables.iter().find(|t| t.name == "orders").unwrap();
+    assert_eq!(orders.foreign_keys.len(), 1);
+    assert_eq!(orders.foreign_keys[0].referenced_table, "users");
+    assert_eq!(orders.foreign_keys[0].columns, vec!["user_id"]);
+
+    // A table with no keys is still a table, and still belongs on the diagram.
+    let settings = graph.tables.iter().find(|t| t.name == "settings").unwrap();
+    assert!(settings.foreign_keys.is_empty());
+}
+
+#[tokio::test]
+async fn the_diagram_stacks_a_chain_of_references() {
+    let mut conn = seeded().await;
+    exec(
+        &mut conn,
+        "CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER REFERENCES users(id))",
+    )
+    .await;
+    exec(
+        &mut conn,
+        "CREATE TABLE order_items (id INTEGER PRIMARY KEY, order_id INTEGER REFERENCES orders(id))",
+    )
+    .await;
+
+    let diagram = tablex_core::diagram::layout(&conn.schema_graph(None).await.unwrap());
+    let y = |name: &str| {
+        diagram
+            .boxes
+            .iter()
+            .find(|b| b.table == name)
+            .unwrap_or_else(|| panic!("{name} missing"))
+            .y
+    };
+    // users is what orders stands on, and orders is what order_items stands on.
+    assert!(y("users") > y("orders"));
+    assert!(y("orders") > y("order_items"));
+    assert!(diagram.dangling.is_empty(), "{:?}", diagram.dangling);
+}
+
+#[tokio::test]
+async fn a_self_referencing_table_survives_the_round_trip() {
+    // The shape that hangs a naive layout, read off a real catalog rather than
+    // a hand-built graph.
+    let mut conn = connect().await;
+    exec(
+        &mut conn,
+        "CREATE TABLE employees (
+            id         INTEGER PRIMARY KEY,
+            manager_id INTEGER REFERENCES employees(id)
+        )",
+    )
+    .await;
+
+    let diagram = tablex_core::diagram::layout(&conn.schema_graph(None).await.unwrap());
+    assert_eq!(diagram.boxes.len(), 1);
+    assert_eq!(diagram.edges.len(), 1);
+    assert!(diagram.edges[0].reflexive);
+}

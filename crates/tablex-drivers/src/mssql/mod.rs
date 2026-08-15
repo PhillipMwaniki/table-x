@@ -19,6 +19,7 @@ use async_trait::async_trait;
 use tablex_core::{
     activity::ServerActivity,
     config::{ConnectionConfig, TlsMode},
+    diagram::{GraphTable, SchemaGraph},
     plan::{Plan, PlanRow},
     driver::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
@@ -258,6 +259,86 @@ impl Connection for MssqlConnection {
 
     async fn current_database(&mut self) -> Result<Option<String>> {
         Ok(Some(self.database.clone()))
+    }
+
+    /// Two queries against `sys.*`: the tables, then the keys between them.
+    async fn schema_graph(&mut self, schema: Option<&str>) -> Result<SchemaGraph> {
+        let target = schema.unwrap_or("dbo").to_string();
+
+        let names = self
+            .strings(&format!(
+                "SELECT t.name FROM sys.tables t \
+                 JOIN sys.schemas s ON s.schema_id = t.schema_id \
+                 WHERE s.name = '{}' ORDER BY t.name",
+                escape_literal(&target)
+            ))
+            .await?;
+
+        let rows = self
+            .client
+            .simple_query(format!(
+                "SELECT pt.name AS child, fk.name AS fk_name, pc.name AS child_column, \
+                        rt.name AS parent, rc.name AS parent_column \
+                 FROM sys.foreign_keys fk \
+                 JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id \
+                 JOIN sys.tables pt ON pt.object_id = fk.parent_object_id \
+                 JOIN sys.schemas ps ON ps.schema_id = pt.schema_id \
+                 JOIN sys.tables rt ON rt.object_id = fk.referenced_object_id \
+                 JOIN sys.columns pc ON pc.object_id = fkc.parent_object_id \
+                                    AND pc.column_id = fkc.parent_column_id \
+                 JOIN sys.columns rc ON rc.object_id = fkc.referenced_object_id \
+                                    AND rc.column_id = fkc.referenced_column_id \
+                 WHERE ps.name = '{}' \
+                 ORDER BY pt.name, fk.name, fkc.constraint_column_id",
+                escape_literal(&target)
+            ))
+            .await
+            .map_err(map_err)?
+            .into_first_result()
+            .await
+            .map_err(map_err)?;
+
+        let mut tables: Vec<GraphTable> = names
+            .into_iter()
+            .map(|name| GraphTable {
+                schema: Some(target.clone()),
+                name,
+                foreign_keys: Vec::new(),
+            })
+            .collect();
+
+        for row in &rows {
+            let text = |name: &str| row.get::<&str, _>(name).map(str::to_string);
+            let (Some(child), Some(name), Some(column), Some(parent), Some(parent_column)) = (
+                text("child"),
+                text("fk_name"),
+                text("child_column"),
+                text("parent"),
+                text("parent_column"),
+            ) else {
+                continue;
+            };
+            let Some(entry) = tables.iter_mut().find(|t| t.name == child) else {
+                continue;
+            };
+            match entry.foreign_keys.last_mut() {
+                Some(last) if last.name == name => {
+                    last.columns.push(column);
+                    last.referenced_columns.push(parent_column);
+                }
+                _ => entry.foreign_keys.push(ForeignKeyDef {
+                    name,
+                    columns: vec![column],
+                    referenced_schema: Some(target.clone()),
+                    referenced_table: parent,
+                    referenced_columns: vec![parent_column],
+                    on_delete: None,
+                    on_update: None,
+                }),
+            }
+        }
+
+        Ok(SchemaGraph { tables })
     }
 
     /// `SHOWPLAN_ALL` — the plan as rows, with NodeId/Parent pointers.

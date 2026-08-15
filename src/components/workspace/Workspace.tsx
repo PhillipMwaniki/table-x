@@ -19,6 +19,7 @@ import { SplitHandle } from "./SplitHandle";
 import { CsvImportDialog } from "./CsvImportDialog";
 import { ActivityPanel } from "./ActivityPanel";
 import { PlanView } from "./PlanView";
+import { DiagramView } from "./DiagramView";
 import { Button, Spinner, cx } from "../ui/primitives";
 import { ContextMenu } from "../ui/ContextMenu";
 import type { MenuItem } from "../ui/ContextMenu";
@@ -76,6 +77,7 @@ export function Workspace({
     loadCompletionFor,
     openScript: openScriptTab,
     openActivity,
+    openDiagram,
     setTabError,
     setTabNotice,
     useDatabase,
@@ -584,9 +586,11 @@ export function Workspace({
             <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border bg-surface-1 px-2">
               {/* Every control here acts on a statement, and an activity tab has
                   none — it carries its own refresh instead. */}
-              {tab.kind === "activity" ? (
+              {tab.kind === "activity" || tab.kind === "diagram" ? (
                 <span className="text-[11px] text-text-muted">
-                  Live view of the server. Nothing here is cached.
+                  {tab.kind === "activity"
+                    ? "Live view of the server. Nothing here is cached."
+                    : "Tables and the keys between them. Drag to pan, scroll to zoom."}
                 </span>
               ) : (
                 <>
@@ -687,7 +691,9 @@ export function Workspace({
             {/* A table tab gives its whole height to the rows: there is no
                 statement to edit, and the SQL that produced them is one line
                 the tab's own context already describes. */}
-            {tab.kind === "activity" ? (
+            {tab.kind === "diagram" ? (
+              <DiagramView connectionId={connection.id} schema={tab.schema ?? null} />
+            ) : tab.kind === "activity" ? (
               <ActivityPanel
                 connectionId={connection.id}
                 readOnly={connection.read_only}
@@ -819,6 +825,7 @@ export function Workspace({
             {
               driver: connection.driver,
               tableScripts: driver?.capabilities.table_scripts ?? false,
+              foreignKeys: driver?.capabilities.foreign_keys ?? false,
             },
             {
               onOpen: () =>
@@ -833,6 +840,11 @@ export function Workspace({
               onExportDatabase: () => void exportDatabase(menu.node.name),
               onImport: () => void importSql(),
               onActivity: () => openActivity(connection.id),
+              onDiagram: () =>
+                openDiagram(
+                  connection.id,
+                  menu.node.kind === "schema" ? menu.node.name : (menu.node.schema ?? null),
+                ),
               onImportCsv: () => void importCsv(menu.node),
               onRefresh: menu.refresh,
             },
@@ -880,7 +892,7 @@ export function Workspace({
  */
 export function menuFor(
   node: SchemaNode,
-  options: { driver: string; tableScripts: boolean },
+  options: { driver: string; tableScripts: boolean; foreignKeys: boolean },
   actions: {
     onOpen: () => void;
     onScript: () => void;
@@ -891,6 +903,7 @@ export function menuFor(
     onImport: () => void;
     onImportCsv: () => void;
     onActivity: () => void;
+    onDiagram: () => void;
     onRefresh: (() => void) | null;
   },
 ): MenuItem[] {
@@ -902,7 +915,18 @@ export function menuFor(
   if (node.kind === "database") {
     items.push({ label: "Export database as SQL…", onSelect: actions.onExportDatabase });
     items.push({ label: "Import SQL file…", onSelect: actions.onImport });
+    if (options.foreignKeys) {
+      items.push({ label: "Diagram…", onSelect: actions.onDiagram });
+    }
     items.push({ label: "Server activity…", separated: true, onSelect: actions.onActivity });
+    if (actions.onRefresh) {
+      items.push({ label: "Refresh", separated: true, onSelect: actions.onRefresh });
+    }
+    return items;
+  }
+
+  if (node.kind === "schema" && options.foreignKeys) {
+    items.push({ label: "Diagram…", onSelect: actions.onDiagram });
     if (actions.onRefresh) {
       items.push({ label: "Refresh", separated: true, onSelect: actions.onRefresh });
     }

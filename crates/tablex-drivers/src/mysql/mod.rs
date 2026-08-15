@@ -15,6 +15,7 @@ use async_trait::async_trait;
 use tablex_core::{
     activity::ServerActivity,
     config::{ConnectionConfig, TlsMode},
+    diagram::{GraphTable, SchemaGraph},
     plan::Plan,
     driver::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
@@ -247,6 +248,76 @@ impl Connection for MysqlConnection {
 
     async fn current_database(&mut self) -> Result<Option<String>> {
         Ok(self.default_db.clone())
+    }
+
+    /// Two queries: the tables in the database, then every key between them.
+    async fn schema_graph(&mut self, schema: Option<&str>) -> Result<SchemaGraph> {
+        let db = match schema.or(self.default_db.as_deref()) {
+            Some(db) => db.to_string(),
+            None => return Err(Error::Config("no database selected".into())),
+        };
+
+        // BASE TABLE excludes views, which have no keys of their own and would
+        // only appear as unconnected boxes.
+        let names: Vec<String> = self
+            .conn
+            .exec(
+                "SELECT TABLE_NAME FROM information_schema.TABLES \
+                 WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE' \
+                 ORDER BY TABLE_NAME",
+                (&db,),
+            )
+            .await
+            .map_err(map_err)?;
+
+        let rows: Vec<(String, String, String, String, String)> = self
+            .conn
+            .exec(
+                "SELECT k.TABLE_NAME, k.CONSTRAINT_NAME, k.COLUMN_NAME, \
+                        k.REFERENCED_TABLE_NAME, k.REFERENCED_COLUMN_NAME \
+                 FROM information_schema.KEY_COLUMN_USAGE k \
+                 WHERE k.TABLE_SCHEMA = ? AND k.REFERENCED_TABLE_NAME IS NOT NULL \
+                   AND k.REFERENCED_TABLE_SCHEMA = k.TABLE_SCHEMA \
+                 ORDER BY k.TABLE_NAME, k.CONSTRAINT_NAME, k.ORDINAL_POSITION",
+                (&db,),
+            )
+            .await
+            .map_err(map_err)?;
+
+        let mut tables: Vec<GraphTable> = names
+            .into_iter()
+            .map(|name| GraphTable {
+                schema: Some(db.clone()),
+                name,
+                foreign_keys: Vec::new(),
+            })
+            .collect();
+
+        for (table, name, column, ref_table, ref_column) in rows {
+            let Some(entry) = tables.iter_mut().find(|t| t.name == table) else {
+                continue;
+            };
+            // Rows arrive grouped by constraint and ordered within it, so a
+            // composite key extends the one being built rather than starting
+            // another.
+            match entry.foreign_keys.last_mut() {
+                Some(last) if last.name == name => {
+                    last.columns.push(column);
+                    last.referenced_columns.push(ref_column);
+                }
+                _ => entry.foreign_keys.push(ForeignKeyDef {
+                    name,
+                    columns: vec![column],
+                    referenced_schema: Some(db.clone()),
+                    referenced_table: ref_table,
+                    referenced_columns: vec![ref_column],
+                    on_delete: None,
+                    on_update: None,
+                }),
+            }
+        }
+
+        Ok(SchemaGraph { tables })
     }
 
     /// Estimates only.

@@ -8,6 +8,7 @@
 use super::{map_err, OidMap};
 use std::collections::HashMap;
 use tablex_core::{
+    diagram::{GraphTable, SchemaGraph},
     driver::CompletionScope,
     error::{Error, Result},
     schema::{decode_path, ColumnDef, ForeignKeyDef, IndexDef, NodeKind, SchemaNode, TableDetail},
@@ -683,6 +684,88 @@ pub async fn completion_scope(client: &Client) -> Result<CompletionScope> {
         functions,
         keywords: Vec::new(),
     })
+}
+
+/// Every table in a schema and every foreign key between them, in two queries.
+///
+/// The per-table [`foreign_keys`] above is the same query with a table filter;
+/// this one drops the filter and groups by table instead. A diagram of a
+/// two-hundred-table schema built from per-table calls would be two hundred
+/// round trips, which over a tunnel is the difference between a diagram and a
+/// progress bar.
+pub async fn schema_graph(client: &Client, schema: &str) -> Result<SchemaGraph> {
+    // relkind 'r' is an ordinary table and 'p' a partitioned one. Views are
+    // left out: a view has no foreign keys of its own, so it would appear as an
+    // unconnected box that says nothing.
+    let tables = client
+        .query(
+            "SELECT c.relname \
+             FROM pg_catalog.pg_class c \
+             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+             WHERE n.nspname = $1 AND c.relkind IN ('r', 'p') \
+             ORDER BY c.relname",
+            &[&schema],
+        )
+        .await
+        .map_err(map_err)?;
+
+    let mut graph: Vec<GraphTable> = tables
+        .iter()
+        .map(|r| GraphTable {
+            schema: Some(schema.to_string()),
+            name: r.get(0),
+            foreign_keys: Vec::new(),
+        })
+        .collect();
+
+    let keys = client
+        .query(
+            "SELECT c.relname, con.conname, \
+                    ARRAY( \
+                      SELECT a.attname FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord) \
+                      JOIN pg_catalog.pg_attribute a \
+                        ON a.attrelid = con.conrelid AND a.attnum = k.attnum \
+                      ORDER BY k.ord), \
+                    fn.nspname, fc.relname, \
+                    ARRAY( \
+                      SELECT a.attname FROM unnest(con.confkey) WITH ORDINALITY AS k(attnum, ord) \
+                      JOIN pg_catalog.pg_attribute a \
+                        ON a.attrelid = con.confrelid AND a.attnum = k.attnum \
+                      ORDER BY k.ord) \
+             FROM pg_catalog.pg_constraint con \
+             JOIN pg_catalog.pg_class c  ON c.oid  = con.conrelid \
+             JOIN pg_catalog.pg_namespace n  ON n.oid  = c.relnamespace \
+             JOIN pg_catalog.pg_class fc ON fc.oid = con.confrelid \
+             JOIN pg_catalog.pg_namespace fn ON fn.oid = fc.relnamespace \
+             WHERE n.nspname = $1 AND con.contype = 'f' \
+             ORDER BY c.relname, con.conname",
+            &[&schema],
+        )
+        .await
+        .map_err(map_err)?;
+
+    let mut by_name: HashMap<String, usize> = HashMap::new();
+    for (index, table) in graph.iter().enumerate() {
+        by_name.insert(table.name.clone(), index);
+    }
+
+    for row in &keys {
+        let table: String = row.get(0);
+        let Some(&index) = by_name.get(&table) else {
+            continue;
+        };
+        graph[index].foreign_keys.push(ForeignKeyDef {
+            name: row.get(1),
+            columns: row.get(2),
+            referenced_schema: row.get(3),
+            referenced_table: row.get(4),
+            referenced_columns: row.get(5),
+            on_delete: None,
+            on_update: None,
+        });
+    }
+
+    Ok(SchemaGraph { tables: graph })
 }
 
 #[cfg(test)]

@@ -242,6 +242,43 @@ export interface SchemaNode {
 /** File formats a table can be written out as. */
 export type ExportFormat = "csv" | "json" | "sql";
 
+/** A key column shown inside a diagram box. */
+export interface BoxColumn {
+  name: string;
+  /** This column points at another table. */
+  outgoing: boolean;
+  /** Another table points at this column. */
+  incoming: boolean;
+}
+
+export interface DiagramBox {
+  schema: string | null;
+  table: string;
+  columns: BoxColumn[];
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** One relation, as indices into `Diagram.boxes`. */
+export interface DiagramEdge {
+  from: number;
+  to: number;
+  label: string;
+  /** A table that references itself, drawn as a loop. */
+  reflexive: boolean;
+}
+
+export interface Diagram {
+  boxes: DiagramBox[];
+  edges: DiagramEdge[];
+  width: number;
+  height: number;
+  /** Keys pointing outside this schema, named so their absence is visible. */
+  dangling: string[];
+}
+
 /** One step in a query plan. */
 export interface PlanNode {
   /** What this step does: `Seq Scan`, `Hash Join`. */

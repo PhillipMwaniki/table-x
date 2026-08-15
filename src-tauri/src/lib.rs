@@ -61,6 +61,7 @@ pub fn run() {
             ipc::browse,
             ipc::table_detail,
             ipc::explain,
+            ipc::schema_diagram,
             ipc::server_activity,
             ipc::kill_session,
             ipc::object_definition,
