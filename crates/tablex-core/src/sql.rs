@@ -393,6 +393,10 @@ pub fn looks_like_write(sql: &str) -> bool {
         "INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT", "REPLACE", "TRUNCATE", "DROP", "CREATE",
         "ALTER", "RENAME", "GRANT", "REVOKE", "COMMENT", "VACUUM", "REINDEX", "CLUSTER", "COPY",
         "CALL", "DO", "EXECUTE", "SET", "RESET", "LOCK", "REFRESH", "ATTACH", "DETACH",
+        // `SELECT * INTO new_table FROM t` creates a table and reads as a
+        // SELECT until the third word. Every other statement that can contain
+        // INTO is already on this list, so matching it costs nothing.
+        "INTO",
     ];
     bare_words(sql)
         .into_iter()
@@ -510,6 +514,15 @@ pub fn quote_ident(name: &str, quote: char) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn select_into_creates_a_table_and_is_not_a_read() {
+        // It reads as a SELECT until the third word, which is exactly why a
+        // first-keyword check is not enough.
+        assert!(looks_like_write("SELECT * INTO archive FROM orders"));
+        // And an ordinary select still reads as one.
+        assert!(!looks_like_write("SELECT into_date FROM t"));
+        assert!(!looks_like_write("SELECT 'into' FROM t"));
+    }
     use super::*;
 
     /// Feed the same SQL one byte at a time, which puts a chunk boundary in

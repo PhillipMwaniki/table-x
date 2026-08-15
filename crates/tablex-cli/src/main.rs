@@ -18,6 +18,8 @@
 //! Data goes to stdout and everything else to stderr, so `tablex query … > out.csv`
 //! produces a file containing only rows.
 
+mod mcp;
+
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use std::io::Write;
@@ -110,6 +112,25 @@ enum Command {
         /// Exit 1 when there are differences, for a CI drift check.
         #[arg(long)]
         exit_code: bool,
+    },
+
+    /// Serve the Model Context Protocol over stdin and stdout.
+    ///
+    /// Read-only unless --allow-writes is given: an agent handed a connection
+    /// string did not choose anything, and the two mistakes do not cost the
+    /// same.
+    Mcp {
+        #[command(flatten)]
+        target: Target,
+        /// Execute statements that look like writes.
+        #[arg(long)]
+        allow_writes: bool,
+        /// Largest number of rows any one call may return.
+        #[arg(long, default_value_t = 1000)]
+        max_rows: usize,
+        /// Append every call to this file as JSON lines.
+        #[arg(long)]
+        audit: Option<String>,
     },
 
     /// List the tables in a schema.
@@ -351,6 +372,31 @@ async fn run(cli: Cli) -> Result<std::process::ExitCode> {
             })
         }
 
+        Command::Mcp {
+            target,
+            allow_writes,
+            max_rows,
+            audit,
+        } => {
+            let mut conn = connect(&target).await?;
+            note(if allow_writes {
+                "tablex mcp: WRITES ENABLED"
+            } else {
+                "tablex mcp: read-only"
+            });
+            mcp::serve(
+                &mut *conn,
+                mcp::Options {
+                    read_only: !allow_writes,
+                    max_rows,
+                    audit,
+                },
+            )
+            .await?;
+            let _ = conn.close().await;
+            Ok(std::process::ExitCode::SUCCESS)
+        }
+
         Command::Tables { target, schema } => {
             let mut conn = connect(&target).await?;
             let graph = conn.schema_graph(schema.as_deref()).await?;
@@ -448,7 +494,7 @@ fn write_rows(
 /// Exact numerics stay strings rather than becoming JSON numbers: a consumer
 /// parsing them as doubles is exactly the rounding this application spends its
 /// effort avoiding, and a string is the only JSON type that survives it.
-fn json_of(value: &tablex_core::value::Value) -> serde_json::Value {
+pub(crate) fn json_of(value: &tablex_core::value::Value) -> serde_json::Value {
     use tablex_core::value::Value as V;
     match value {
         V::Null => serde_json::Value::Null,
