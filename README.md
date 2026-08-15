@@ -449,16 +449,22 @@ pnpm app:dev              # Rust + Vite + window, with hot reload on both sides
 pnpm app:build            # release bundle
 ```
 
-CI runs exactly these on every push: `pnpm typecheck`, `pnpm test`, `pnpm build`,
-`cargo fmt --all --check`, `cargo clippy --workspace --all-features --all-targets`
-with warnings denied, and `cargo test --workspace --all-features`. Running them
-locally before pushing is the whole of the pre-flight.
+CI runs exactly these on every push: `pnpm typecheck`, `pnpm fmt:check`, `pnpm lint`,
+`pnpm test`, `pnpm build`, then `cargo fmt --all --check`, `cargo clippy --workspace
+--all-features --all-targets` with warnings denied, and `cargo test --workspace
+--all-features`. Running them locally before pushing is the whole of the pre-flight.
 
-> [!NOTE]
-> `pnpm lint` and `pnpm fmt` are declared in `package.json` but ESLint and Prettier
-> are **not installed**, so both fail. They are not run by CI for that reason.
-> Either add the tools and a config, or drop the scripts — a command that only
-> exists to fail is worse than one that is not there.
+Formatting is Prettier for TypeScript and CSS, rustfmt for Rust — both checked, so a
+disagreement about layout is settled by a tool rather than in review. Markdown is
+excluded from Prettier deliberately: it reflows prose, and this file's wrapping is
+meant.
+
+Linting is ESLint with `typescript-eslint` and the React hooks rules, scoped to `src/`.
+**Errors fail CI; warnings do not.** There are sixteen warnings today — ten of them
+`react-hooks/set-state-in-effect`, which flags working but extra-render-costing effect
+patterns that want a considered rewrite rather than a rushed one. They are left visible
+rather than silenced, and `pnpm lint` should move to `--max-warnings=0` once the list is
+empty.
 
 ### Database tests
 

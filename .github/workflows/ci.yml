@@ -46,6 +46,16 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      - name: Formatting
+        run: pnpm fmt:check
+
+      # Errors fail; warnings do not. There are sixteen of those and each is
+      # named in the config or the rule's own message — a real list to work
+      # through, not a reason to block every push until it is empty. Raising
+      # this to --max-warnings=0 is the right move once it is.
+      - name: Lint
+        run: pnpm lint
+
       - name: Test
         run: pnpm test
 
