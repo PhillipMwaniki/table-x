@@ -24,6 +24,7 @@ pub mod registry;
 pub mod result;
 pub mod schema;
 pub mod sql;
+pub mod url;
 pub mod value;
 
 pub use config::ConnectionConfig;

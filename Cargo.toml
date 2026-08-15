@@ -4,6 +4,7 @@ members = [
     "crates/tablex-core",
     "crates/tablex-drivers",
     "crates/tablex-tunnel",
+    "crates/tablex-cli",
     "src-tauri",
 ]
 
@@ -47,6 +48,9 @@ chrono = { version = "0.4", features = ["serde"] }
 rust_decimal = { version = "1", features = ["serde"] }
 bytes = "1"
 indexmap = { version = "2", features = ["serde"] }
+url = "2"
+percent-encoding = "2"
+clap = { version = "4", features = ["derive", "env"] }
 
 # Profiles: debug builds of a DB client are unusably slow without optimized deps.
 [profile.dev.package."*"]

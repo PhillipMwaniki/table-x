@@ -8,6 +8,7 @@
 //! NULL is, whether a number is quoted, what happens to a newline inside a
 //! value — so each one states its choice where it makes it.
 
+use crate::driver::RowSink;
 use crate::result::Column;
 use crate::value::Value;
 use std::io::Write;
@@ -208,6 +209,96 @@ fn sql_literal(value: &Value) -> String {
             format!("X'{hex}'")
         }
         other => format!("'{}'", other.to_string().replace('\'', "''")),
+    }
+}
+
+/// A [`RowSink`] that writes straight through a [`Writer`].
+///
+/// Lives here rather than in either caller because both the desktop app and the
+/// CLI need exactly this, and two copies of "stream a result into a file" would
+/// eventually disagree about something — most likely about what happens to a
+/// half-written file when the query fails halfway.
+///
+/// `on_batch` is called after every batch with the running row count. Returning
+/// an error from it stops the stream at the next batch, which is how a
+/// cancelled export stops without the driver knowing anything about
+/// cancellation.
+pub struct StreamSink<'a, W: std::io::Write + Send> {
+    writer: Option<Writer<W>>,
+    sink: Option<W>,
+    format: Format,
+    table: String,
+    quote: char,
+    rows: u64,
+    // `Sync` because the sink crosses into the driver, and a driver is free to
+    // read on a blocking thread — SQLite does exactly that.
+    on_batch: &'a (dyn Fn(u64) -> crate::error::Result<()> + Sync),
+}
+
+impl<'a, W: std::io::Write + Send> StreamSink<'a, W> {
+    pub fn new(
+        sink: W,
+        format: Format,
+        table: impl Into<String>,
+        quote: char,
+        on_batch: &'a (dyn Fn(u64) -> crate::error::Result<()> + Sync),
+    ) -> Self {
+        StreamSink {
+            writer: None,
+            sink: Some(sink),
+            format,
+            table: table.into(),
+            quote,
+            rows: 0,
+            on_batch,
+        }
+    }
+
+    /// Rows handed over so far.
+    pub fn rows(&self) -> u64 {
+        self.rows
+    }
+
+    /// Close the file properly, writing whatever the format needs at the end.
+    ///
+    /// A statement that returned no columns at all never opened a writer; an
+    /// empty file is a better answer there than a panic.
+    pub fn finish(mut self) -> std::io::Result<u64> {
+        match self.writer.take() {
+            Some(writer) => writer.finish(),
+            None => Ok(self.rows),
+        }
+    }
+}
+
+impl<W: std::io::Write + Send> RowSink for StreamSink<'_, W> {
+    fn columns(&mut self, columns: &[crate::result::Column]) -> crate::error::Result<()> {
+        let mut writer = Writer::new(
+            self.sink.take().ok_or_else(|| {
+                crate::error::Error::Other("columns was called more than once".into())
+            })?,
+            self.format,
+            columns,
+            &self.table,
+            self.quote,
+        );
+        writer
+            .begin()
+            .map_err(|e| crate::error::Error::Io(e.to_string()))?;
+        self.writer = Some(writer);
+        Ok(())
+    }
+
+    fn rows(&mut self, rows: &[Vec<crate::value::Value>]) -> crate::error::Result<()> {
+        let writer = self
+            .writer
+            .as_mut()
+            .ok_or_else(|| crate::error::Error::Other("rows arrived before columns".into()))?;
+        writer
+            .write_batch(rows)
+            .map_err(|e| crate::error::Error::Io(e.to_string()))?;
+        self.rows += rows.len() as u64;
+        (self.on_batch)(self.rows)
     }
 }
 
