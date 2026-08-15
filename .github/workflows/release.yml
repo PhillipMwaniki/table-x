@@ -63,8 +63,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Everything Tauri links against on Linux, plus libdbus for the keyring
-      # crate, which reaches the OS credential store through Secret Service.
+      # Everything Tauri links against on Linux, plus two that are easy to
+      # miss: libdbus for the keyring crate, which reaches the OS credential
+      # store through Secret Service, and libfuse2 for the AppImage bundler,
+      # whose failure without it reads as an unrelated tooling error.
       - name: Install system libraries
         if: startsWith(matrix.os, 'ubuntu')
         run: |
@@ -81,7 +83,8 @@ jobs:
             build-essential \
             patchelf \
             file \
-            desktop-file-utils
+            desktop-file-utils \
+            libfuse2
 
       - uses: pnpm/action-setup@v4
         with:
