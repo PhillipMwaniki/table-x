@@ -10,6 +10,7 @@ mod import;
 mod ipc;
 mod secrets;
 mod sessions;
+mod snippets;
 mod state;
 mod store;
 
@@ -67,6 +68,9 @@ pub fn run() {
             ipc::apply_edit,
             ipc::completion_scope,
             ipc::ssh_host_fingerprint,
+            ipc::list_snippets,
+            ipc::save_snippet,
+            ipc::delete_snippet,
             ipc::query_history,
             ipc::clear_query_history,
             ipc::session_info,

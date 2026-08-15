@@ -1,6 +1,9 @@
 //! Process-wide application state.
 
-use crate::{history::QueryHistory, sessions::SessionRegistry, store::ConnectionStore};
+use crate::{
+    history::QueryHistory, sessions::SessionRegistry, snippets::SnippetStore,
+    store::ConnectionStore,
+};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -22,6 +25,8 @@ pub struct AppState {
     pub store: ConnectionStore,
     /// Executed statements, appended to disk as they run.
     pub history: Mutex<QueryHistory>,
+    /// Queries the user chose to keep, which is a different thing from a log.
+    pub snippets: Mutex<SnippetStore>,
     /// Cancellation flags for exports currently running, by export id.
     ///
     /// A flag rather than an abort: the export is inside a database round trip
@@ -47,6 +52,7 @@ impl AppState {
             connections: Mutex::new(connections),
             store,
             history: Mutex::new(QueryHistory::load(config_dir)),
+            snippets: Mutex::new(SnippetStore::load(config_dir)),
             exports: Mutex::new(HashMap::new()),
         }
     }

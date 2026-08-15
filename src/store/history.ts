@@ -17,8 +17,12 @@ import type { HistoryEntry } from "@/lib/types";
 
 export type HistoryScope = "connection" | "all";
 
+/** Which list the side panel is showing. */
+export type PanelTab = "history" | "snippets";
+
 interface HistoryState {
   open: boolean;
+  tab: PanelTab;
   entries: HistoryEntry[];
   /** The raw search box contents. */
   text: string;
@@ -27,6 +31,7 @@ interface HistoryState {
   error: string | null;
 
   setOpen: (open: boolean) => void;
+  setTab: (tab: PanelTab) => void;
   setText: (text: string) => void;
   setScope: (scope: HistoryScope) => void;
   /** Re-run the current search for the given connection. */
@@ -40,6 +45,7 @@ function message(e: unknown): string {
 
 export const useHistory = create<HistoryState>((set, get) => ({
   open: false,
+  tab: "history",
   entries: [],
   text: "",
   scope: "connection",
@@ -47,6 +53,7 @@ export const useHistory = create<HistoryState>((set, get) => ({
   error: null,
 
   setOpen: (open) => set({ open }),
+  setTab: (tab) => set({ tab }),
   setText: (text) => set({ text }),
   setScope: (scope) => set({ scope }),
 

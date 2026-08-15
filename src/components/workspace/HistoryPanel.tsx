@@ -10,6 +10,7 @@ import { useEffect, useRef } from "react";
 import type { ReactNode } from "react";
 import { Button, Input, Spinner, cx } from "../ui/primitives";
 import { useHistory } from "@/store/history";
+import { SnippetList } from "./SnippetList";
 import { tabsOf, useWorkspace } from "@/store/workspace";
 import type { HistoryEntry } from "@/lib/types";
 
@@ -28,8 +29,21 @@ export function HistoryPanel({
   /** Load and run it. */
   onRun: (sql: string) => void;
 }) {
-  const { open, entries, text, scope, loading, error, setOpen, setText, setScope, refresh, clear } =
-    useHistory();
+  const {
+    open,
+    tab,
+    entries,
+    text,
+    scope,
+    loading,
+    error,
+    setOpen,
+    setTab,
+    setText,
+    setScope,
+    refresh,
+    clear,
+  } = useHistory();
 
   // A finished run is the one moment the list is certainly out of date. Any
   // tab's run counts: they all write to the same history.
@@ -37,7 +51,7 @@ export function HistoryPanel({
   const wasRunning = useRef(running);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || tab !== "history") return;
     const justFinished = wasRunning.current && !running;
     wasRunning.current = running;
     if (running) return;
@@ -47,25 +61,34 @@ export function HistoryPanel({
     const delay = justFinished ? 0 : SEARCH_DELAY;
     const timer = setTimeout(() => void refresh(connectionId), delay);
     return () => clearTimeout(timer);
-  }, [open, text, scope, connectionId, running, refresh]);
+  }, [open, tab, text, scope, connectionId, running, refresh]);
 
   if (!open) return null;
 
   return (
     <aside className="flex w-80 shrink-0 flex-col border-l border-border bg-surface-1">
-      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border px-2">
-        <span className="text-[11px] font-medium text-text-muted">History</span>
-        {loading && <Spinner className="text-text-muted" />}
+      <div className="flex h-8 shrink-0 items-center gap-1 border-b border-border px-2">
+        <PanelTabButton active={tab === "history"} onClick={() => setTab("history")}>
+          History
+        </PanelTabButton>
+        <PanelTabButton active={tab === "snippets"} onClick={() => setTab("snippets")}>
+          Saved
+        </PanelTabButton>
+        {loading && tab === "history" && <Spinner className="text-text-muted" />}
         <div className="flex-1" />
         <button
           onClick={() => setOpen(false)}
-          aria-label="Close history"
+          aria-label="Close panel"
           className="px-1 text-text-muted hover:text-text"
         >
           ✕
         </button>
       </div>
 
+      {tab === "snippets" && <SnippetList onPick={onPick} onRun={onRun} />}
+
+      {tab === "history" && (
+        <>
       <div className="flex shrink-0 flex-col gap-1.5 border-b border-border p-2">
         <Input
           value={text}
@@ -131,7 +154,32 @@ export function HistoryPanel({
       <p className="shrink-0 border-t border-border px-2 py-1 text-[10px] text-text-muted/70">
         Statements that set a password are never recorded.
       </p>
+        </>
+      )}
     </aside>
+  );
+}
+
+function PanelTabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      aria-pressed={active}
+      className={cx(
+        "rounded px-1.5 py-0.5 text-[11px] font-medium",
+        active ? "bg-surface-3 text-text" : "text-text-muted hover:bg-surface-2",
+      )}
+    >
+      {children}
+    </button>
   );
 }
 

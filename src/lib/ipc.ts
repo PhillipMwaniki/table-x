@@ -21,6 +21,7 @@ import type {
   RowEdit,
   SchemaNode,
   SessionInfo,
+  Snippet,
   SshConfig,
   TableDetail,
 } from "./types";
@@ -198,6 +199,19 @@ export const ipc = {
    * to tunnel to a host whose key is not already known.
    */
   sshHostFingerprint: (ssh: SshConfig) => call<string>("ssh_host_fingerprint", { ssh }),
+
+  /** Saved queries, most recently edited first. */
+  listSnippets: () => call<Snippet[]>("list_snippets"),
+
+  /**
+   * Create or update a saved query, returning it as stored.
+   *
+   * The store owns the timestamps and the trimmed name, so the answer is what
+   * to display — not the object that was sent.
+   */
+  saveSnippet: (snippet: Snippet) => call<Snippet>("save_snippet", { snippet }),
+
+  deleteSnippet: (id: string) => call<void>("delete_snippet", { id }),
 
   /** Search executed statements, newest first. */
   queryHistory: (query: HistoryQuery) =>

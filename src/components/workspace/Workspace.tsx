@@ -23,6 +23,7 @@ import { ipc, IpcError } from "@/lib/ipc";
 import { drop, selectFrom, truncate } from "@/lib/statements";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useHistory } from "@/store/history";
+import { useSnippets } from "@/store/snippets";
 import { useSettings } from "@/store/settings";
 import { useExports } from "@/store/exports";
 import { useWorkspace } from "@/store/workspace";
@@ -78,6 +79,8 @@ export function Workspace({
 
   const historyOpen = useHistory((s) => s.open);
   const setHistoryOpen = useHistory((s) => s.setOpen);
+  const setPanelTab = useHistory((s) => s.setTab);
+  const saveSnippet = useSnippets((s) => s.save);
 
   // The stored split, and the live one while the divider is being dragged.
   // Dragging keeps its position here rather than in the store so a drag does
@@ -305,6 +308,29 @@ export function Workspace({
     }
   };
 
+
+  /**
+   * Keep the current statement under a name.
+   *
+   * Named through a prompt rather than a dialog: the name is the only thing
+   * being asked for, and a modal for one text field is a modal too many.
+   */
+  const saveCurrentQuery = () => {
+    if (!tab?.sql.trim()) return;
+    const suggested = tab.kind === "table" ? tab.title : "";
+    const name = window.prompt("Save this query as", suggested);
+    if (name === null) return;
+    if (!name.trim()) {
+      setTabError(connection.id, tab.id, "A saved query needs a name.");
+      return;
+    }
+    void saveSnippet(name, tab.sql).then(() => {
+      setPanelTab("snippets");
+      setHistoryOpen(true);
+      setTabNotice(connection.id, tab.id, `Saved as “${name.trim()}”.`);
+    });
+  };
+
   const active = tab?.outcome?.statements[tab.activeStatement];
 
   const readOnlyReason = useMemo(() => {
@@ -366,6 +392,15 @@ export function Workspace({
 
               <div className="flex-1" />
 
+              <Button
+                variant="ghost"
+                className="h-6"
+                disabled={!tab.sql.trim()}
+                onClick={saveCurrentQuery}
+                title="Keep this statement under a name"
+              >
+                Save query
+              </Button>
               <Button
                 variant="ghost"
                 className={cx("h-6", historyOpen && "bg-surface-3 text-text")}

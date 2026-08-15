@@ -241,6 +241,17 @@ export interface SchemaNode {
 /** File formats a table can be written out as. */
 export type ExportFormat = "csv" | "json" | "sql";
 
+/** A query the user chose to keep. */
+export interface Snippet {
+  id: string;
+  name: string;
+  sql: string;
+  /** RFC 3339, UTC. Set when first saved and preserved across edits. */
+  created_at: string;
+  updated_at: string;
+  folder?: string | undefined;
+}
+
 /** What a live session is pointed at, beyond being open. */
 export interface SessionInfo {
   database?: string | undefined;

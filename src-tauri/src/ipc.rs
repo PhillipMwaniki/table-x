@@ -18,6 +18,7 @@ use tablex_core::{
 use crate::{
     history::{self, HistoryEntry, HistoryQuery},
     secrets,
+    snippets::Snippet,
     state::AppState,
 };
 
@@ -737,6 +738,33 @@ pub async fn cancel_export(state: tauri::State<'_, AppState>, id: String) -> Ipc
     if let Some(flag) = state.exports.lock().await.get(&id) {
         flag.store(true, std::sync::atomic::Ordering::Relaxed);
     }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Saved queries
+// ---------------------------------------------------------------------------
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn list_snippets(state: tauri::State<'_, AppState>) -> IpcResult<Vec<Snippet>> {
+    Ok(state.snippets.lock().await.list())
+}
+
+/// Create or update a saved query, returning it as stored.
+///
+/// Returned rather than acknowledged, because the store owns the timestamps and
+/// the trimmed name — the UI should show what was kept, not what was sent.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn save_snippet(
+    state: tauri::State<'_, AppState>,
+    snippet: Snippet,
+) -> IpcResult<Snippet> {
+    Ok(state.snippets.lock().await.save(snippet)?)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn delete_snippet(state: tauri::State<'_, AppState>, id: String) -> IpcResult<()> {
+    state.snippets.lock().await.delete(&id)?;
     Ok(())
 }
 
