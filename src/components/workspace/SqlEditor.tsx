@@ -182,8 +182,16 @@ export function SqlEditor({
 
   // Callbacks live in a ref so the keymap closure always sees the current ones
   // without needing to rebuild the editor when a prop changes identity.
+  //
+  // Updated in an effect rather than during render: React may render a
+  // component and throw the result away, and a ref written during that render
+  // would then describe a render that never committed. An effect runs only for
+  // the ones that did — and it runs before any keystroke can reach the keymap,
+  // which is the only thing that reads this.
   const handlers = useRef({ onChange, onRun });
-  handlers.current = { onChange, onRun };
+  useEffect(() => {
+    handlers.current = { onChange, onRun };
+  }, [onChange, onRun]);
 
   useEffect(() => {
     if (!host.current || view.current) return;

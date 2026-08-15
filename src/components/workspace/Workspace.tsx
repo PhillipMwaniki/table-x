@@ -96,7 +96,7 @@ export function Workspace({
     renameNotebookTab,
     setTabError,
     setTabNotice,
-    useDatabase,
+    switchDatabase,
     applyEdit,
     goToPage,
     explain,
@@ -798,7 +798,7 @@ export function Workspace({
               schema: node.schema,
             })
           }
-          onSelectDatabase={(name) => void useDatabase(connection.id, name)}
+          onSelectDatabase={(name) => void switchDatabase(connection.id, name)}
           onOpenScript={(node) => void openScript(node)}
           onContextMenu={(node, at, refresh) =>
             setMenu({ node, x: at.x, y: at.y, refresh })

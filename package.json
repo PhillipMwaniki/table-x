@@ -14,11 +14,13 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "eslint . --ext ts,tsx",
-    "fmt": "prettier --write \"src/**/*.{ts,tsx,css}\"",
+    "lint": "eslint .",
+    "fmt": "prettier --write .",
     "rs:check": "cargo check --workspace",
     "rs:test": "cargo test --workspace",
-    "rs:fmt": "cargo fmt --all"
+    "rs:fmt": "cargo fmt --all",
+    "lint:fix": "eslint . --fix",
+    "fmt:check": "prettier --check ."
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.19.0",
@@ -39,14 +41,22 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@tailwindcss/vite": "^4.3.3",
     "@tauri-apps/cli": "^2.11.4",
     "@types/node": "^26.2.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^6.0.5",
+    "eslint": "^10.8.1",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.4",
+    "globals": "^17.11.0",
+    "prettier": "^3.9.6",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.9.3",
+    "typescript-eslint": "^8.67.0",
     "vite": "^8.2.1",
     "vitest": "^4.1.10"
   }

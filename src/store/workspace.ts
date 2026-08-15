@@ -188,7 +188,13 @@ interface WorkspaceState {
   goToPage: (connectionId: string, tabId: string, offset: number) => Promise<void>;
 
   loadSession: (connectionId: string) => Promise<void>;
-  useDatabase: (connectionId: string, database: string) => Promise<void>;
+  /**
+   * Point the session at another database.
+   *
+   * Not `useDatabase`: a function named `use*` in a React codebase reads as a
+   * hook to both people and the rules-of-hooks lint, and this is neither.
+   */
+  switchDatabase: (connectionId: string, database: string) => Promise<void>;
   loadCompletionFor: (connectionId: string) => Promise<void>;
 
   applyEdit: (
@@ -430,7 +436,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // to bring its database with it, or its SQL would run somewhere else.
     const tab = tabsOf(get(), id).find((t) => t.id === tabId);
     if (tab?.database && tab.database !== get().database[id]) {
-      await get().useDatabase(id, tab.database);
+      await get().switchDatabase(id, tab.database);
     }
   },
 
@@ -468,7 +474,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (tabsOf(get(), id).length === 0) get().openQuery(id);
   },
 
-  useDatabase: async (id, database) => {
+  switchDatabase: async (id, database) => {
     if (get().database[id] === database) return;
     set((s) => ({ switching: { ...s.switching, [id]: true } }));
     try {

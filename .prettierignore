@@ -1,0 +1,9 @@
+dist
+target
+node_modules
+pnpm-lock.yaml
+
+# Markdown is left to people. Prettier reflows prose, and the README's wrapping
+# is deliberate — reformatting it would produce a large diff that says nothing
+# and would fight every future edit.
+*.md

@@ -188,7 +188,7 @@ export function parseInline(source: string): Inline[] {
 
     // Plain text up to the next character that could start something, taken in
     // one piece so the common case is not one node per character.
-    const next = /[`\[*_]/.exec(source.slice(i + 1));
+    const next = /[`[*_]/.exec(source.slice(i + 1));
     const take = next ? next.index + 1 : source.length - i;
     push({ kind: "text", text: source.slice(i, i + take) });
     i += take;
