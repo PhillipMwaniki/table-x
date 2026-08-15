@@ -13,8 +13,9 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { ipc } from "@/lib/ipc";
 import { useHistory } from "@/store/history";
 import { SnippetList } from "./SnippetList";
+import { NotebookList } from "./NotebookList";
 import { tabsOf, useWorkspace } from "@/store/workspace";
-import type { HistoryEntry } from "@/lib/types";
+import type { HistoryEntry, Notebook } from "@/lib/types";
 
 /** Debounce for the search box, in ms. Long enough to skip intermediate
  *  keystrokes, short enough that the list feels attached to the input. */
@@ -24,12 +25,14 @@ export function HistoryPanel({
   connectionId,
   onPick,
   onRun,
+  onOpenNotebook,
 }: {
   connectionId: string;
   /** Load a statement into the editor. */
   onPick: (sql: string) => void;
   /** Load and run it. */
   onRun: (sql: string) => void;
+  onOpenNotebook: (notebook: Notebook) => void;
 }) {
   const {
     open,
@@ -104,6 +107,9 @@ export function HistoryPanel({
         <PanelTabButton active={tab === "history"} onClick={() => setTab("history")}>
           History
         </PanelTabButton>
+        <PanelTabButton active={tab === "notebooks"} onClick={() => setTab("notebooks")}>
+          Notebooks
+        </PanelTabButton>
         <PanelTabButton active={tab === "snippets"} onClick={() => setTab("snippets")}>
           Saved
         </PanelTabButton>
@@ -119,6 +125,9 @@ export function HistoryPanel({
       </div>
 
       {tab === "snippets" && <SnippetList onPick={onPick} onRun={onRun} />}
+      {tab === "notebooks" && (
+        <NotebookList connectionId={connectionId} onOpen={onOpenNotebook} />
+      )}
 
       {tab === "history" && (
         <>

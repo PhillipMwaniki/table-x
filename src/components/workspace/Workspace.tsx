@@ -24,6 +24,7 @@ import { DiffView } from "./DiffView";
 import { CompareDialog } from "./CompareDialog";
 import { PrivilegesPanel } from "./PrivilegesPanel";
 import { ConfirmDestructive } from "./ConfirmDestructive";
+import { NotebookView } from "./NotebookView";
 import { Button, Spinner, cx } from "../ui/primitives";
 import { ContextMenu } from "../ui/ContextMenu";
 import { Dialog } from "../ui/Dialog";
@@ -90,6 +91,9 @@ export function Workspace({
     openPrivileges,
     openDiagram,
     openDiff,
+    openNotebook,
+    setCells,
+    renameNotebookTab,
     setTabError,
     setTabNotice,
     useDatabase,
@@ -462,6 +466,61 @@ export function Workspace({
   };
 
   /**
+   * Keep this notebook, asking for a name the first time.
+   *
+   * The tab remembers the id it was saved under, so a second save updates the
+   * same notebook rather than leaving a trail of near-identical copies — which
+   * is what happens when "save" always means "save a new one".
+   */
+  const saveNotebook = async (tabId: string) => {
+    const current = activeTab(connection.id);
+    if (!current || current.id !== tabId) return;
+
+    const name = current.notebookId
+      ? current.title
+      : window.prompt("Name this notebook", current.title);
+    if (!name?.trim()) return;
+
+    try {
+      const saved = await ipc.saveNotebook({
+        id: current.notebookId ?? crypto.randomUUID(),
+        name: name.trim(),
+        cells: current.cells ?? [],
+        connection_id: connection.id,
+        created_at: "",
+        updated_at: "",
+      });
+      renameNotebookTab(connection.id, tabId, saved.id, saved.name);
+      setTabNotice(connection.id, tabId, `Saved as ${saved.name}`);
+    } catch (e) {
+      reportJobFailure(e as IpcError, tabId, "Saving the notebook");
+    }
+  };
+
+  /**
+   * Run one statement for a notebook cell and hand back its result.
+   *
+   * Goes through the same hazard check as everything else — a notebook must not
+   * become the one route that skips the confirmation. The dialog is modal, so a
+   * held statement resolves to null rather than waiting: the cell reports
+   * nothing ran, which is true.
+   */
+  const runCell = async (sql: string): Promise<StatementResult | null> => {
+    const report = await ipc.inspectStatement(connection.id, sql);
+    if (report.confirms && report.hazards.length > 0) {
+      setPending({ tabId: tab?.id ?? "", sql, hazards: report.hazards });
+      return null;
+    }
+
+    const outcome = await ipc.execute({
+      connection_id: connection.id,
+      sql,
+      max_rows: pageSize,
+    });
+    return outcome.statements[0] ?? null;
+  };
+
+  /**
    * Compare this schema with another, and write the migration between them.
    *
    * The script is generated for *this* connection's engine, because this is the
@@ -663,6 +722,12 @@ export function Workspace({
         },
       },
       {
+        id: "ws.notebook",
+        title: "New notebook",
+        group: "Query",
+        run: () => openNotebook(connection.id),
+      },
+      {
         id: "ws.privileges",
         title: "Show privileges and roles",
         group: "Data",
@@ -753,6 +818,7 @@ export function Workspace({
               {tab.kind === "activity" ||
               tab.kind === "diagram" ||
               tab.kind === "diff" ||
+              tab.kind === "notebook" ||
               tab.kind === "privileges" ? (
                 <span className="text-[11px] text-text-muted">
                   {tab.kind === "activity"
@@ -761,7 +827,9 @@ export function Workspace({
                       ? "A comparison and the script that would settle it. Nothing here runs."
                       : tab.kind === "privileges"
                         ? "Principals and their grants, in the engine's own words."
-                        : "Tables and the keys between them. Drag to pan, scroll to zoom."}
+                        : tab.kind === "notebook"
+                          ? "Prose and queries together. Results are not saved with it."
+                          : "Tables and the keys between them. Drag to pan, scroll to zoom."}
                 </span>
               ) : (
                 <>
@@ -862,7 +930,15 @@ export function Workspace({
             {/* A table tab gives its whole height to the rows: there is no
                 statement to edit, and the SQL that produced them is one line
                 the tab's own context already describes. */}
-            {tab.kind === "privileges" ? (
+            {tab.kind === "notebook" ? (
+              <NotebookView
+                cells={tab.cells ?? []}
+                saved={Boolean(tab.notebookId)}
+                onChange={(cells) => setCells(connection.id, tab.id, cells)}
+                onRunGuarded={runCell}
+                onSave={() => void saveNotebook(tab.id)}
+              />
+            ) : tab.kind === "privileges" ? (
               <PrivilegesPanel
                 connectionId={connection.id}
                 quote={driver?.capabilities.identifier_quote ?? '"'}
@@ -1143,6 +1219,7 @@ export function Workspace({
 
       <HistoryPanel
         connectionId={connection.id}
+        onOpenNotebook={(notebook) => openNotebook(connection.id, notebook)}
         onPick={(sql) => tab && setSql(connection.id, tab.id, sql)}
         onRun={(sql) => {
           if (!tab) return;

@@ -10,6 +10,7 @@ mod import;
 mod ipc;
 mod secrets;
 mod sessions;
+mod notebooks;
 mod snapshot;
 mod snippets;
 mod state;
@@ -84,6 +85,9 @@ pub fn run() {
             ipc::list_snippets,
             ipc::save_snippet,
             ipc::delete_snippet,
+            ipc::list_notebooks,
+            ipc::save_notebook,
+            ipc::delete_notebook,
             ipc::query_history,
             ipc::clear_query_history,
             ipc::session_info,

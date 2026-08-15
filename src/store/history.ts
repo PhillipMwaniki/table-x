@@ -18,7 +18,7 @@ import type { HistoryEntry } from "@/lib/types";
 export type HistoryScope = "connection" | "all";
 
 /** Which list the side panel is showing. */
-export type PanelTab = "history" | "snippets";
+export type PanelTab = "history" | "snippets" | "notebooks";
 
 interface HistoryState {
   open: boolean;

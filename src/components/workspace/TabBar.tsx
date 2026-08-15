@@ -86,7 +86,9 @@ function TabButton({
                 ? "⇄"
                 : tab.kind === "privileges"
                   ? "⚿"
-                  : "›"}
+                  : tab.kind === "notebook"
+                    ? "▤▤"
+                    : "›"}
       </span>
 
       <span className="flex min-w-0 flex-col leading-tight">

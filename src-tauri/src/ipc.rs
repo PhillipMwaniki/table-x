@@ -18,6 +18,7 @@ use tablex_core::{
 use crate::{
     history::{self, HistoryEntry, HistoryQuery},
     secrets,
+    notebooks::Notebook,
     snippets::Snippet,
     state::AppState,
 };
@@ -886,6 +887,30 @@ pub async fn save_snippet(
 #[tauri::command(rename_all = "snake_case")]
 pub async fn delete_snippet(state: tauri::State<'_, AppState>, id: String) -> IpcResult<()> {
     state.snippets.lock().await.delete(&id)?;
+    Ok(())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn list_notebooks(state: tauri::State<'_, AppState>) -> IpcResult<Vec<Notebook>> {
+    Ok(state.notebooks.lock().await.list())
+}
+
+/// Create or update a notebook, returning it as stored.
+///
+/// Results are not part of what is saved — see the store's own note. A notebook
+/// records what to run and why; a stored result would be a claim about a
+/// database that may have been true a month ago.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn save_notebook(
+    state: tauri::State<'_, AppState>,
+    notebook: Notebook,
+) -> IpcResult<Notebook> {
+    Ok(state.notebooks.lock().await.save(notebook)?)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn delete_notebook(state: tauri::State<'_, AppState>, id: String) -> IpcResult<()> {
+    state.notebooks.lock().await.delete(&id)?;
     Ok(())
 }
 

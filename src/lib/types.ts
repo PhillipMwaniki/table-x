@@ -253,6 +253,23 @@ export interface SchemaNode {
 /** File formats a table can be written out as. */
 export type ExportFormat = "csv" | "json" | "sql";
 
+/** One cell of a notebook. */
+export interface NotebookCell {
+  id: string;
+  kind: "markdown" | "sql";
+  source: string;
+}
+
+/** Prose and queries kept together. Results are never part of what is saved. */
+export interface Notebook {
+  id: string;
+  name: string;
+  cells: NotebookCell[];
+  connection_id?: string | undefined;
+  created_at: string;
+  updated_at: string;
+}
+
 /** One thing a submission would destroy. */
 export interface HazardItem {
   summary: string;

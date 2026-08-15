@@ -17,6 +17,8 @@ import { useSettings } from "@/store/settings";
 import type {
   CompletionScope,
   DiffReport,
+  Notebook,
+  NotebookCell,
   Plan,
   QueryOutcome,
   RowEdit,
@@ -49,7 +51,14 @@ export interface QueryError {
  * a result — but it is still a tab, because watching the server while you work
  * is the whole point and a modal would put it in front of the work instead.
  */
-export type TabKind = "query" | "table" | "activity" | "diagram" | "diff" | "privileges";
+export type TabKind =
+  | "query"
+  | "table"
+  | "activity"
+  | "diagram"
+  | "diff"
+  | "privileges"
+  | "notebook";
 
 export interface Tab {
   id: string;
@@ -69,6 +78,10 @@ export interface Tab {
   plan?: Plan | null;
   /** A schema comparison, for a diff tab. */
   diff?: DiffReport | null;
+  /** The cells of a notebook tab. Results are held in the view, not here. */
+  cells?: NotebookCell[];
+  /** The stored notebook this tab is editing, once it has been saved. */
+  notebookId?: string | undefined;
   running: boolean;
   /** Index of the statement whose results are shown. */
   activeStatement: number;
@@ -153,6 +166,14 @@ interface WorkspaceState {
   openPrivileges: (connectionId: string) => void;
   openDiagram: (connectionId: string, schema: string | null) => void;
   openDiff: (connectionId: string, title: string, report: DiffReport) => void;
+  openNotebook: (connectionId: string, notebook?: Notebook) => void;
+  setCells: (connectionId: string, tabId: string, cells: NotebookCell[]) => void;
+  renameNotebookTab: (
+    connectionId: string,
+    tabId: string,
+    notebookId: string,
+    name: string,
+  ) => void;
   closeTab: (connectionId: string, tabId: string) => void;
   selectTab: (connectionId: string, tabId: string) => Promise<void>;
 
@@ -263,6 +284,36 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     }));
     void get().run(id, tab.id);
   },
+
+  openNotebook: (id, notebook) => {
+    const list = tabsOf(get(), id);
+    // Reopening a saved notebook focuses the tab already showing it rather than
+    // opening a second copy that would then disagree with the first on save.
+    const existing = notebook && list.find((t) => t.notebookId === notebook.id);
+    if (existing) {
+      set((s) => ({ active: { ...s.active, [id]: existing.id } }));
+      return;
+    }
+
+    const n = list.filter((t) => t.kind === "notebook").length + 1;
+    const tab = blankTab({
+      kind: "notebook",
+      title: notebook?.name ?? `Notebook ${n}`,
+      database: get().database[id] ?? null,
+      cells: notebook?.cells ?? [],
+      notebookId: notebook?.id,
+    });
+    set((s) => ({
+      tabs: { ...s.tabs, [id]: [...list, tab] },
+      active: { ...s.active, [id]: tab.id },
+    }));
+  },
+
+  setCells: (id, tabId, cells) =>
+    set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { cells }) })),
+
+  renameNotebookTab: (id, tabId, notebookId, name) =>
+    set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { notebookId, title: name }) })),
 
   openDiff: (id, title, report) => {
     const tab = blankTab({

@@ -25,6 +25,7 @@ import type {
   HazardReport,
   HistoryEntry,
   HistoryQuery,
+  Notebook,
   QueryOutcome,
   RowEdit,
   SchemaNode,
@@ -205,6 +206,13 @@ export const ipc = {
    */
   exportHistory: (path: string, format: "csv" | "json", query: HistoryQuery) =>
     call<number>("export_history", { path, format, query }),
+
+  listNotebooks: () => call<Notebook[]>("list_notebooks", {}),
+
+  /** Create or update a notebook, returning it as stored. */
+  saveNotebook: (notebook: Notebook) => call<Notebook>("save_notebook", { notebook }),
+
+  deleteNotebook: (id: string) => call<void>("delete_notebook", { id }),
 
   /** What a submission would destroy, and whether this connection asks first. */
   inspectStatement: (connection_id: string, sql: string) =>
