@@ -622,22 +622,79 @@ check the artifacts before they become something people can install.
 
 ### Signing is not set up
 
-The installers CI produces are **unsigned**. Windows SmartScreen will warn on first run,
-and macOS Gatekeeper will refuse to open the `.dmg` without a right-click → Open. That is
-acceptable for a pre-release and not acceptable for something people are asked to trust
-with database credentials.
+The installers CI produces are **unsigned**. Windows SmartScreen warns on first run, and
+macOS Gatekeeper refuses to open the `.dmg` without a right-click → Open. Acceptable for
+a pre-release; not acceptable for something people are asked to trust with database
+credentials.
 
-Signing needs paid identities that have to be bought and held by whoever publishes:
+Both platforms need a paid identity, bought and held by whoever publishes. Prices and
+eligibility rules move — check the vendor before committing.
 
-- **macOS** — an Apple Developer Program membership ($99/year) for a Developer ID
-  certificate, plus notarization. The workflow already passes `APPLE_CERTIFICATE`,
-  `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`
-  and `APPLE_TEAM_ID` through to the build; setting those repository secrets is all that
-  is needed to turn it on.
-- **Windows** — an OV or EV code-signing certificate from a CA. EV avoids the SmartScreen
-  reputation period; OV earns trust only after enough downloads. Wiring it up means
-  adding the certificate to `tauri.conf.json`'s `bundle.windows.signCommand` or
-  `certificateThumbprint`.
+#### macOS — Apple Developer Program
+
+There is one route and no alternative: **$99/year**, from
+[developer.apple.com/programs](https://developer.apple.com/programs/).
+
+- **Individual** enrolment needs an Apple ID and identity verification, and usually
+  completes in a day or two. The certificate is issued in your own name, which is
+  visible to anyone who inspects the app.
+- **Organization** enrolment shows a company name instead, but needs a legal entity and
+  a [D-U-N-S number](https://developer.apple.com/support/D-U-N-S/) — free, and often the
+  slowest step at one to two weeks.
+
+Then, in Certificates, Identifiers & Profiles, create a **Developer ID Application**
+certificate. Only the Account Holder can create one. Generating the signing request and
+exporting the result as a `.p12` both need a Mac.
+
+Six repository secrets, which the workflow already reads:
+
+| Secret | Where it comes from |
+|---|---|
+| `APPLE_CERTIFICATE` | the `.p12`, base64-encoded |
+| `APPLE_CERTIFICATE_PASSWORD` | the password set when exporting it |
+| `APPLE_SIGNING_IDENTITY` | e.g. `Developer ID Application: Your Name (TEAM_ID)` |
+| `APPLE_ID` | the Apple ID email |
+| `APPLE_PASSWORD` | an [app-specific password](https://support.apple.com/en-us/102654), not the account password |
+| `APPLE_TEAM_ID` | from the membership details page |
+
+Notarization is separate from signing and equally required — an app that is signed but
+not notarized still gets refused. `tauri-action` submits it automatically once those
+secrets are present.
+
+#### Windows — a code-signing certificate
+
+Harder than it used to be. Since the CA/Browser Forum tightened its rules in 2023, the
+private key must live on certified hardware or in a signing service — a CA will no longer
+issue a `.pfx` you can drop into CI. That makes **cloud signing the only practical route
+for an automated build**; a USB token is unusable by a GitHub runner.
+
+Options, roughly cheapest first:
+
+- **[Azure Trusted Signing](https://azure.microsoft.com/products/trusted-signing)** —
+  around $10/month, by far the cheapest. Individual and organization identities are both
+  available, with a verification step; organizations have historically needed some
+  trading history, so confirm eligibility before planning around it.
+- **[Certum Open Source Code Signing](https://shop.certum.eu/open-source-code-signing.html)**
+  — around €100–150/year, sold specifically for open-source projects and cheap for what
+  it is. Ships as a hardware token, so it suits signing releases from a workstation more
+  than from CI.
+- **SSL.com eSigner**, **DigiCert KeyLocker** — cloud signing from established CAs,
+  typically a few hundred dollars a year.
+
+OV and EV differ in how SmartScreen treats them. An **EV** certificate is trusted
+immediately. An **OV** one earns reputation only after enough downloads, so early users
+still see the warning — which for a new project can mean months.
+
+Wiring it in means pointing `bundle.windows` in `src-tauri/tauri.conf.json` at the
+service: `signCommand` for a cloud signer, or `certificateThumbprint` for a certificate
+already in the machine store. The workflow needs no change beyond adding whatever
+secrets that command reads.
+
+#### Neither is needed to build
+
+Everything else works unsigned. The only thing signing buys is the absence of a warning —
+which is worth real money precisely because that warning is the correct response to
+software nobody has vouched for.
 
 There is no auto-updater, so no update signing key is needed. Adding one later means
 generating a keypair with `pnpm tauri signer generate` and holding the private half as a
