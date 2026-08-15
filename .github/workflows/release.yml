@@ -169,5 +169,16 @@ jobs:
           # is something people can install.
           draft: true
           generate_release_notes: true
-          files: artifacts/**/*
+          # Listed by extension rather than `artifacts/**/*`, which also
+          # matches the directories the download creates and which the upload
+          # then chokes on. Same list as the artifact globs above.
+          files: |
+            artifacts/**/*.deb
+            artifacts/**/*.rpm
+            artifacts/**/*.AppImage
+            artifacts/**/*.msi
+            artifacts/**/*.exe
+            artifacts/**/*.dmg
+          # A missing pattern means a platform silently produced nothing, which
+          # is exactly the release worth stopping.
           fail_on_unmatched_files: true
