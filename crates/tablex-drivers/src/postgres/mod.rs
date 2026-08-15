@@ -4,6 +4,7 @@
 //! column, so ad-hoc query results can be inline-edited safely. That capability
 //! difference is exactly what [`Capabilities`] exists to express.
 
+mod activity;
 mod introspect;
 mod numeric;
 mod types;
@@ -13,6 +14,7 @@ use std::collections::HashMap;
 
 use futures_util::StreamExt;
 use tablex_core::{
+    activity::ServerActivity,
     config::{ConnectionConfig, TlsMode},
     driver::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
@@ -70,6 +72,7 @@ impl Driver for PostgresDriver {
                 cancel: false,
                 // query_raw yields rows as the server sends them.
                 streaming: true,
+                activity: true,
                 placeholder_style: PlaceholderStyle::Dollar,
                 identifier_quote: QUOTE,
             },
@@ -220,6 +223,14 @@ impl Connection for PostgresConnection {
 
     async fn definition(&mut self, node_id: &str) -> Result<String> {
         introspect::definition(&self.client, node_id).await
+    }
+
+    async fn activity(&mut self) -> Result<ServerActivity> {
+        activity::activity(&self.client).await
+    }
+
+    async fn kill_session(&mut self, id: &str) -> Result<()> {
+        activity::kill(&self.client, id).await
     }
 
     /// Stream rows off a portal.

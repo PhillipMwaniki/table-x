@@ -35,8 +35,12 @@ export interface QueryError {
 /**
  * A table tab shows one object's rows with no editor; a query tab is an editor
  * over a result. They share everything else, so they share a shape.
+ *
+ * An activity tab has neither — it is a live view of the server rather than of
+ * a result — but it is still a tab, because watching the server while you work
+ * is the whole point and a modal would put it in front of the work instead.
  */
-export type TabKind = "query" | "table";
+export type TabKind = "query" | "table" | "activity";
 
 export interface Tab {
   id: string;
@@ -119,6 +123,7 @@ interface WorkspaceState {
   ) => void;
   /** A query tab that opens with content already in it, e.g. an object's DDL. */
   openScript: (connectionId: string, script: { title: string; sql: string }) => void;
+  openActivity: (connectionId: string) => void;
   closeTab: (connectionId: string, tabId: string) => void;
   selectTab: (connectionId: string, tabId: string) => Promise<void>;
 
@@ -224,6 +229,27 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       active: { ...s.active, [id]: tab.id },
     }));
     void get().run(id, tab.id);
+  },
+
+  openActivity: (id) => {
+    const list = tabsOf(get(), id);
+    // One per connection. A second live view of the same server would refresh
+    // on its own timer and show a different answer to the same question.
+    const existing = list.find((t) => t.kind === "activity");
+    if (existing) {
+      set((s) => ({ active: { ...s.active, [id]: existing.id } }));
+      return;
+    }
+
+    const tab = blankTab({
+      kind: "activity",
+      title: "Server activity",
+      database: get().database[id] ?? null,
+    });
+    set((s) => ({
+      tabs: { ...s.tabs, [id]: [...list, tab] },
+      active: { ...s.active, [id]: tab.id },
+    }));
   },
 
   openScript: (id, script) => {

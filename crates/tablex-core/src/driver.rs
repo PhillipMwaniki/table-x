@@ -5,6 +5,7 @@
 //! and describe drivers without opening any sockets.
 
 use crate::{
+    activity::ServerActivity,
     config::ConnectionConfig,
     error::Result,
     result::{Column, QueryOutcome},
@@ -45,6 +46,11 @@ pub struct Capabilities {
     pub column_provenance: bool,
     /// Whether streaming avoids buffering the whole result set in memory.
     pub streaming: bool,
+    /// Whether the server can report its own connected sessions, and end one.
+    ///
+    /// False for file-backed engines, where there is no server to ask and no
+    /// session but yours.
+    pub activity: bool,
     /// Placeholder syntax, so the query builder emits `$1` or `?` correctly.
     pub placeholder_style: PlaceholderStyle,
     /// Quote character(s) for identifiers.
@@ -67,6 +73,7 @@ impl Default for Capabilities {
             table_scripts: false,
             column_provenance: false,
             streaming: false,
+            activity: false,
             placeholder_style: PlaceholderStyle::Question,
             identifier_quote: '"',
         }
@@ -248,6 +255,28 @@ pub trait Connection: Send + Sync {
     async fn definition(&mut self, _node_id: &str) -> Result<String> {
         Err(crate::error::Error::Unsupported(
             "this driver cannot show object definitions".into(),
+        ))
+    }
+
+    /// Sessions currently connected to this server, and what it reports about
+    /// itself.
+    ///
+    /// Read fresh every time rather than cached: the whole value of the answer
+    /// is that it describes this moment.
+    async fn activity(&mut self) -> Result<ServerActivity> {
+        Err(crate::error::Error::Unsupported(
+            "this driver cannot report server activity".into(),
+        ))
+    }
+
+    /// End the session with this id.
+    ///
+    /// Whether it may is the server's decision, not the driver's: a user
+    /// without the privilege gets the server's own refusal, which says more
+    /// than a guess made here would.
+    async fn kill_session(&mut self, _id: &str) -> Result<()> {
+        Err(crate::error::Error::Unsupported(
+            "this driver cannot end a session".into(),
         ))
     }
 

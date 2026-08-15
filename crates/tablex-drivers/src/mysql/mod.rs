@@ -8,10 +8,12 @@
 //! distinguished only where their catalogs differ, which for the queries here
 //! they do not.
 
+mod activity;
 mod types;
 
 use async_trait::async_trait;
 use tablex_core::{
+    activity::ServerActivity,
     config::{ConnectionConfig, TlsMode},
     driver::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
@@ -150,6 +152,7 @@ impl Driver for MysqlDriver {
                 cancel: false,
                 // query_iter is a cursor over the wire, not a materialized set.
                 streaming: true,
+                activity: true,
                 placeholder_style: PlaceholderStyle::Question,
                 identifier_quote: QUOTE,
             },
@@ -242,6 +245,14 @@ impl Connection for MysqlConnection {
 
     async fn current_database(&mut self) -> Result<Option<String>> {
         Ok(self.default_db.clone())
+    }
+
+    async fn activity(&mut self) -> Result<ServerActivity> {
+        activity::activity(&mut self.conn).await
+    }
+
+    async fn kill_session(&mut self, id: &str) -> Result<()> {
+        activity::kill(&mut self.conn, id).await
     }
 
     /// Stream rows as the server sends them.

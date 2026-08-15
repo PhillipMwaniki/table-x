@@ -877,6 +877,43 @@ pub async fn table_detail(
     Ok(guard.table_detail(schema.as_deref(), &table).await?)
 }
 
+/// What the server is doing right now.
+///
+/// Read fresh on every call and never cached: an activity list that is a minute
+/// old describes a server that no longer exists.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn server_activity(
+    state: tauri::State<'_, AppState>,
+    connection_id: String,
+) -> IpcResult<tablex_core::activity::ServerActivity> {
+    let session = state.sessions.get(&connection_id).await?;
+    let mut guard = session.connection.lock().await;
+    Ok(guard.activity().await?)
+}
+
+/// End someone's session.
+///
+/// Gated on read-only for the same reason an edit is: the flag means this
+/// connection does not change the server, and disconnecting another user is a
+/// change to the server whatever else it is.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn kill_session(
+    state: tauri::State<'_, AppState>,
+    connection_id: String,
+    session_id: String,
+) -> IpcResult<()> {
+    let config = state.config_for(&connection_id).await?;
+    if config.read_only {
+        return Err(
+            tablex_core::Error::Unsupported("this connection is marked read-only".into()).into(),
+        );
+    }
+
+    let session = state.sessions.get(&connection_id).await?;
+    let mut guard = session.connection.lock().await;
+    Ok(guard.kill_session(&session_id).await?)
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub async fn apply_edit(
     state: tauri::State<'_, AppState>,

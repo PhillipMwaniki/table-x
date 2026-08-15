@@ -241,6 +241,33 @@ export interface SchemaNode {
 /** File formats a table can be written out as. */
 export type ExportFormat = "csv" | "json" | "sql";
 
+/** One session the server reports as connected. */
+export interface ServerSession {
+  id: string;
+  user: string | null;
+  client: string | null;
+  database: string | null;
+  /** The engine's own word, not one normalized across engines. */
+  state: string | null;
+  seconds: number | null;
+  query: string | null;
+  /** Whether this is the app's own session. */
+  is_self: boolean;
+  /** The session holding the lock this one waits on, where the engine says. */
+  blocked_by: string | null;
+}
+
+/** One named server measurement. Engines report different ones. */
+export interface ServerStat {
+  label: string;
+  value: string;
+}
+
+export interface ServerActivity {
+  sessions: ServerSession[];
+  stats: ServerStat[];
+}
+
 /** The first rows of a delimited file, for mapping its columns. */
 export interface CsvPreview {
   delimiter: string;

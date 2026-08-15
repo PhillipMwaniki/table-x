@@ -60,6 +60,8 @@ pub fn run() {
             ipc::execute,
             ipc::browse,
             ipc::table_detail,
+            ipc::server_activity,
+            ipc::kill_session,
             ipc::object_definition,
             ipc::export_table,
             ipc::export_database,

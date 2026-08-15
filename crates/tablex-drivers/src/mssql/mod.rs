@@ -12,10 +12,12 @@
 //!   which is unacceptable, so the count comes from `SELECT @@ROWCOUNT` on the
 //!   same session instead.
 
+mod activity;
 mod types;
 
 use async_trait::async_trait;
 use tablex_core::{
+    activity::ServerActivity,
     config::{ConnectionConfig, TlsMode},
     driver::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
@@ -140,6 +142,7 @@ impl Driver for MssqlDriver {
                 cancel: false,
                 // QueryItems arrive as the server sends them.
                 streaming: true,
+                activity: true,
                 placeholder_style: PlaceholderStyle::AtP,
                 identifier_quote: QUOTE,
             },
@@ -253,6 +256,14 @@ impl Connection for MssqlConnection {
 
     async fn current_database(&mut self) -> Result<Option<String>> {
         Ok(Some(self.database.clone()))
+    }
+
+    async fn activity(&mut self) -> Result<ServerActivity> {
+        activity::activity(&mut self.client).await
+    }
+
+    async fn kill_session(&mut self, id: &str) -> Result<()> {
+        activity::kill(&mut self.client, id).await
     }
 
     /// Stream rows off the TDS stream.

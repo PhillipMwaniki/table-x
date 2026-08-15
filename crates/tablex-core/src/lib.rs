@@ -8,6 +8,7 @@
 //! specific database. It is the seam that lets drivers be tested headlessly and lets
 //! the same logic back a future CLI or server without a rewrite.
 
+pub mod activity;
 pub mod config;
 pub mod csv;
 pub mod driver;

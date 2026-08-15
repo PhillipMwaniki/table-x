@@ -76,7 +76,7 @@ function TabButton({
       )}
     >
       <span aria-hidden className="shrink-0 text-[10px] text-text-muted">
-        {tab.kind === "table" ? "▤" : "›"}
+        {tab.kind === "table" ? "▤" : tab.kind === "activity" ? "◴" : "›"}
       </span>
 
       <span className="flex min-w-0 flex-col leading-tight">

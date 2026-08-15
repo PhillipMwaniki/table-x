@@ -13,6 +13,7 @@ import type {
   ConnectionConfig,
   CsvPreview,
   DriverInfo,
+  ServerActivity,
   ErrorCategory,
   ErrorPayload,
   ExportFormat,
@@ -167,6 +168,14 @@ export const ipc = {
     database: string;
     path: string;
   }) => call<number>("export_database", { request: args }),
+
+  /** What the server is doing right now. Never cached — that is the point. */
+  serverActivity: (connection_id: string) =>
+    call<ServerActivity>("server_activity", { connection_id }),
+
+  /** End a session by the id the server gave it. */
+  killSession: (connection_id: string, session_id: string) =>
+    call<void>("kill_session", { connection_id, session_id }),
 
   /** Read the first rows of a delimited file, sniffing the delimiter if unsure. */
   previewCsv: (path: string, delimiter?: string) =>

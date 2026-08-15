@@ -17,6 +17,7 @@ import { TabBar } from "./TabBar";
 import { ExportProgress } from "./ExportProgress";
 import { SplitHandle } from "./SplitHandle";
 import { CsvImportDialog } from "./CsvImportDialog";
+import { ActivityPanel } from "./ActivityPanel";
 import { Button, Spinner, cx } from "../ui/primitives";
 import { ContextMenu } from "../ui/ContextMenu";
 import type { MenuItem } from "../ui/ContextMenu";
@@ -73,6 +74,7 @@ export function Workspace({
     loadSession,
     loadCompletionFor,
     openScript: openScriptTab,
+    openActivity,
     setTabError,
     setTabNotice,
     useDatabase,
@@ -498,6 +500,12 @@ export function Workspace({
         },
       },
       {
+        id: "ws.activity",
+        title: "Show server activity",
+        group: "Data",
+        run: () => openActivity(connection.id),
+      },
+      {
         id: "ws.import",
         title: "Import SQL file",
         group: "Data",
@@ -561,6 +569,14 @@ export function Workspace({
         {tab ? (
           <>
             <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border bg-surface-1 px-2">
+              {/* Every control here acts on a statement, and an activity tab has
+                  none — it carries its own refresh instead. */}
+              {tab.kind === "activity" ? (
+                <span className="text-[11px] text-text-muted">
+                  Live view of the server. Nothing here is cached.
+                </span>
+              ) : (
+                <>
               <Button
                 variant="primary"
                 onClick={() => void run(connection.id, tab.id)}
@@ -629,11 +645,20 @@ export function Workspace({
               >
                 Redo
               </Button>
+                </>
+              )}
             </div>
 
             {/* A table tab gives its whole height to the rows: there is no
                 statement to edit, and the SQL that produced them is one line
                 the tab's own context already describes. */}
+            {tab.kind === "activity" ? (
+              <ActivityPanel
+                connectionId={connection.id}
+                readOnly={connection.read_only}
+                onOpenQuery={(sql) => openScriptTab(connection.id, { title: "Statement", sql })}
+              />
+            ) : (
             <div ref={splitRef} className="flex min-h-0 flex-1 flex-col">
               {tab.kind === "query" && (
                 <>
@@ -737,6 +762,7 @@ export function Workspace({
                 )}
               </div>
             </div>
+            )}
           </>
         ) : (
           <div className="flex flex-1 items-center justify-center">
@@ -769,6 +795,7 @@ export function Workspace({
               onExport: (format, extension) => void exportTable(menu.node, format, extension),
               onExportDatabase: () => void exportDatabase(menu.node.name),
               onImport: () => void importSql(),
+              onActivity: () => openActivity(connection.id),
               onImportCsv: () => void importCsv(menu.node),
               onRefresh: menu.refresh,
             },
@@ -826,6 +853,7 @@ export function menuFor(
     onExportDatabase: () => void;
     onImport: () => void;
     onImportCsv: () => void;
+    onActivity: () => void;
     onRefresh: (() => void) | null;
   },
 ): MenuItem[] {
@@ -837,6 +865,7 @@ export function menuFor(
   if (node.kind === "database") {
     items.push({ label: "Export database as SQL…", onSelect: actions.onExportDatabase });
     items.push({ label: "Import SQL file…", onSelect: actions.onImport });
+    items.push({ label: "Server activity…", separated: true, onSelect: actions.onActivity });
     if (actions.onRefresh) {
       items.push({ label: "Refresh", separated: true, onSelect: actions.onRefresh });
     }

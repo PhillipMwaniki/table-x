@@ -18,11 +18,13 @@
 //!   some later point. Presenting that as an inline cell edit would imply a
 //!   guarantee — this row, now, exactly once — that the engine does not make.
 
+mod activity;
 mod types;
 
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use tablex_core::{
+    activity::ServerActivity,
     config::{ConnectionConfig, TlsMode},
     driver::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
@@ -122,6 +124,7 @@ impl Driver for ClickhouseDriver {
                 // JSONCompactEachRow is line-delimited, so rows decode as the
                 // response body arrives.
                 streaming: true,
+                activity: true,
                 placeholder_style: PlaceholderStyle::Question,
                 identifier_quote: QUOTE,
             },
@@ -239,6 +242,18 @@ impl Connection for ClickhouseConnection {
 
     async fn current_database(&mut self) -> Result<Option<String>> {
         Ok(Some(self.database.clone()))
+    }
+
+    async fn activity(&mut self) -> Result<ServerActivity> {
+        Ok(ServerActivity {
+            sessions: activity::sessions_from(self.rows_of(activity::SESSIONS_SQL).await?),
+            stats: activity::stats_from(self.rows_of(activity::STATS_SQL).await?),
+        })
+    }
+
+    async fn kill_session(&mut self, id: &str) -> Result<()> {
+        self.rows_of(&activity::kill_sql(id)?).await?;
+        Ok(())
     }
 
     /// Stream rows over the HTTP response body.

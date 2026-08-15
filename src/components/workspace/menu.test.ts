@@ -23,6 +23,7 @@ const actions = {
   onExportDatabase: noop,
   onImport: noop,
   onImportCsv: noop,
+  onActivity: noop,
   onRefresh: noop,
 };
 
@@ -39,7 +40,12 @@ describe("menuFor", () => {
       { driver: "mysql", tableScripts: true },
       actions,
     );
-    expect(items).toEqual(["Export database as SQL…", "Import SQL file…", "Refresh"]);
+    expect(items).toEqual([
+      "Export database as SQL…",
+      "Import SQL file…",
+      "Server activity…",
+      "Refresh",
+    ]);
   });
 
   it("offers a table everything a table can do", () => {

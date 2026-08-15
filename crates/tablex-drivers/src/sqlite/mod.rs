@@ -68,6 +68,7 @@ impl Driver for SqliteDriver {
                 // The cursor is stepped a row at a time; nothing here holds a
                 // whole result set.
                 streaming: true,
+                activity: false,
                 column_provenance: true,
                 stored_procedures: false,
                 cancel: false,
