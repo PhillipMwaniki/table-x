@@ -9,10 +9,12 @@ import { useEffect, useState } from "react";
 import { ConnectionList } from "./components/ConnectionList";
 import { ConnectionDialog } from "./components/ConnectionDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
+import { CommandPalette } from "./components/ui/CommandPalette";
 import { Workspace } from "./components/workspace/Workspace";
 import { Banner, Button, Spinner } from "./components/ui/primitives";
 import { useConnections } from "./store/connections";
 import { useSettings } from "./store/settings";
+import { useCommands } from "./store/commands";
 import type { ConnectionConfig } from "./lib/types";
 
 export default function App() {
@@ -26,6 +28,7 @@ export default function App() {
     error,
     init,
     save,
+    select,
     connect,
     clearError,
   } = useConnections();
@@ -35,6 +38,8 @@ export default function App() {
   const [editing, setEditing] = useState<ConnectionConfig | null>(null);
 
   const initSettings = useSettings((s) => s.init);
+  const setPaletteOpen = useCommands((s) => s.setOpen);
+  const registerCommands = useCommands((s) => s.register);
 
   useEffect(() => {
     void init();
@@ -44,17 +49,54 @@ export default function App() {
   }, [init, initSettings]);
 
   // Ctrl+, is the settings shortcut everywhere else; there is no reason for
-  // this app to be the exception.
+  // this app to be the exception. Ctrl+K opens the palette, which is where
+  // every other shortcut can be discovered.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === ",") {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (e.key === ",") {
         e.preventDefault();
         setSettingsOpen((was) => !was);
+      } else if (e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen(!useCommands.getState().open);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [setPaletteOpen]);
+
+  // Commands that exist whatever is open, plus one per saved connection so the
+  // palette can reach a connection without touching the sidebar.
+  useEffect(() => {
+    return registerCommands("app", [
+      {
+        id: "app.new-connection",
+        title: "New connection",
+        group: "Connection",
+        run: () => {
+          setEditing(null);
+          setDialogOpen(true);
+        },
+      },
+      {
+        id: "app.settings",
+        title: "Appearance settings",
+        group: "View",
+        shortcut: "Ctrl+,",
+        run: () => setSettingsOpen(true),
+      },
+      ...connections.map((c) => ({
+        id: `app.open.${c.id}`,
+        title: open.has(c.id) ? `Go to ${c.name}` : `Connect to ${c.name}`,
+        group: "Connection",
+        run: () => {
+          select(c.id);
+          if (!open.has(c.id)) void connect(c.id);
+        },
+      })),
+    ]);
+  }, [registerCommands, connections, open, select, connect]);
 
   const selected = connections.find((c) => c.id === selectedId) ?? null;
 
@@ -165,6 +207,8 @@ export default function App() {
       />
 
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+
+      <CommandPalette />
     </div>
   );
 }

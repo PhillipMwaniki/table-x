@@ -24,6 +24,7 @@ import { drop, selectFrom, truncate } from "@/lib/statements";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useHistory } from "@/store/history";
 import { useSnippets } from "@/store/snippets";
+import { useCommands } from "@/store/commands";
 import { useSettings } from "@/store/settings";
 import { useExports } from "@/store/exports";
 import { useWorkspace } from "@/store/workspace";
@@ -63,6 +64,7 @@ export function Workspace({
     activeTab,
     openQuery,
     openTable,
+    closeTab,
     setSql,
     setActiveStatement,
     run,
@@ -81,6 +83,7 @@ export function Workspace({
   const setHistoryOpen = useHistory((s) => s.setOpen);
   const setPanelTab = useHistory((s) => s.setTab);
   const saveSnippet = useSnippets((s) => s.save);
+  const registerCommands = useCommands((s) => s.register);
 
   // The stored split, and the live one while the divider is being dragged.
   // Dragging keeps its position here rather than in the store so a drag does
@@ -363,6 +366,90 @@ export function Workspace({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
+
+
+  // Registered while this workspace is mounted, so the palette offers running
+  // a query only when there is something to run it against.
+  useEffect(() => {
+    if (!tab) return;
+    return registerCommands("workspace", [
+      {
+        id: "ws.run",
+        title: tab.kind === "table" ? "Refresh rows" : "Run query",
+        group: "Query",
+        shortcut: "Ctrl+Enter",
+        run: () => void run(connection.id, tab.id),
+      },
+      {
+        id: "ws.format",
+        title: "Format SQL",
+        group: "Query",
+        shortcut: "Ctrl+Shift+F",
+        run: () => void formatCurrentSql(),
+      },
+      {
+        id: "ws.save-query",
+        title: "Save query",
+        group: "Query",
+        run: saveCurrentQuery,
+      },
+      {
+        id: "ws.new-tab",
+        title: "New query tab",
+        group: "Tabs",
+        shortcut: "Ctrl+T",
+        run: () => openQuery(connection.id),
+      },
+      {
+        id: "ws.close-tab",
+        title: "Close tab",
+        group: "Tabs",
+        run: () => closeTab(connection.id, tab.id),
+      },
+      {
+        id: "ws.history",
+        title: "Query history",
+        group: "View",
+        shortcut: "Ctrl+H",
+        run: () => {
+          setPanelTab("history");
+          setHistoryOpen(true);
+        },
+      },
+      {
+        id: "ws.snippets",
+        title: "Saved queries",
+        group: "View",
+        run: () => {
+          setPanelTab("snippets");
+          setHistoryOpen(true);
+        },
+      },
+      {
+        id: "ws.import",
+        title: "Import SQL file",
+        group: "Data",
+        run: () => void importSql(),
+      },
+      {
+        id: "ws.undo",
+        title: "Undo cell edit",
+        group: "Data",
+        shortcut: "Ctrl+Z",
+        run: () => void undo(connection.id, tab.id),
+      },
+    ]);
+  }, [
+    registerCommands,
+    connection.id,
+    tab,
+    run,
+    openQuery,
+    closeTab,
+    setHistoryOpen,
+    setPanelTab,
+    undo,
+  ]);
 
   const readOnlyReason = useMemo(() => {
     if (connection.read_only) return "This connection is marked read-only.";
