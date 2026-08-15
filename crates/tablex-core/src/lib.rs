@@ -9,6 +9,7 @@
 //! the same logic back a future CLI or server without a rewrite.
 
 pub mod config;
+pub mod csv;
 pub mod driver;
 pub mod error;
 pub mod export;
