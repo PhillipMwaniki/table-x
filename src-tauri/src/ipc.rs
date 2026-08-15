@@ -741,6 +741,15 @@ pub async fn cancel_export(state: tauri::State<'_, AppState>, id: String) -> Ipc
     Ok(())
 }
 
+/// Pretty-print SQL.
+///
+/// Lives in the backend because the formatter lives in `tablex-core`, where a
+/// future CLI can reach it too — not because formatting needs a database.
+#[tauri::command(rename_all = "snake_case")]
+pub fn format_sql(sql: String) -> String {
+    tablex_core::format::format_sql(&sql)
+}
+
 // ---------------------------------------------------------------------------
 // Saved queries
 // ---------------------------------------------------------------------------

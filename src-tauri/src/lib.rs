@@ -68,6 +68,7 @@ pub fn run() {
             ipc::apply_edit,
             ipc::completion_scope,
             ipc::ssh_host_fingerprint,
+            ipc::format_sql,
             ipc::list_snippets,
             ipc::save_snippet,
             ipc::delete_snippet,

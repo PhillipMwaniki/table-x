@@ -200,6 +200,9 @@ export const ipc = {
    */
   sshHostFingerprint: (ssh: SshConfig) => call<string>("ssh_host_fingerprint", { ssh }),
 
+  /** Pretty-print SQL. Whitespace and keyword case only — never the tokens. */
+  formatSql: (sql: string) => call<string>("format_sql", { sql }),
+
   /** Saved queries, most recently edited first. */
   listSnippets: () => call<Snippet[]>("list_snippets"),
 

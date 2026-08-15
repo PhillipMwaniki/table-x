@@ -331,7 +331,38 @@ export function Workspace({
     });
   };
 
+
+  /**
+   * Reformat the tab's SQL in place.
+   *
+   * The result replaces the editor's contents, so it goes through the same
+   * setSql the editor writes to — the undo history in CodeMirror then treats it
+   * as one edit, which is what makes it safe to try.
+   */
+  const formatCurrentSql = async () => {
+    if (!tab?.sql.trim()) return;
+    try {
+      const formatted = await ipc.formatSql(tab.sql);
+      if (formatted.trim()) setSql(connection.id, tab.id, formatted);
+    } catch (e) {
+      setTabError(connection.id, tab.id, (e as Error).message);
+    }
+  };
+
   const active = tab?.outcome?.statements[tab.activeStatement];
+
+
+  // Ctrl+Shift+F formats, matching every editor people arrive from. Bound on
+  // the window so it works with the caret in the editor, where it is used.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || !e.shiftKey || e.key.toLowerCase() !== "f") return;
+      e.preventDefault();
+      void formatCurrentSql();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
 
   const readOnlyReason = useMemo(() => {
     if (connection.read_only) return "This connection is marked read-only.";
@@ -392,6 +423,17 @@ export function Workspace({
 
               <div className="flex-1" />
 
+              {tab.kind === "query" && (
+                <Button
+                  variant="ghost"
+                  className="h-6"
+                  disabled={!tab.sql.trim()}
+                  onClick={() => void formatCurrentSql()}
+                  title="Format SQL (Ctrl+Shift+F)"
+                >
+                  Format
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 className="h-6"
