@@ -127,6 +127,13 @@ Milestone 1 ("core + power features") is the current target.
 | 🚧 | **Multi-tab workspace** | Query and table tabs, each carrying its database; resizable editor/results split. Session restore not started. |
 | ✅ | **CSV/JSON/SQL export, SQL import** | Streaming on all five drivers. Table, database, and SQL-file restore, with progress and cancellation. |
 | ✅ | **ClickHouse driver** | HTTP + JSONCompact, exact wide integers and `Decimal`. Read-only — no row-level `UPDATE`. 23 tests. |
+| ✅ | **Typed cell editors** | JSON validated and pretty-printed in a panel, booleans as a three-state list, binary as a hex viewer. |
+| ✅ | **Command palette** | Fuzzy search over every action, Ctrl+K. |
+| ✅ | **SQL formatting** | Offline tokenizer/emitter; the token stream is preserved, which is what makes it safe to run afterwards. |
+| ✅ | **Result filtering** | Per-column operators over the fetched page, comparing decimals as text so exactness survives. |
+| ✅ | **Saved snippets** | Named statements, persisted atomically, searchable from the palette. |
+| ✅ | **CSV import** | Chunked RFC 4180 reader, column mapping with a preview, per-type literals. Appends only. |
+| ✅ | **Server activity** | Live sessions, blockers, and server counters on four engines; a session can be ended. |
 | ⬜ | **CI/CD + packaging** | MSI/NSIS, .dmg, .deb/.rpm/AppImage, mobile bundles. |
 
 Deliberately **out of scope** for milestone 1, and tracked for later: the third-party
