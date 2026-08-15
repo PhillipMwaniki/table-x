@@ -17,8 +17,8 @@ use tablex_core::{
 
 use crate::{
     history::{self, HistoryEntry, HistoryQuery},
-    secrets,
     notebooks::Notebook,
+    secrets,
     snippets::Snippet,
     state::AppState,
 };
@@ -959,8 +959,10 @@ pub async fn export_history(
         serde_json::to_string_pretty(&entries)
             .map_err(|e| tablex_core::Error::Other(e.to_string()))?
     } else {
-        let mut out = String::from("ran_at,connection,driver,succeeded,elapsed_ms,rows,sql,error
-");
+        let mut out = String::from(
+            "ran_at,connection,driver,succeeded,elapsed_ms,rows,sql,error
+",
+        );
         for entry in &entries {
             out.push_str(&format!(
                 "{},{},{},{},{},{},{},{}

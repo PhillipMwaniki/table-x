@@ -27,13 +27,13 @@ use futures_util::StreamExt;
 use tablex_core::{
     activity::ServerActivity,
     config::{ConnectionConfig, TlsMode},
-    plan::Plan,
-    privileges::Privileges,
     driver::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
         PlaceholderStyle, RowEdit, RowSink, STREAM_BATCH,
     },
     error::{Error, Result},
+    plan::Plan,
+    privileges::Privileges,
     result::{Column, QueryOutcome, ResultSet, StatementResult},
     schema::{decode_path, ColumnDef, IndexDef, NodeKind, SchemaNode, TableDetail},
     sql::{quote_ident, split_statements},

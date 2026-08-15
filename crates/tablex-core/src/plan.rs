@@ -44,7 +44,6 @@ impl PlanNode {
             ..Default::default()
         }
     }
-
 }
 
 // Note: the derived numbers a reader actually looks at — a step's cost with its
@@ -108,7 +107,13 @@ fn pg_node(json: &Json) -> PlanNode {
     if let Some(index) = text("Index Name") {
         detail.push(format!("using {index}"));
     }
-    for key in ["Index Cond", "Hash Cond", "Merge Cond", "Join Filter", "Filter"] {
+    for key in [
+        "Index Cond",
+        "Hash Cond",
+        "Merge Cond",
+        "Join Filter",
+        "Filter",
+    ] {
         if let Some(cond) = text(key) {
             detail.push(cond);
             break;
@@ -283,7 +288,8 @@ pub fn from_parent_rows(rows: Vec<PlanRow>, root_label: &str) -> PlanNode {
     // by index rather than by recursive lookup is what makes a malformed set
     // finite: every row is placed at most once.
     let ids: std::collections::HashSet<i64> = rows.iter().map(|r| r.id).collect();
-    let mut by_parent: std::collections::HashMap<i64, Vec<usize>> = std::collections::HashMap::new();
+    let mut by_parent: std::collections::HashMap<i64, Vec<usize>> =
+        std::collections::HashMap::new();
     let mut roots = Vec::new();
     for (index, row) in rows.iter().enumerate() {
         if row.parent != row.id && ids.contains(&row.parent) {
@@ -364,7 +370,10 @@ pub fn from_indented(text: &str, root_label: &str) -> PlanNode {
         // ClickHouse writes `Node (detail)`; splitting there is what separates
         // the operation from what it operates on.
         let (label, detail) = match body.split_once(" (") {
-            Some((head, tail)) => (head.to_string(), Some(tail.trim_end_matches(')').to_string())),
+            Some((head, tail)) => (
+                head.to_string(),
+                Some(tail.trim_end_matches(')').to_string()),
+            ),
             None => (body.to_string(), None),
         };
 
@@ -427,7 +436,6 @@ mod tests {
         assert_eq!(root.rows, Some(1000.0));
     }
 
-
     #[test]
     fn an_inner_join_is_not_labelled_with_its_type() {
         // Every join is inner unless it says otherwise; saying so is noise.
@@ -441,7 +449,6 @@ mod tests {
         assert!(from_postgres_json("[]").is_err());
         assert!(from_postgres_json("not json").is_err());
     }
-
 
     #[test]
     fn a_mysql_plan_is_walked_by_its_shape_not_its_schema() {
@@ -468,17 +475,40 @@ mod tests {
             loop_node.children[0].detail.as_deref(),
             Some("on orders · (orders.total > 10)")
         );
-        assert_eq!(loop_node.children[1].detail.as_deref(),
-                   Some("on users · using PRIMARY"));
+        assert_eq!(
+            loop_node.children[1].detail.as_deref(),
+            Some("on users · using PRIMARY")
+        );
         assert_eq!(loop_node.children[0].rows, Some(900.0));
     }
 
     #[test]
     fn parent_rows_assemble_into_a_tree() {
         let rows = vec![
-            PlanRow { id: 1, parent: 0, label: "SCAN a".into(), detail: None, rows: None, cost: None },
-            PlanRow { id: 2, parent: 1, label: "SEARCH b".into(), detail: None, rows: None, cost: None },
-            PlanRow { id: 3, parent: 1, label: "USE TEMP B-TREE".into(), detail: None, rows: None, cost: None },
+            PlanRow {
+                id: 1,
+                parent: 0,
+                label: "SCAN a".into(),
+                detail: None,
+                rows: None,
+                cost: None,
+            },
+            PlanRow {
+                id: 2,
+                parent: 1,
+                label: "SEARCH b".into(),
+                detail: None,
+                rows: None,
+                cost: None,
+            },
+            PlanRow {
+                id: 3,
+                parent: 1,
+                label: "USE TEMP B-TREE".into(),
+                detail: None,
+                rows: None,
+                cost: None,
+            },
         ];
         let root = from_parent_rows(rows, "Query");
         // One root needs no wrapper above it.
@@ -490,8 +520,22 @@ mod tests {
     fn a_cycle_in_the_rows_terminates() {
         // Malformed input should cost a slightly odd tree, not a hung window.
         let rows = vec![
-            PlanRow { id: 1, parent: 2, label: "A".into(), detail: None, rows: None, cost: None },
-            PlanRow { id: 2, parent: 1, label: "B".into(), detail: None, rows: None, cost: None },
+            PlanRow {
+                id: 1,
+                parent: 2,
+                label: "A".into(),
+                detail: None,
+                rows: None,
+                cost: None,
+            },
+            PlanRow {
+                id: 2,
+                parent: 1,
+                label: "B".into(),
+                detail: None,
+                rows: None,
+                cost: None,
+            },
         ];
         let root = from_parent_rows(rows, "Query");
         fn count(node: &PlanNode) -> usize {
@@ -503,8 +547,22 @@ mod tests {
     #[test]
     fn several_roots_get_a_wrapper() {
         let rows = vec![
-            PlanRow { id: 1, parent: 0, label: "A".into(), detail: None, rows: None, cost: None },
-            PlanRow { id: 2, parent: 0, label: "B".into(), detail: None, rows: None, cost: None },
+            PlanRow {
+                id: 1,
+                parent: 0,
+                label: "A".into(),
+                detail: None,
+                rows: None,
+                cost: None,
+            },
+            PlanRow {
+                id: 2,
+                parent: 0,
+                label: "B".into(),
+                detail: None,
+                rows: None,
+                cost: None,
+            },
         ];
         let root = from_parent_rows(rows, "Query");
         assert_eq!(root.label, "Query");

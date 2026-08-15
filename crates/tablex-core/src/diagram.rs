@@ -105,9 +105,8 @@ pub fn layout(graph: &SchemaGraph) -> Diagram {
     // Sorted first, so the whole layout is a function of the schema and not of
     // the order the catalog happened to return rows in.
     let mut tables: Vec<&GraphTable> = graph.tables.iter().collect();
-    tables.sort_by(|a, b| {
-        key(a.schema.as_deref(), &a.name).cmp(&key(b.schema.as_deref(), &b.name))
-    });
+    tables
+        .sort_by(|a, b| key(a.schema.as_deref(), &a.name).cmp(&key(b.schema.as_deref(), &b.name)));
 
     let index: HashMap<String, usize> = tables
         .iter()
@@ -125,10 +124,7 @@ pub fn layout(graph: &SchemaGraph) -> Diagram {
     for (from, table) in tables.iter().enumerate() {
         for fk in &table.foreign_keys {
             // A foreign key with no schema of its own lives in its table's.
-            let target_schema = fk
-                .referenced_schema
-                .as_deref()
-                .or(table.schema.as_deref());
+            let target_schema = fk.referenced_schema.as_deref().or(table.schema.as_deref());
             let Some(&to) = index.get(&key(target_schema, &fk.referenced_table)) else {
                 dangling.push(format!(
                     "{}.{} → {}",
@@ -167,7 +163,10 @@ pub fn layout(graph: &SchemaGraph) -> Diagram {
                 .map(|c| (c, true))
                 .chain(incoming[i].iter().map(|c| (c, false)))
             {
-                match columns.iter_mut().find(|c| c.name.eq_ignore_ascii_case(name)) {
+                match columns
+                    .iter_mut()
+                    .find(|c| c.name.eq_ignore_ascii_case(name))
+                {
                     Some(existing) => {
                         existing.outgoing |= is_outgoing;
                         existing.incoming |= !is_outgoing;
@@ -246,10 +245,7 @@ fn assign_levels(tables: &[&GraphTable], index: &HashMap<String, usize>) -> Vec<
         let mut changed = false;
         for (from, table) in tables.iter().enumerate() {
             for fk in &table.foreign_keys {
-                let target_schema = fk
-                    .referenced_schema
-                    .as_deref()
-                    .or(table.schema.as_deref());
+                let target_schema = fk.referenced_schema.as_deref().or(table.schema.as_deref());
                 let Some(&to) = index.get(&key(target_schema, &fk.referenced_table)) else {
                     continue;
                 };
@@ -524,14 +520,7 @@ mod tests {
             ],
         };
         let diagram = layout(&graph);
-        let y = |name: &str| {
-            diagram
-                .boxes
-                .iter()
-                .find(|b| b.table == name)
-                .unwrap()
-                .y
-        };
+        let y = |name: &str| diagram.boxes.iter().find(|b| b.table == name).unwrap().y;
         assert!(y("a") > y("b"), "a should be under b");
         assert!(y("b") > y("c"), "b should be under c");
     }

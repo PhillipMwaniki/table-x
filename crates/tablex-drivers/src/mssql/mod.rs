@@ -21,13 +21,13 @@ use tablex_core::{
     activity::ServerActivity,
     config::{ConnectionConfig, TlsMode},
     diagram::{GraphTable, SchemaGraph},
-    plan::{Plan, PlanRow},
-    privileges::Privileges,
     driver::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
         PlaceholderStyle, RowEdit, RowSink, STREAM_BATCH,
     },
     error::{Error, Result},
+    plan::{Plan, PlanRow},
+    privileges::Privileges,
     result::{Column, QueryOutcome, ResultSet, StatementResult},
     schema::{decode_path, ColumnDef, ForeignKeyDef, IndexDef, NodeKind, SchemaNode, TableDetail},
     sql::{quote_ident, split_statements},
@@ -786,10 +786,13 @@ impl MssqlConnection {
                     .or_else(|| text("StmtText").map(|t| t.trim().to_string()))
                     .unwrap_or_else(|| "?".into());
                 let detail = match (text("LogicalOp"), text("Argument")) {
-                    (Some(logical), Some(argument)) if !logical.is_empty() && !argument.is_empty() => {
+                    (Some(logical), Some(argument))
+                        if !logical.is_empty() && !argument.is_empty() =>
+                    {
                         Some(format!("{logical} · {argument}"))
                     }
-                    (logical, argument) => logical.filter(|v| !v.is_empty())
+                    (logical, argument) => logical
+                        .filter(|v| !v.is_empty())
                         .or(argument.filter(|v| !v.is_empty())),
                 };
                 PlanRow {

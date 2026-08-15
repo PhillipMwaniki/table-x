@@ -212,7 +212,12 @@ fn compare_table(from: &TableDetail, to: &TableDetail, out: &mut Vec<Change>) {
     // change or not at all, and emitting both would produce a script that drops
     // a constraint by way of its index.
     let indexes = |detail: &TableDetail| -> Vec<IndexDef> {
-        detail.indexes.iter().filter(|i| !i.primary).cloned().collect()
+        detail
+            .indexes
+            .iter()
+            .filter(|i| !i.primary)
+            .cloned()
+            .collect()
     };
     for wanted in indexes(to) {
         match indexes(from)
@@ -255,11 +260,7 @@ fn compare_table(from: &TableDetail, to: &TableDetail, out: &mut Vec<Change>) {
 
     // --- foreign keys -----------------------------------------------------
     for wanted in &to.foreign_keys {
-        if !from
-            .foreign_keys
-            .iter()
-            .any(|k| same_key(k, wanted))
-        {
+        if !from.foreign_keys.iter().any(|k| same_key(k, wanted)) {
             out.push(Change::ForeignKeyAdded {
                 table: table.clone(),
                 key: wanted.clone(),
@@ -604,7 +605,11 @@ fn statement_for(change: &Change, dialect: Dialect) -> Option<Statement> {
             "ALTER TABLE {} ADD CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({});",
             q(table),
             q(&key.name),
-            key.columns.iter().map(|c| q(c)).collect::<Vec<_>>().join(", "),
+            key.columns
+                .iter()
+                .map(|c| q(c))
+                .collect::<Vec<_>>()
+                .join(", "),
             q(&key.referenced_table),
             key.referenced_columns
                 .iter()
@@ -614,7 +619,9 @@ fn statement_for(change: &Change, dialect: Dialect) -> Option<Statement> {
         )),
 
         Change::ForeignKeyRemoved { table, key } => plain(match dialect.alter_column {
-            AlterColumnStyle::MySql => format!("ALTER TABLE {} DROP FOREIGN KEY {};", q(table), q(key)),
+            AlterColumnStyle::MySql => {
+                format!("ALTER TABLE {} DROP FOREIGN KEY {};", q(table), q(key))
+            }
             _ => format!("ALTER TABLE {} DROP CONSTRAINT {};", q(table), q(key)),
         }),
 

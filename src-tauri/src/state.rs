@@ -2,8 +2,7 @@
 
 use crate::{
     history::QueryHistory, notebooks::NotebookStore, sessions::SessionRegistry,
-    snippets::SnippetStore,
-    store::ConnectionStore,
+    snippets::SnippetStore, store::ConnectionStore,
 };
 use std::collections::HashMap;
 use std::path::Path;

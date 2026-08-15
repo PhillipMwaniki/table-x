@@ -191,8 +191,7 @@ async fn main() -> std::process::ExitCode {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "warn".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()),
         )
         .init();
 
@@ -317,8 +316,9 @@ async fn run(cli: Cli) -> Result<std::process::ExitCode> {
             let applied = if file.to_lowercase().ends_with(".sql") {
                 import_sql(&mut *conn, &file).await?
             } else {
-                let table = table
-                    .ok_or_else(|| anyhow!("--table is required when importing a delimited file"))?;
+                let table = table.ok_or_else(|| {
+                    anyhow!("--table is required when importing a delimited file")
+                })?;
                 import_csv(&mut *conn, &file, &table, delimiter, !no_header, quote).await?
             };
 
@@ -510,8 +510,15 @@ pub(crate) fn json_of(value: &tablex_core::value::Value) -> serde_json::Value {
 }
 
 /// Aligned columns, sized to the widest cell.
-fn write_table(out: &mut Box<dyn Write + Send>, rows: &tablex_core::result::ResultSet) -> Result<()> {
-    let mut widths: Vec<usize> = rows.columns.iter().map(|c| c.name.chars().count()).collect();
+fn write_table(
+    out: &mut Box<dyn Write + Send>,
+    rows: &tablex_core::result::ResultSet,
+) -> Result<()> {
+    let mut widths: Vec<usize> = rows
+        .columns
+        .iter()
+        .map(|c| c.name.chars().count())
+        .collect();
     let cells: Vec<Vec<String>> = rows
         .rows
         .iter()
@@ -623,7 +630,9 @@ async fn import_csv(
         detail
             .as_ref()
             .map(|d| d.columns.iter().map(|c| c.name.clone()).collect())
-            .ok_or_else(|| anyhow!("--no-header needs the table's columns, which could not be read"))?
+            .ok_or_else(|| {
+                anyhow!("--no-header needs the table's columns, which could not be read")
+            })?
     };
 
     let types: std::collections::HashMap<String, String> = detail
@@ -696,7 +705,10 @@ async fn snapshot(
     for table in &graph.tables {
         // A table that vanished between the listing and the read is skipped
         // rather than failing the comparison: one missing table beats no answer.
-        if let Ok(detail) = conn.table_detail(table.schema.as_deref(), &table.name).await {
+        if let Ok(detail) = conn
+            .table_detail(table.schema.as_deref(), &table.name)
+            .await
+        {
             tables.push(detail);
         }
     }

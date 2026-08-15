@@ -33,7 +33,10 @@ impl Scratch {
     /// Built with forward slashes because a Windows path in a URL is written
     /// that way, and this is the shape the parser is expected to handle.
     fn url(&self, name: &str) -> String {
-        format!("sqlite://{}", self.path(name).display().to_string().replace('\\', "/"))
+        format!(
+            "sqlite://{}",
+            self.path(name).display().to_string().replace('\\', "/")
+        )
     }
 
     fn write(&self, name: &str, contents: &str) -> PathBuf {
@@ -83,9 +86,24 @@ fn a_sql_file_loads_and_the_rows_come_back() {
     let db = scratch.url("app.db");
     scratch.write("schema.sql", SCHEMA);
 
-    ok(&["--quiet", "import", "--url", &db, "--file", &scratch.path("schema.sql").display().to_string()]);
+    ok(&[
+        "--quiet",
+        "import",
+        "--url",
+        &db,
+        "--file",
+        &scratch.path("schema.sql").display().to_string(),
+    ]);
 
-    let rows = ok(&["--quiet", "query", "--url", &db, "--format", "csv", "SELECT id, email FROM users ORDER BY id"]);
+    let rows = ok(&[
+        "--quiet",
+        "query",
+        "--url",
+        &db,
+        "--format",
+        "csv",
+        "SELECT id, email FROM users ORDER BY id",
+    ]);
     assert!(rows.contains("1,a@example.com"), "{rows}");
     assert!(rows.contains("2,b@example.com"), "{rows}");
 }
@@ -102,17 +120,56 @@ fn an_exact_decimal_survives_a_full_round_trip() {
     scratch.write("schema.sql", SCHEMA);
     let schema_path = scratch.path("schema.sql").display().to_string();
 
-    ok(&["--quiet", "import", "--url", &source, "--file", &schema_path]);
-    ok(&["--quiet", "export", "--url", &source, "--table", "users", "--format", "csv", "-o",
-         &scratch.path("users.csv").display().to_string()]);
+    ok(&[
+        "--quiet",
+        "import",
+        "--url",
+        &source,
+        "--file",
+        &schema_path,
+    ]);
+    ok(&[
+        "--quiet",
+        "export",
+        "--url",
+        &source,
+        "--table",
+        "users",
+        "--format",
+        "csv",
+        "-o",
+        &scratch.path("users.csv").display().to_string(),
+    ]);
 
-    ok(&["--quiet", "import", "--url", &target, "--file", &schema_path]);
+    ok(&[
+        "--quiet",
+        "import",
+        "--url",
+        &target,
+        "--file",
+        &schema_path,
+    ]);
     ok(&["--quiet", "query", "--url", &target, "DELETE FROM users"]);
-    ok(&["--quiet", "import", "--url", &target, "--table", "users", "--file",
-         &scratch.path("users.csv").display().to_string()]);
+    ok(&[
+        "--quiet",
+        "import",
+        "--url",
+        &target,
+        "--table",
+        "users",
+        "--file",
+        &scratch.path("users.csv").display().to_string(),
+    ]);
 
-    let out = ok(&["--quiet", "query", "--url", &target, "--format", "csv",
-                   "SELECT balance FROM users WHERE id = 1"]);
+    let out = ok(&[
+        "--quiet",
+        "query",
+        "--url",
+        &target,
+        "--format",
+        "csv",
+        "SELECT balance FROM users WHERE id = 1",
+    ]);
     assert!(
         out.contains("123456789012345678.1234567890"),
         "a digit was lost on the way: {out}"
@@ -126,10 +183,24 @@ fn ndjson_keeps_exact_numbers_as_strings() {
     let scratch = Scratch::new("ndjson");
     let db = scratch.url("app.db");
     scratch.write("schema.sql", SCHEMA);
-    ok(&["--quiet", "import", "--url", &db, "--file", &scratch.path("schema.sql").display().to_string()]);
+    ok(&[
+        "--quiet",
+        "import",
+        "--url",
+        &db,
+        "--file",
+        &scratch.path("schema.sql").display().to_string(),
+    ]);
 
-    let out = ok(&["--quiet", "query", "--url", &db, "--format", "ndjson",
-                   "SELECT balance FROM users WHERE id = 1"]);
+    let out = ok(&[
+        "--quiet",
+        "query",
+        "--url",
+        &db,
+        "--format",
+        "ndjson",
+        "SELECT balance FROM users WHERE id = 1",
+    ]);
     assert!(out.contains("\"123456789012345678.1234567890\""), "{out}");
 }
 
@@ -138,14 +209,36 @@ fn a_csv_with_a_quoted_comma_imports_as_one_field() {
     let scratch = Scratch::new("csv");
     let db = scratch.url("app.db");
     scratch.write("schema.sql", SCHEMA);
-    ok(&["--quiet", "import", "--url", &db, "--file", &scratch.path("schema.sql").display().to_string()]);
+    ok(&[
+        "--quiet",
+        "import",
+        "--url",
+        &db,
+        "--file",
+        &scratch.path("schema.sql").display().to_string(),
+    ]);
 
     scratch.write("more.csv", "id,email,balance\n7,\"Smith, Jo\",1.00\n");
-    ok(&["--quiet", "import", "--url", &db, "--table", "users", "--file",
-         &scratch.path("more.csv").display().to_string()]);
+    ok(&[
+        "--quiet",
+        "import",
+        "--url",
+        &db,
+        "--table",
+        "users",
+        "--file",
+        &scratch.path("more.csv").display().to_string(),
+    ]);
 
-    let out = ok(&["--quiet", "query", "--url", &db, "--format", "csv",
-                   "SELECT email FROM users WHERE id = 7"]);
+    let out = ok(&[
+        "--quiet",
+        "query",
+        "--url",
+        &db,
+        "--format",
+        "csv",
+        "SELECT email FROM users WHERE id = 7",
+    ]);
     // Round-tripped back out through the CSV writer, so it is quoted again.
     assert!(out.contains("Smith, Jo"), "{out}");
 }
@@ -156,10 +249,27 @@ fn diff_reports_the_statements_that_reconcile_two_schemas() {
     let before = scratch.url("before.db");
     let after = scratch.url("after.db");
 
-    scratch.write("a.sql", "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT);");
+    scratch.write(
+        "a.sql",
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT);",
+    );
     scratch.write("b.sql", "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT, created TEXT);\nCREATE TABLE audit (id INTEGER PRIMARY KEY);");
-    ok(&["--quiet", "import", "--url", &before, "--file", &scratch.path("a.sql").display().to_string()]);
-    ok(&["--quiet", "import", "--url", &after, "--file", &scratch.path("b.sql").display().to_string()]);
+    ok(&[
+        "--quiet",
+        "import",
+        "--url",
+        &before,
+        "--file",
+        &scratch.path("a.sql").display().to_string(),
+    ]);
+    ok(&[
+        "--quiet",
+        "import",
+        "--url",
+        &after,
+        "--file",
+        &scratch.path("b.sql").display().to_string(),
+    ]);
 
     let script = ok(&["--quiet", "diff", "--from", &before, "--to", &after]);
     assert!(script.contains("ADD COLUMN"), "{script}");
@@ -175,12 +285,32 @@ fn the_drift_check_exits_non_zero_only_when_the_schemas_differ() {
     let a = scratch.url("a.db");
     let b = scratch.url("b.db");
     scratch.write("a.sql", "CREATE TABLE t (id INTEGER PRIMARY KEY);");
-    scratch.write("b.sql", "CREATE TABLE t (id INTEGER PRIMARY KEY, extra TEXT);");
-    ok(&["--quiet", "import", "--url", &a, "--file", &scratch.path("a.sql").display().to_string()]);
-    ok(&["--quiet", "import", "--url", &b, "--file", &scratch.path("b.sql").display().to_string()]);
+    scratch.write(
+        "b.sql",
+        "CREATE TABLE t (id INTEGER PRIMARY KEY, extra TEXT);",
+    );
+    ok(&[
+        "--quiet",
+        "import",
+        "--url",
+        &a,
+        "--file",
+        &scratch.path("a.sql").display().to_string(),
+    ]);
+    ok(&[
+        "--quiet",
+        "import",
+        "--url",
+        &b,
+        "--file",
+        &scratch.path("b.sql").display().to_string(),
+    ]);
 
     let same = tablex(&["--quiet", "diff", "--from", &a, "--to", &a, "--exit-code"]);
-    assert!(same.status.success(), "identical schemas must pass the gate");
+    assert!(
+        same.status.success(),
+        "identical schemas must pass the gate"
+    );
 
     let differs = tablex(&["--quiet", "diff", "--from", &a, "--to", &b, "--exit-code"]);
     assert!(!differs.status.success(), "drift must fail the gate");
@@ -191,10 +321,27 @@ fn a_destructive_statement_is_labelled_in_the_script() {
     let scratch = Scratch::new("destructive");
     let a = scratch.url("a.db");
     let b = scratch.url("b.db");
-    scratch.write("a.sql", "CREATE TABLE keep (id INTEGER PRIMARY KEY);\nCREATE TABLE gone (id INTEGER PRIMARY KEY);");
+    scratch.write(
+        "a.sql",
+        "CREATE TABLE keep (id INTEGER PRIMARY KEY);\nCREATE TABLE gone (id INTEGER PRIMARY KEY);",
+    );
     scratch.write("b.sql", "CREATE TABLE keep (id INTEGER PRIMARY KEY);");
-    ok(&["--quiet", "import", "--url", &a, "--file", &scratch.path("a.sql").display().to_string()]);
-    ok(&["--quiet", "import", "--url", &b, "--file", &scratch.path("b.sql").display().to_string()]);
+    ok(&[
+        "--quiet",
+        "import",
+        "--url",
+        &a,
+        "--file",
+        &scratch.path("a.sql").display().to_string(),
+    ]);
+    ok(&[
+        "--quiet",
+        "import",
+        "--url",
+        &b,
+        "--file",
+        &scratch.path("b.sql").display().to_string(),
+    ]);
 
     let script = ok(&["--quiet", "diff", "--from", &a, "--to", &b]);
     assert!(script.contains("DROP TABLE"), "{script}");
@@ -215,12 +362,25 @@ fn a_failing_statement_exits_non_zero_and_says_why() {
     let scratch = Scratch::new("failure");
     let db = scratch.url("app.db");
     scratch.write("schema.sql", SCHEMA);
-    ok(&["--quiet", "import", "--url", &db, "--file", &scratch.path("schema.sql").display().to_string()]);
+    ok(&[
+        "--quiet",
+        "import",
+        "--url",
+        &db,
+        "--file",
+        &scratch.path("schema.sql").display().to_string(),
+    ]);
 
     let out = tablex(&["--quiet", "query", "--url", &db, "SELECT * FROM nope"]);
-    assert!(!out.status.success(), "a failed query must not report success");
+    assert!(
+        !out.status.success(),
+        "a failed query must not report success"
+    );
     let stderr = String::from_utf8_lossy(&out.stderr).to_lowercase();
-    assert!(stderr.contains("nope"), "the engine's own complaint should survive: {stderr}");
+    assert!(
+        stderr.contains("nope"),
+        "the engine's own complaint should survive: {stderr}"
+    );
 }
 
 #[test]
@@ -229,13 +389,30 @@ fn data_goes_to_stdout_and_everything_else_to_stderr() {
     let scratch = Scratch::new("streams");
     let db = scratch.url("app.db");
     scratch.write("schema.sql", SCHEMA);
-    ok(&["--quiet", "import", "--url", &db, "--file", &scratch.path("schema.sql").display().to_string()]);
+    ok(&[
+        "--quiet",
+        "import",
+        "--url",
+        &db,
+        "--file",
+        &scratch.path("schema.sql").display().to_string(),
+    ]);
 
     // Without --quiet, so the timing note is printed somewhere.
-    let out = tablex(&["query", "--url", &db, "--format", "csv", "SELECT id FROM users ORDER BY id"]);
+    let out = tablex(&[
+        "query",
+        "--url",
+        &db,
+        "--format",
+        "csv",
+        "SELECT id FROM users ORDER BY id",
+    ]);
     assert!(out.status.success());
     let stdout = stdout_of(&out);
     assert!(stdout.starts_with("id"), "{stdout}");
-    assert!(!stdout.contains("ms"), "a summary leaked into the data: {stdout}");
+    assert!(
+        !stdout.contains("ms"),
+        "a summary leaked into the data: {stdout}"
+    );
     assert!(String::from_utf8_lossy(&out.stderr).contains("ms"));
 }

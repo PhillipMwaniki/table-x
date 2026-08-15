@@ -410,9 +410,7 @@ async fn open_chain(hops: &[&SshConfig], secrets: &[Option<String>]) -> Result<C
                     .map_err(|e| {
                         Error::Tunnel(format!(
                             "hop {} would not open a connection to {}:{} — {e}",
-                            index,
-                            hop.host,
-                            hop.port
+                            index, hop.host, hop.port
                         ))
                     })?;
                 authenticate_stream(channel.into_stream(), hop, secret.as_deref(), policy)
@@ -645,7 +643,10 @@ mod tests {
         let err = open(&last, "127.0.0.1", echo, &[password(), password()])
             .await
             .expect_err("a bad key on any hop must refuse");
-        assert!(err.to_string().contains("host key verification failed"), "{err}");
+        assert!(
+            err.to_string().contains("host key verification failed"),
+            "{err}"
+        );
     }
 
     #[tokio::test]

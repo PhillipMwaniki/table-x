@@ -67,9 +67,7 @@ impl Handler for TestHandler {
         let Ok(remote) = TcpStream::connect(&target).await else {
             // Refusing rather than accepting and dropping: a client that is
             // told no can report why, and a test that hangs reports nothing.
-            reply
-                .reject(russh::ChannelOpenFailure::ConnectFailed)
-                .await;
+            reply.reject(russh::ChannelOpenFailure::ConnectFailed).await;
             return Ok(());
         };
         reply.accept().await;

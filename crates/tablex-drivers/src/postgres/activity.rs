@@ -53,7 +53,9 @@ async fn sessions(client: &Client) -> Result<Vec<ServerSession>> {
             database: r.get(3),
             state: r.get(4),
             seconds: r.get(5),
-            query: r.get::<_, Option<String>>(6).filter(|q| !q.trim().is_empty()),
+            query: r
+                .get::<_, Option<String>>(6)
+                .filter(|q| !q.trim().is_empty()),
             is_self: r.get(7),
             blocked_by: r.get(8),
         })
@@ -127,7 +129,9 @@ pub async fn kill(client: &Client, id: &str) -> Result<()> {
     // raising, so saying so is the difference between "done" and "nothing
     // happened, and you were not told".
     if !row.get::<_, bool>(0) {
-        return Err(Error::query(format!("no backend with pid {pid} is running")));
+        return Err(Error::query(format!(
+            "no backend with pid {pid} is running"
+        )));
     }
     Ok(())
 }

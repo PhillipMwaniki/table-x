@@ -224,7 +224,12 @@ async fn call_tool(
     name: &str,
     arguments: &Json,
 ) -> std::result::Result<String, String> {
-    let text = |key: &str| arguments.get(key).and_then(Json::as_str).map(str::to_string);
+    let text = |key: &str| {
+        arguments
+            .get(key)
+            .and_then(Json::as_str)
+            .map(str::to_string)
+    };
 
     match name {
         "query" => {
@@ -377,7 +382,12 @@ fn first_line(sql: &str) -> String {
 /// and is not worth failing a query the caller is waiting on. A deployment that
 /// needs the log to be a hard requirement should make the file unwritable and
 /// watch for the warning rather than relying on this to stop.
-fn audit(options: &Options, tool: &str, arguments: &Json, outcome: &std::result::Result<String, String>) {
+fn audit(
+    options: &Options,
+    tool: &str,
+    arguments: &Json,
+    outcome: &std::result::Result<String, String>,
+) {
     let Some(path) = &options.audit else { return };
 
     let entry = json!({
@@ -417,7 +427,10 @@ mod tests {
         // no description at all.
         let guarded = tools(&options(true));
         let text = serde_json::to_string(&guarded).unwrap();
-        assert!(text.contains("refuses anything that looks like a write"), "{text}");
+        assert!(
+            text.contains("refuses anything that looks like a write"),
+            "{text}"
+        );
 
         let open = tools(&options(false));
         let text = serde_json::to_string(&open).unwrap();
@@ -437,7 +450,10 @@ mod tests {
         for tool in tools(&options(true)) {
             let name = tool["name"].as_str().unwrap().to_string();
             assert_eq!(tool["inputSchema"]["type"], "object", "{name}");
-            assert!(tool["description"].as_str().is_some_and(|d| d.len() > 20), "{name}");
+            assert!(
+                tool["description"].as_str().is_some_and(|d| d.len() > 20),
+                "{name}"
+            );
         }
     }
 }

@@ -12,12 +12,12 @@ use std::sync::{Arc, Mutex};
 use tablex_core::{
     config::ConnectionConfig,
     diagram::{GraphTable, SchemaGraph},
-    plan::{Plan, PlanRow},
     driver::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
         PlaceholderStyle, RowEdit, RowSink, STREAM_BATCH,
     },
     error::{Error, Result},
+    plan::{Plan, PlanRow},
     result::{Column, ColumnSource, QueryOutcome, ResultSet, StatementResult},
     schema::{decode_path, ColumnDef, ForeignKeyDef, IndexDef, NodeKind, SchemaNode, TableDetail},
     sql::{quote_ident, split_statements},

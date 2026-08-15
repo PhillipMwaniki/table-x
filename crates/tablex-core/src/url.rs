@@ -31,10 +31,7 @@ impl std::fmt::Debug for ParsedUrl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ParsedUrl")
             .field("config", &self.config)
-            .field(
-                "password",
-                &self.password.as_ref().map(|_| "<redacted>"),
-            )
+            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
             .finish()
     }
 }
@@ -169,7 +166,11 @@ fn file_path_from(input: &str) -> Result<String> {
     // `/C:/data` is a Windows path written the URL way; that leading slash
     // belongs to the URL, not to the path.
     let trimmed = rest.trim_start_matches('/');
-    let path = if is_windows_drive(trimmed) { trimmed } else { rest };
+    let path = if is_windows_drive(trimmed) {
+        trimmed
+    } else {
+        rest
+    };
 
     let path = decode(path);
     if path.trim_matches('/').is_empty() {
@@ -266,15 +267,27 @@ mod tests {
     #[test]
     fn sqlite_paths_arrive_whole_in_all_three_spellings() {
         assert_eq!(
-            parse("sqlite:///data/app.db").unwrap().config.file_path.as_deref(),
+            parse("sqlite:///data/app.db")
+                .unwrap()
+                .config
+                .file_path
+                .as_deref(),
             Some("/data/app.db")
         );
         assert_eq!(
-            parse("sqlite://./local.db").unwrap().config.file_path.as_deref(),
+            parse("sqlite://./local.db")
+                .unwrap()
+                .config
+                .file_path
+                .as_deref(),
             Some("./local.db")
         );
         assert_eq!(
-            parse("sqlite:relative.db").unwrap().config.file_path.as_deref(),
+            parse("sqlite:relative.db")
+                .unwrap()
+                .config
+                .file_path
+                .as_deref(),
             Some("relative.db")
         );
     }
@@ -283,10 +296,7 @@ mod tests {
     fn a_windows_path_keeps_its_drive_letter() {
         // The URL parser reads `C:` as a port separator and drops the colon,
         // which then fails to open with a message naming a path nobody typed.
-        for url in [
-            "sqlite://C:/data/app.db",
-            "sqlite:///C:/data/app.db",
-        ] {
+        for url in ["sqlite://C:/data/app.db", "sqlite:///C:/data/app.db"] {
             assert_eq!(
                 parse(url).unwrap().config.file_path.as_deref(),
                 Some("C:/data/app.db"),
@@ -299,11 +309,19 @@ mod tests {
     fn a_unix_absolute_path_keeps_its_leading_slash() {
         // The same trimming that rescues a drive letter must not eat this one.
         assert_eq!(
-            parse("sqlite:////var/lib/app.db").unwrap().config.file_path.as_deref(),
+            parse("sqlite:////var/lib/app.db")
+                .unwrap()
+                .config
+                .file_path
+                .as_deref(),
             Some("//var/lib/app.db")
         );
         assert_eq!(
-            parse("sqlite:///var/lib/app.db").unwrap().config.file_path.as_deref(),
+            parse("sqlite:///var/lib/app.db")
+                .unwrap()
+                .config
+                .file_path
+                .as_deref(),
             Some("/var/lib/app.db")
         );
     }
@@ -311,7 +329,11 @@ mod tests {
     #[test]
     fn a_path_with_spaces_survives_encoded_or_not() {
         assert_eq!(
-            parse("sqlite:///data/my%20app.db").unwrap().config.file_path.as_deref(),
+            parse("sqlite:///data/my%20app.db")
+                .unwrap()
+                .config
+                .file_path
+                .as_deref(),
             Some("/data/my app.db")
         );
     }
@@ -325,9 +347,20 @@ mod tests {
 
     #[test]
     fn sslmode_becomes_a_tls_setting_rather_than_a_driver_option() {
-        assert_eq!(parse("postgres://h/db?sslmode=disable").unwrap().config.tls.mode, TlsMode::Disable);
         assert_eq!(
-            parse("postgres://h/db?sslmode=verify-full").unwrap().config.tls.mode,
+            parse("postgres://h/db?sslmode=disable")
+                .unwrap()
+                .config
+                .tls
+                .mode,
+            TlsMode::Disable
+        );
+        assert_eq!(
+            parse("postgres://h/db?sslmode=verify-full")
+                .unwrap()
+                .config
+                .tls
+                .mode,
             TlsMode::VerifyFull
         );
         // And is not left in options for a driver to read a second time.
@@ -340,7 +373,13 @@ mod tests {
         // They are a driver's business. Dropping them silently would be the
         // wrong kind of opinionated.
         let p = parse("clickhouse://h/db?max_execution_time=30").unwrap();
-        assert_eq!(p.config.options.get("max_execution_time").map(String::as_str), Some("30"));
+        assert_eq!(
+            p.config
+                .options
+                .get("max_execution_time")
+                .map(String::as_str),
+            Some("30")
+        );
     }
 
     #[test]

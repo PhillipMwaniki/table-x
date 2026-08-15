@@ -112,7 +112,6 @@ pub async fn run(
     Ok(applied)
 }
 
-
 /// Rows per INSERT. Batching cuts the round trips that dominate an import
 /// without building a statement so large a server rejects it.
 const ROWS_PER_INSERT: usize = 200;
@@ -231,8 +230,14 @@ pub async fn run_csv(
             }
             batch.push(values_of(&record, &request, &types));
             if batch.len() >= ROWS_PER_INSERT {
-                inserted += flush(&mut **guard, &request.qualified, &target_columns, &mut batch, &opts)
-                    .await?;
+                inserted += flush(
+                    &mut **guard,
+                    &request.qualified,
+                    &target_columns,
+                    &mut batch,
+                    &opts,
+                )
+                .await?;
             }
         }
         report(read_bytes, false);
@@ -244,8 +249,14 @@ pub async fn run_csv(
         }
     }
     if !batch.is_empty() {
-        inserted +=
-            flush(&mut **guard, &request.qualified, &target_columns, &mut batch, &opts).await?;
+        inserted += flush(
+            &mut **guard,
+            &request.qualified,
+            &target_columns,
+            &mut batch,
+            &opts,
+        )
+        .await?;
     }
 
     report(read_bytes, true);
@@ -335,9 +346,13 @@ fn take_utf8(leftover: &mut Vec<u8>) -> String {
 }
 
 /// Read the first records of a file, for the mapping preview.
-pub fn preview(path: &str, delimiter: Option<char>, rows: usize) -> Result<(char, Vec<Vec<String>>)> {
-    let bytes = std::fs::read(path)
-        .map_err(|e| Error::Io(format!("could not read {path}: {e}")))?;
+pub fn preview(
+    path: &str,
+    delimiter: Option<char>,
+    rows: usize,
+) -> Result<(char, Vec<Vec<String>>)> {
+    let bytes =
+        std::fs::read(path).map_err(|e| Error::Io(format!("could not read {path}: {e}")))?;
     // Enough to see the shape without loading a gigabyte to show ten rows.
     let head = &bytes[..bytes.len().min(64 * 1024)];
     let text = String::from_utf8_lossy(head);

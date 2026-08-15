@@ -532,7 +532,14 @@ pub struct Hazard {
 
 /// Words that sit between a keyword and the name it applies to.
 const NOISE: &[&str] = &[
-    "IF", "EXISTS", "TABLE", "ONLY", "FROM", "INTO", "CONCURRENTLY", "CASCADE",
+    "IF",
+    "EXISTS",
+    "TABLE",
+    "ONLY",
+    "FROM",
+    "INTO",
+    "CONCURRENTLY",
+    "CASCADE",
 ];
 
 /// What one statement would destroy.
@@ -602,9 +609,9 @@ pub fn hazard(statement: &str) -> Option<Hazard> {
         "ALTER" => {
             // Only the destructive half of ALTER. Adding a column is a write
             // and loses nothing; dropping one loses a column of data.
-            let drops_column = top
-                .windows(2)
-                .any(|pair| pair[0].eq_ignore_ascii_case("DROP") && pair[1].eq_ignore_ascii_case("COLUMN"));
+            let drops_column = top.windows(2).any(|pair| {
+                pair[0].eq_ignore_ascii_case("DROP") && pair[1].eq_ignore_ascii_case("COLUMN")
+            });
             drops_column.then(|| Hazard {
                 summary: match name(2) {
                     Some(table) => format!("drops a column from {table}, and its values with it"),
@@ -630,7 +637,10 @@ pub fn hazard(statement: &str) -> Option<Hazard> {
 
 /// Every hazard in a submission, in the order the statements would run.
 pub fn hazards(sql: &str) -> Vec<Hazard> {
-    split_statements(sql).iter().filter_map(|s| hazard(s)).collect()
+    split_statements(sql)
+        .iter()
+        .filter_map(|s| hazard(s))
+        .collect()
 }
 
 /// Quote an identifier for interpolation into generated SQL.
@@ -663,18 +673,38 @@ mod tests {
         // Seven characters apart, and only one of them ends a career.
         let bounded = hazard("DELETE FROM orders WHERE id = 5").expect("a delete is a hazard");
         assert!(!bounded.unbounded);
-        assert!(bounded.summary.contains("matching rows"), "{}", bounded.summary);
+        assert!(
+            bounded.summary.contains("matching rows"),
+            "{}",
+            bounded.summary
+        );
 
         let unbounded = hazard("DELETE FROM orders").expect("a delete is a hazard");
         assert!(unbounded.unbounded);
-        assert!(unbounded.summary.contains("every row"), "{}", unbounded.summary);
-        assert!(unbounded.summary.contains("orders"), "{}", unbounded.summary);
+        assert!(
+            unbounded.summary.contains("every row"),
+            "{}",
+            unbounded.summary
+        );
+        assert!(
+            unbounded.summary.contains("orders"),
+            "{}",
+            unbounded.summary
+        );
     }
 
     #[test]
     fn an_update_without_a_where_is_flagged_the_same_way() {
-        assert!(hazard("UPDATE users SET active = false").expect("hazard").unbounded);
-        assert!(!hazard("UPDATE users SET active = false WHERE id = 1").expect("hazard").unbounded);
+        assert!(
+            hazard("UPDATE users SET active = false")
+                .expect("hazard")
+                .unbounded
+        );
+        assert!(
+            !hazard("UPDATE users SET active = false WHERE id = 1")
+                .expect("hazard")
+                .unbounded
+        );
     }
 
     #[test]
@@ -686,14 +716,30 @@ mod tests {
         assert!(!h.unbounded, "a real top-level WHERE was missed");
 
         let h = hazard("UPDATE t SET x = (SELECT max(y) FROM u WHERE u.id = 1)").expect("hazard");
-        assert!(h.unbounded, "a subquery's WHERE bounded the update: {}", h.summary);
+        assert!(
+            h.unbounded,
+            "a subquery's WHERE bounded the update: {}",
+            h.summary
+        );
     }
 
     #[test]
     fn a_where_in_a_comment_or_a_string_bounds_nothing() {
-        assert!(hazard("DELETE FROM t -- WHERE id = 1").expect("hazard").unbounded);
-        assert!(hazard("DELETE FROM t /* WHERE id = 1 */").expect("hazard").unbounded);
-        assert!(hazard("UPDATE t SET note = 'where'").expect("hazard").unbounded);
+        assert!(
+            hazard("DELETE FROM t -- WHERE id = 1")
+                .expect("hazard")
+                .unbounded
+        );
+        assert!(
+            hazard("DELETE FROM t /* WHERE id = 1 */")
+                .expect("hazard")
+                .unbounded
+        );
+        assert!(
+            hazard("UPDATE t SET note = 'where'")
+                .expect("hazard")
+                .unbounded
+        );
     }
 
     #[test]
@@ -702,9 +748,15 @@ mod tests {
         assert!(drop.unbounded);
         assert!(drop.summary.contains("orders"), "{}", drop.summary);
 
-        assert!(hazard("DROP TABLE IF EXISTS orders").expect("hazard").summary.contains("orders"));
+        assert!(hazard("DROP TABLE IF EXISTS orders")
+            .expect("hazard")
+            .summary
+            .contains("orders"));
         assert!(hazard("TRUNCATE TABLE orders").expect("hazard").unbounded);
-        assert!(hazard("DROP DATABASE app").expect("hazard").summary.contains("database"));
+        assert!(hazard("DROP DATABASE app")
+            .expect("hazard")
+            .summary
+            .contains("database"));
     }
 
     #[test]

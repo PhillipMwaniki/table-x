@@ -124,7 +124,10 @@ mod tests {
         // system.role_grants populates user_name or role_name, never both.
         let p = assemble(
             vec![row(&["web", "user"]), row(&["writers", "role"])],
-            vec![row(&["web", "", "readers"]), row(&["", "writers", "readers"])],
+            vec![
+                row(&["web", "", "readers"]),
+                row(&["", "writers", "readers"]),
+            ],
             Vec::new(),
         );
         assert_eq!(p.principals[0].member_of, vec!["readers"]);

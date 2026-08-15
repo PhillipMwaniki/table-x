@@ -49,29 +49,31 @@ async fn sessions(conn: &mut Conn) -> Result<Vec<ServerSession>> {
 
     Ok(rows
         .into_iter()
-        .map(|(id, user, host, db, command, state, time, info, is_self)| ServerSession {
-            id,
-            user,
-            client: host,
-            database: db,
-            // MySQL splits what one word says elsewhere: COMMAND is `Query` or
-            // `Sleep`, STATE is the phase within it. Both matter — `Query` says
-            // it is working, `Sending data` says on what — so they are joined
-            // rather than one being picked.
-            state: match (command, state) {
-                (Some(c), Some(s)) if !s.is_empty() => Some(format!("{c} — {s}")),
-                (command, state) => command.or(state),
+        .map(
+            |(id, user, host, db, command, state, time, info, is_self)| ServerSession {
+                id,
+                user,
+                client: host,
+                database: db,
+                // MySQL splits what one word says elsewhere: COMMAND is `Query` or
+                // `Sleep`, STATE is the phase within it. Both matter — `Query` says
+                // it is working, `Sending data` says on what — so they are joined
+                // rather than one being picked.
+                state: match (command, state) {
+                    (Some(c), Some(s)) if !s.is_empty() => Some(format!("{c} — {s}")),
+                    (command, state) => command.or(state),
+                },
+                seconds: time.map(|t| t.max(0) as f64),
+                query: info.filter(|q| !q.trim().is_empty()),
+                is_self: is_self != 0,
+                // No portable answer. MySQL 8 can name a blocker through
+                // `performance_schema.data_lock_waits`, MariaDB cannot, and on
+                // MySQL it needs performance_schema enabled — so rather than a
+                // column that is empty for reasons the user cannot see, there is
+                // no column.
+                blocked_by: None,
             },
-            seconds: time.map(|t| t.max(0) as f64),
-            query: info.filter(|q| !q.trim().is_empty()),
-            is_self: is_self != 0,
-            // No portable answer. MySQL 8 can name a blocker through
-            // `performance_schema.data_lock_waits`, MariaDB cannot, and on
-            // MySQL it needs performance_schema enabled — so rather than a
-            // column that is empty for reasons the user cannot see, there is
-            // no column.
-            blocked_by: None,
-        })
+        )
         .collect())
 }
 
@@ -79,10 +81,7 @@ async fn stats(conn: &mut Conn) -> Result<Vec<ServerStat>> {
     // `SHOW GLOBAL STATUS` returns several hundred rows, which is a few
     // kilobytes and the only form that reads the same on MySQL 5.7, MySQL 8,
     // and MariaDB — the underlying tables moved between schemas twice.
-    let status: Vec<(String, String)> = conn
-        .query("SHOW GLOBAL STATUS")
-        .await
-        .map_err(map_err)?;
+    let status: Vec<(String, String)> = conn.query("SHOW GLOBAL STATUS").await.map_err(map_err)?;
     let pick = |name: &str| {
         status
             .iter()

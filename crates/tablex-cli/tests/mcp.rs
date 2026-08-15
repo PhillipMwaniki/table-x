@@ -142,7 +142,11 @@ fn a_notification_gets_no_reply() {
         ],
     );
 
-    assert_eq!(replies.len(), 1, "the notification was answered: {replies:?}");
+    assert_eq!(
+        replies.len(),
+        1,
+        "the notification was answered: {replies:?}"
+    );
     assert_eq!(replies[0]["id"], 7);
 }
 
@@ -320,7 +324,10 @@ fn malformed_input_does_not_stop_the_server() {
 
     let replies = talk(
         &["--quiet", "mcp", "--url", &url],
-        &["{not json at all", r#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#],
+        &[
+            "{not json at all",
+            r#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#,
+        ],
     );
 
     assert_eq!(replies.len(), 2);

@@ -5,9 +5,9 @@
 //! difference is exactly what [`Capabilities`] exists to express.
 
 mod activity;
-mod privileges;
 mod introspect;
 mod numeric;
+mod privileges;
 mod types;
 
 use async_trait::async_trait;
@@ -18,13 +18,13 @@ use tablex_core::{
     activity::ServerActivity,
     config::{ConnectionConfig, TlsMode},
     diagram::SchemaGraph,
-    plan::Plan,
-    privileges::Privileges,
     driver::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
         PlaceholderStyle, RowEdit, RowSink, STREAM_BATCH,
     },
     error::{Error, Result},
+    plan::Plan,
+    privileges::Privileges,
     result::{Column, ColumnSource, QueryOutcome, ResultSet, StatementResult},
     schema::{SchemaNode, TableDetail},
     sql::{quote_ident, split_statements},

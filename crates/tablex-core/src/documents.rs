@@ -230,7 +230,9 @@ mod tests {
     fn a_nested_object_stays_nested() {
         // Flattening reads well for one shape of document and explodes for
         // every other; the grid already pretty-prints JSON.
-        let p = projected(vec![json!({"address": {"city": "Nairobi", "zip": "00100"}})]);
+        let p = projected(vec![
+            json!({"address": {"city": "Nairobi", "zip": "00100"}}),
+        ]);
         assert!(matches!(p.rows[0][0], Some(Value::Json(_))));
         // And not as a column per leaf.
         assert_eq!(p.columns, vec!["address"]);
@@ -246,7 +248,9 @@ mod tests {
     fn an_exact_decimal_survives_as_an_exact_decimal() {
         // The whole reason $numberDecimal exists; reading it as a float would
         // lose in the last step what the store took care to keep.
-        let p = projected(vec![json!({"total": {"$numberDecimal": "123456789.123456789"}})]);
+        let p = projected(vec![
+            json!({"total": {"$numberDecimal": "123456789.123456789"}}),
+        ]);
         assert_eq!(
             p.rows[0][0],
             Some(Value::Numeric("123456789.123456789".into()))
@@ -264,7 +268,9 @@ mod tests {
     #[test]
     fn a_date_is_an_instant_in_either_spelling() {
         let strict = projected(vec![json!({"at": {"$date": 1_700_000_000_000i64}})]);
-        let relaxed = projected(vec![json!({"at": {"$date": {"$numberLong": "1700000000000"}}})]);
+        let relaxed = projected(vec![
+            json!({"at": {"$date": {"$numberLong": "1700000000000"}}}),
+        ]);
         let iso = projected(vec![json!({"at": {"$date": "2023-11-14T22:13:20Z"}})]);
 
         assert!(matches!(strict.rows[0][0], Some(Value::TimestampTz(_))));
@@ -301,9 +307,7 @@ mod tests {
     fn the_column_cap_is_reported_rather_than_silently_applied() {
         // Showing less than the query returned without saying so is the
         // difference between a limit and a lie.
-        let wide: Map<String, Json> = (0..10)
-            .map(|i| (format!("f{i}"), json!(i)))
-            .collect();
+        let wide: Map<String, Json> = (0..10).map(|i| (format!("f{i}"), json!(i))).collect();
         let p = project(&[Json::Object(wide)], 4);
         assert_eq!(p.columns.len(), 4);
         assert_eq!(p.dropped_columns, 6);
@@ -320,11 +324,7 @@ mod tests {
     #[test]
     fn every_row_is_as_wide_as_the_column_list() {
         // A short row would misalign the grid from that point on.
-        let p = projected(vec![
-            json!({"a": 1}),
-            json!({"b": 2, "c": 3}),
-            json!({}),
-        ]);
+        let p = projected(vec![json!({"a": 1}), json!({"b": 2, "c": 3}), json!({})]);
         assert_eq!(p.columns.len(), 3);
         for row in &p.rows {
             assert_eq!(row.len(), 3);

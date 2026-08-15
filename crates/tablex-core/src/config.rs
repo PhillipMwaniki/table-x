@@ -241,7 +241,10 @@ mod tests {
         // end up disagreeing.
         let mut c = base();
         c.read_only = false;
-        assert!(!c.confirms_destructive(), "an untagged connection stays quiet");
+        assert!(
+            !c.confirms_destructive(),
+            "an untagged connection stays quiet"
+        );
 
         c.color = Some("#e5484d".into());
         assert!(c.confirms_destructive());
