@@ -134,7 +134,10 @@ jobs:
       #
       # `**` matches zero segments too, which is what covers both the plain
       # `target/release/bundle` of a native build and the
-      # `target/<triple>/release/bundle` of a cross-compiled one.
+      # `target/<triple>/release/bundle` of a cross-compiled one. Verified
+      # against a real Windows build: it matches the msi and the NSIS setup and
+      # leaves the raw `target/release/table-x.exe` alone, which is the one
+      # thing a looser pattern would wrongly ship.
       - name: Upload the installers
         uses: actions/upload-artifact@v4
         with:

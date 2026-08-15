@@ -76,11 +76,10 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      # Deliberately not shared with the release workflow: that one builds the
+      # release profile with LTO and one codegen unit, so it shares no compiled
+      # artifacts with this and would only evict entries this job still wants.
       - uses: Swatinem/rust-cache@v2
-        with:
-          # Shared with the release job's Linux build, which compiles the same
-          # dependency graph.
-          shared-key: linux
 
       - name: Formatting
         run: cargo fmt --all --check
