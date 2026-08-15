@@ -20,6 +20,8 @@ import { CsvImportDialog } from "./CsvImportDialog";
 import { ActivityPanel } from "./ActivityPanel";
 import { PlanView } from "./PlanView";
 import { DiagramView } from "./DiagramView";
+import { DiffView } from "./DiffView";
+import { CompareDialog } from "./CompareDialog";
 import { Button, Spinner, cx } from "../ui/primitives";
 import { ContextMenu } from "../ui/ContextMenu";
 import type { MenuItem } from "../ui/ContextMenu";
@@ -30,6 +32,7 @@ import { useHistory } from "@/store/history";
 import { useSnippets } from "@/store/snippets";
 import { useCommands } from "@/store/commands";
 import { useSettings } from "@/store/settings";
+import { useConnections } from "@/store/connections";
 import { useExports } from "@/store/exports";
 import { useWorkspace } from "@/store/workspace";
 import type {
@@ -78,6 +81,7 @@ export function Workspace({
     openScript: openScriptTab,
     openActivity,
     openDiagram,
+    openDiff,
     setTabError,
     setTabNotice,
     useDatabase,
@@ -103,6 +107,19 @@ export function Workspace({
   const watchExports = useExports((s) => s.watch);
   const beginExport = useExports((s) => s.begin);
   const endExport = useExports((s) => s.end);
+  /** The schema a comparison is being set up for, if any. */
+  // Selected straight off the store rather than derived: a selector that
+  // builds an array returns a new one every call, and zustand compares by
+  // identity — which is how this component learned to tear itself down.
+  const connections = useConnections((s) => s.connections);
+  const openConnections = useConnections((s) => s.open);
+
+  const [compare, setCompare] = useState<{
+    connectionId: string;
+    schema: string | null;
+    label: string;
+  } | null>(null);
+
   /** The file and table a mapping dialog is open for, if any. */
   const [csvImport, setCsvImport] = useState<{
     path: string;
@@ -348,6 +365,40 @@ export function Workspace({
   };
 
   /**
+   * Compare this schema with another, and write the migration between them.
+   *
+   * The script is generated for *this* connection's engine, because this is the
+   * side it would be run against. Generating it in the other side's dialect
+   * would produce statements that are correct about the wrong database.
+   */
+  const runCompare = async (to: {
+    connectionId: string;
+    schema: string | null;
+    label: string;
+  }) => {
+    const from = compare;
+    setCompare(null);
+    if (!from) return;
+
+    const id = crypto.randomUUID();
+    const current = activeTab(connection.id);
+    beginExport(id, `Comparing ${from.label}`, "tables");
+    try {
+      const report = await ipc.compareSchemas({
+        id,
+        from: { connection_id: from.connectionId, schema: from.schema, label: from.label },
+        to: { connection_id: to.connectionId, schema: to.schema, label: to.label },
+        driver: connection.driver,
+      });
+      openDiff(connection.id, `${from.label} ⇄ ${to.label}`, report);
+    } catch (e) {
+      reportJobFailure(e as IpcError, current?.id, "Comparison");
+    } finally {
+      endExport(id);
+    }
+  };
+
+  /**
    * Run a SQL file against this connection.
    *
    * Nothing is dropped or emptied first: what the file does is what happens,
@@ -586,11 +637,13 @@ export function Workspace({
             <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border bg-surface-1 px-2">
               {/* Every control here acts on a statement, and an activity tab has
                   none — it carries its own refresh instead. */}
-              {tab.kind === "activity" || tab.kind === "diagram" ? (
+              {tab.kind === "activity" || tab.kind === "diagram" || tab.kind === "diff" ? (
                 <span className="text-[11px] text-text-muted">
                   {tab.kind === "activity"
                     ? "Live view of the server. Nothing here is cached."
-                    : "Tables and the keys between them. Drag to pan, scroll to zoom."}
+                    : tab.kind === "diff"
+                      ? "A comparison and the script that would settle it. Nothing here runs."
+                      : "Tables and the keys between them. Drag to pan, scroll to zoom."}
                 </span>
               ) : (
                 <>
@@ -691,7 +744,16 @@ export function Workspace({
             {/* A table tab gives its whole height to the rows: there is no
                 statement to edit, and the SQL that produced them is one line
                 the tab's own context already describes. */}
-            {tab.kind === "diagram" ? (
+            {tab.kind === "diff" ? (
+              tab.diff ? (
+                <DiffView
+                  report={tab.diff}
+                  onOpenScript={(sql) =>
+                    openScriptTab(connection.id, { title: `Migration — ${tab.title}`, sql })
+                  }
+                />
+              ) : null
+            ) : tab.kind === "diagram" ? (
               <DiagramView connectionId={connection.id} schema={tab.schema ?? null} />
             ) : tab.kind === "activity" ? (
               <ActivityPanel
@@ -845,11 +907,31 @@ export function Workspace({
                   connection.id,
                   menu.node.kind === "schema" ? menu.node.name : (menu.node.schema ?? null),
                 ),
+              onCompare: () => {
+                const schema =
+                  menu.node.kind === "schema" ? menu.node.name : (menu.node.schema ?? null);
+                setCompare({
+                  connectionId: connection.id,
+                  schema,
+                  label: `${connection.name}${schema ? ` · ${schema}` : ""}`,
+                });
+              },
               onImportCsv: () => void importCsv(menu.node),
               onRefresh: menu.refresh,
             },
           )}
           onClose={() => setMenu(null)}
+        />
+      )}
+
+      {compare && (
+        <CompareDialog
+          open
+          from={compare}
+          connections={connections}
+          connected={openConnections}
+          onClose={() => setCompare(null)}
+          onCompare={(to) => void runCompare(to)}
         />
       )}
 
@@ -904,6 +986,7 @@ export function menuFor(
     onImportCsv: () => void;
     onActivity: () => void;
     onDiagram: () => void;
+    onCompare: () => void;
     onRefresh: (() => void) | null;
   },
 ): MenuItem[] {
@@ -918,6 +1001,7 @@ export function menuFor(
     if (options.foreignKeys) {
       items.push({ label: "Diagram…", onSelect: actions.onDiagram });
     }
+    items.push({ label: "Compare with…", onSelect: actions.onCompare });
     items.push({ label: "Server activity…", separated: true, onSelect: actions.onActivity });
     if (actions.onRefresh) {
       items.push({ label: "Refresh", separated: true, onSelect: actions.onRefresh });
@@ -927,6 +1011,7 @@ export function menuFor(
 
   if (node.kind === "schema" && options.foreignKeys) {
     items.push({ label: "Diagram…", onSelect: actions.onDiagram });
+    items.push({ label: "Compare with…", onSelect: actions.onCompare });
     if (actions.onRefresh) {
       items.push({ label: "Refresh", separated: true, onSelect: actions.onRefresh });
     }

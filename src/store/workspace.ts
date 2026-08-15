@@ -15,6 +15,7 @@ import { create } from "zustand";
 import { ipc, IpcError } from "@/lib/ipc";
 import type {
   CompletionScope,
+  DiffReport,
   Plan,
   QueryOutcome,
   RowEdit,
@@ -47,7 +48,7 @@ export interface QueryError {
  * a result — but it is still a tab, because watching the server while you work
  * is the whole point and a modal would put it in front of the work instead.
  */
-export type TabKind = "query" | "table" | "activity" | "diagram";
+export type TabKind = "query" | "table" | "activity" | "diagram" | "diff";
 
 export interface Tab {
   id: string;
@@ -65,6 +66,8 @@ export interface Tab {
   notice?: string | undefined;
   /** A plan being shown in place of this tab's results. */
   plan?: Plan | null;
+  /** A schema comparison, for a diff tab. */
+  diff?: DiffReport | null;
   running: boolean;
   /** Index of the statement whose results are shown. */
   activeStatement: number;
@@ -134,6 +137,7 @@ interface WorkspaceState {
   openScript: (connectionId: string, script: { title: string; sql: string }) => void;
   openActivity: (connectionId: string) => void;
   openDiagram: (connectionId: string, schema: string | null) => void;
+  openDiff: (connectionId: string, title: string, report: DiffReport) => void;
   closeTab: (connectionId: string, tabId: string) => void;
   selectTab: (connectionId: string, tabId: string) => Promise<void>;
 
@@ -241,6 +245,19 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       active: { ...s.active, [id]: tab.id },
     }));
     void get().run(id, tab.id);
+  },
+
+  openDiff: (id, title, report) => {
+    const tab = blankTab({
+      kind: "diff",
+      title,
+      database: get().database[id] ?? null,
+      diff: report,
+    });
+    set((s) => ({
+      tabs: { ...s.tabs, [id]: [...tabsOf(s, id), tab] },
+      active: { ...s.active, [id]: tab.id },
+    }));
   },
 
   openDiagram: (id, schema) => {

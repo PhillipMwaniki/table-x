@@ -25,6 +25,7 @@ const actions = {
   onImportCsv: noop,
   onActivity: noop,
   onDiagram: noop,
+  onCompare: noop,
   onRefresh: noop,
 };
 
@@ -45,6 +46,7 @@ describe("menuFor", () => {
       "Export database as SQL…",
       "Import SQL file…",
       "Diagram…",
+      "Compare with…",
       "Server activity…",
       "Refresh",
     ]);

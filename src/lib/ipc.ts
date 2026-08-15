@@ -13,6 +13,7 @@ import type {
   ConnectionConfig,
   CsvPreview,
   Diagram,
+  DiffReport,
   DriverInfo,
   Plan,
   ServerActivity,
@@ -170,6 +171,19 @@ export const ipc = {
     database: string;
     path: string;
   }) => call<number>("export_database", { request: args }),
+
+  /**
+   * Compare two schemas and generate the migration between them.
+   *
+   * The script turns `from` into `to`, and is written in `driver`'s syntax —
+   * which is the `from` side's, since that is where it would be run.
+   */
+  compareSchemas: (args: {
+    id: string;
+    from: { connection_id: string; schema: string | null; label: string };
+    to: { connection_id: string; schema: string | null; label: string };
+    driver: string;
+  }) => call<DiffReport>("compare_schemas", { request: args }),
 
   /** The schema as a laid-out diagram. */
   schemaDiagram: (connection_id: string, schema?: string) =>

@@ -10,6 +10,7 @@ mod import;
 mod ipc;
 mod secrets;
 mod sessions;
+mod snapshot;
 mod snippets;
 mod state;
 mod store;
@@ -62,6 +63,7 @@ pub fn run() {
             ipc::table_detail,
             ipc::explain,
             ipc::schema_diagram,
+            ipc::compare_schemas,
             ipc::server_activity,
             ipc::kill_session,
             ipc::object_definition,

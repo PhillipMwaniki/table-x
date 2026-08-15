@@ -242,6 +242,48 @@ export interface SchemaNode {
 /** File formats a table can be written out as. */
 export type ExportFormat = "csv" | "json" | "sql";
 
+/** One field of a column that differs between two schemas. */
+export interface FieldChange {
+  field: string;
+  from: string;
+  to: string;
+}
+
+/** One structural difference. `kind` discriminates the union. */
+export type Change =
+  | { kind: "table_added"; table: string; columns: ColumnDef[]; primary_key: string[] }
+  | { kind: "table_removed"; table: string }
+  | { kind: "column_added"; table: string; column: ColumnDef }
+  | { kind: "column_removed"; table: string; column: string }
+  | {
+      kind: "column_changed";
+      table: string;
+      column: string;
+      to: ColumnDef;
+      differences: FieldChange[];
+    }
+  | { kind: "index_added"; table: string; index: IndexDef }
+  | { kind: "index_removed"; table: string; index: string }
+  | { kind: "foreign_key_added"; table: string; key: ForeignKeyDef }
+  | { kind: "foreign_key_removed"; table: string; key: string }
+  | { kind: "primary_key_changed"; table: string; from: string[]; to: string[] };
+
+/** One statement of a generated migration. */
+export interface MigrationStatement {
+  sql: string;
+  /** Whether running it loses data that cannot be recovered. */
+  destructive: boolean;
+  note: string | null;
+}
+
+/** What a comparison found. The script turns `from` into `to`. */
+export interface DiffReport {
+  from: string;
+  to: string;
+  changes: Change[];
+  statements: MigrationStatement[];
+}
+
 /** A key column shown inside a diagram box. */
 export interface BoxColumn {
   name: string;

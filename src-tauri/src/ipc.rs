@@ -877,6 +877,97 @@ pub async fn table_detail(
     Ok(guard.table_detail(schema.as_deref(), &table).await?)
 }
 
+/// One side of a comparison.
+#[derive(Deserialize)]
+pub struct CompareSide {
+    pub connection_id: String,
+    #[serde(default)]
+    pub schema: Option<String>,
+    /// How this side is named in the report.
+    pub label: String,
+}
+
+#[derive(Deserialize)]
+pub struct CompareArgs {
+    pub id: String,
+    pub from: CompareSide,
+    pub to: CompareSide,
+    /// Which engine's syntax the script is written in — the one it will be run
+    /// against, which is always the `from` side.
+    pub driver: String,
+}
+
+/// What a comparison found, and the statements that would reconcile it.
+#[derive(Serialize)]
+pub struct DiffReport {
+    pub from: String,
+    pub to: String,
+    pub changes: Vec<tablex_core::diff::Change>,
+    pub statements: Vec<tablex_core::diff::Statement>,
+}
+
+/// Compare two schemas and write the migration between them.
+///
+/// The direction is fixed: the script turns `from` into `to`, and `from` is the
+/// side it would be run against. Naming both sides in the report is what keeps
+/// that legible once the script is in a tab on its own.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn compare_schemas(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    request: CompareArgs,
+) -> IpcResult<DiffReport> {
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    state
+        .exports
+        .lock()
+        .await
+        .insert(request.id.clone(), cancel.clone());
+
+    let progress = |progress| {
+        let _ = tauri::Emitter::emit(&app, crate::export::PROGRESS_EVENT, progress);
+    };
+
+    let result = async {
+        let from = crate::snapshot::capture(
+            &state,
+            &request.id,
+            &request.from.connection_id,
+            request.from.schema.as_deref(),
+            request.from.label.clone(),
+            &cancel,
+            &progress,
+        )
+        .await?;
+        let to = crate::snapshot::capture(
+            &state,
+            &request.id,
+            &request.to.connection_id,
+            request.to.schema.as_deref(),
+            request.to.label.clone(),
+            &cancel,
+            &progress,
+        )
+        .await?;
+
+        let changes = tablex_core::diff::diff(&from, &to);
+        let statements = tablex_core::diff::migration(
+            &changes,
+            tablex_core::diff::Dialect::for_driver(&request.driver),
+        );
+        Ok::<_, tablex_core::Error>(DiffReport {
+            from: from.label,
+            to: to.label,
+            changes,
+            statements,
+        })
+    }
+    .await;
+
+    state.exports.lock().await.remove(&request.id);
+    Ok(result?)
+}
+
 /// The schema as a diagram, already laid out.
 ///
 /// The layout happens in Rust rather than in the view because it has to be the
