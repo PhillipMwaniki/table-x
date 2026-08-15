@@ -13,6 +13,7 @@ pub mod config;
 pub mod csv;
 pub mod diagram;
 pub mod diff;
+pub mod documents;
 pub mod driver;
 pub mod error;
 pub mod export;

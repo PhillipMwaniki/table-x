@@ -29,7 +29,11 @@ futures-util = "0.3"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# preserve_order keeps object keys in the order they were written rather than
+# sorting them. That matters twice: a document store's field order is part of
+# the document, and a JSON column opened in the cell editor should come back
+# reading the way the user wrote it rather than alphabetized.
+serde_json = { version = "1", features = ["preserve_order"] }
 
 # Errors / logging
 thiserror = "2"
