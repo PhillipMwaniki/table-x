@@ -64,7 +64,8 @@
     ],
     "hard_deny": [
       "$defaults",
-      "Publishing this project anywhere: cargo publish, npm/pnpm publish, cargo login, creating or deleting GitHub releases or remote tags. Releases are cut by the release workflow, never by hand.",
+      "Publishing this project by hand: cargo publish, npm/pnpm publish, cargo login, or creating, editing and deleting a GitHub release directly. Releases are cut by the release workflow. Pushing a new v* tag on a release commit is how that workflow is invoked, so that push is allowed once the version files agree and CI is green on the commit being tagged.",
+      "Deleting a remote tag, or moving one that already exists to another commit. A published artifact has to stay traceable to the source it was built from, and a moved tag silently breaks that for everyone who already downloaded it.",
       "Reading, printing, or copying saved database connection credentials, .env files, OS keychain entries, or the Tauri store files that hold connection secrets. This is a database client; the credentials it persists belong to real systems.",
       "Connecting to, querying, or mutating a real database the user has configured. Running the app is fine; issuing statements against someone's live data is not."
     ]
