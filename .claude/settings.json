@@ -1,0 +1,72 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm typecheck)",
+      "Bash(pnpm test)",
+      "Bash(pnpm test:*)",
+      "Bash(pnpm lint)",
+      "Bash(pnpm lint:fix)",
+      "Bash(pnpm fmt)",
+      "Bash(pnpm fmt:check)",
+      "Bash(pnpm build)",
+      "Bash(pnpm install)",
+      "Bash(pnpm install --frozen-lockfile)",
+      "Bash(pnpm exec:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo build:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo fmt:*)",
+      "Bash(cargo metadata:*)",
+      "Bash(cargo tree:*)",
+      "Bash(rustup show:*)",
+      "Bash(rustup component list:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git blame:*)",
+      "Bash(git branch:*)",
+      "Bash(git ls-files:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr list:*)",
+      "Bash(gh pr diff:*)",
+      "Bash(gh run list:*)",
+      "Bash(gh run view:*)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Bash(cargo publish:*)",
+      "Bash(cargo login:*)",
+      "Bash(cargo owner:*)",
+      "Bash(npm publish:*)",
+      "Bash(pnpm publish:*)",
+      "Bash(rustup self uninstall:*)",
+      "Bash(rustup toolchain uninstall:*)",
+      "Bash(gh repo delete:*)",
+      "Bash(gh release delete:*)"
+    ]
+  },
+  "autoMode": {
+    "environment": [
+      "$defaults",
+      "This repository is Table X (package name table-x): a Tauri 2 desktop database client. The frontend is React 19 + TypeScript + Vite under src/, driven by pnpm. The backend is a Rust workspace: crates/tablex-core, crates/tablex-drivers, crates/tablex-tunnel, crates/tablex-cli, and src-tauri.",
+      "The Rust toolchain is managed by rustup, not a standalone installer. cargo, rustc, clippy and rustfmt resolve from ~/.cargo/bin (on Windows: C:/Users/<user>/.cargo/bin). If cargo is reported as not found, the shell has a stale PATH rather than a missing toolchain.",
+      "The checks that mirror CI are: pnpm typecheck, pnpm fmt:check, pnpm lint, pnpm test, pnpm build for the frontend; and cargo fmt --all --check, cargo clippy --workspace --all-features --all-targets -- -D warnings, cargo test --workspace --all-features for Rust. Running any of these is routine.",
+      "target/, src-tauri/target/, node_modules/ and dist/ are build output and are gitignored. Regenerating them is slow but safe.",
+      "Rust release builds and pnpm app:build are correct but very slow (LTO, one codegen unit). Prefer cargo check or a debug build when only verifying that code compiles."
+    ],
+    "soft_deny": [
+      "$defaults",
+      "Rewriting or discarding work that exists nowhere else: git reset --hard, git checkout -- on modified files, git clean -fd, git stash drop, or force-pushing a branch.",
+      "Editing .github/workflows/ci.yml or .github/workflows/release.yml. These govern what ships to other people, so changes there are a deliberate act rather than a step in a task."
+    ],
+    "hard_deny": [
+      "$defaults",
+      "Publishing this project anywhere: cargo publish, npm/pnpm publish, cargo login, creating or deleting GitHub releases or remote tags. Releases are cut by the release workflow, never by hand.",
+      "Reading, printing, or copying saved database connection credentials, .env files, OS keychain entries, or the Tauri store files that hold connection secrets. This is a database client; the credentials it persists belong to real systems.",
+      "Connecting to, querying, or mutating a real database the user has configured. Running the app is fine; issuing statements against someone's live data is not."
+    ]
+  }
+}

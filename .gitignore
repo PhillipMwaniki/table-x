@@ -38,3 +38,8 @@ coverage/
 
 # OS scratch
 desktop.ini
+
+# Claude Code — shared config is .claude/settings.json; this one is per-machine
+.claude/settings.local.json
+# Runtime state: a pid and a session id, meaningless on any other machine
+.claude/scheduled_tasks.lock
