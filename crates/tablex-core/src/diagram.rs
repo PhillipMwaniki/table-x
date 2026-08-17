@@ -105,8 +105,7 @@ pub fn layout(graph: &SchemaGraph) -> Diagram {
     // Sorted first, so the whole layout is a function of the schema and not of
     // the order the catalog happened to return rows in.
     let mut tables: Vec<&GraphTable> = graph.tables.iter().collect();
-    tables
-        .sort_by(|a, b| key(a.schema.as_deref(), &a.name).cmp(&key(b.schema.as_deref(), &b.name)));
+    tables.sort_by_key(|t| key(t.schema.as_deref(), &t.name));
 
     let index: HashMap<String, usize> = tables
         .iter()
