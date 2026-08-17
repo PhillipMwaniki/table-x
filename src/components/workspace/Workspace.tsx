@@ -780,6 +780,13 @@ export function Workspace({
         <SchemaTree
           connectionId={connection.id}
           activeDatabase={database}
+          // A table tab is showing one object; a query tab is showing a
+          // statement, which may touch several and marks none of them.
+          activeObject={
+            tab?.kind === "table"
+              ? { name: tab.title, schema: tab.schema, database: tab.database ?? undefined }
+              : null
+          }
           onOpenTable={(node) =>
             openTable(connection.id, {
               title: node.name,

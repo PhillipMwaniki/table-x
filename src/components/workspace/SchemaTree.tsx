@@ -6,9 +6,10 @@
  * catalog on connect would stall the UI for something the user may never open.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ipc } from "@/lib/ipc";
 import { Spinner, cx } from "../ui/primitives";
+import { matchesName, splitHighlight } from "@/lib/tree";
 import type { NodeKind, SchemaNode } from "@/lib/types";
 
 /** Glyph per node kind. Text rather than icons keeps the tree dense and crisp. */
@@ -28,6 +29,14 @@ const GLYPH: Partial<Record<NodeKind, string>> = {
   collection: "▤",
 };
 
+/**
+ * How long to wait before applying a filter, in ms.
+ *
+ * Long enough to skip the letters of a word being typed, short enough that the
+ * list still feels attached to the box.
+ */
+const FILTER_DELAY = 120;
+
 interface TreeState {
   children: Record<string, SchemaNode[]>;
   expanded: Set<string>;
@@ -44,6 +53,7 @@ export interface NodeContext {
 export function SchemaTree({
   connectionId,
   activeDatabase,
+  activeObject,
   onOpenTable,
   onSelectDatabase,
   onOpenScript,
@@ -52,6 +62,14 @@ export function SchemaTree({
   connectionId: string;
   /** The database the session is pointed at, marked in the list. */
   activeDatabase: string | null;
+  /**
+   * The object the active tab is showing, marked in the list.
+   *
+   * Carries its schema and database because a name alone is ambiguous: two
+   * schemas holding a `users` table is the normal case, not a corner one, and
+   * marking both would point at a table nobody opened.
+   */
+  activeObject: { name: string; schema?: string | undefined; database?: string | undefined } | null;
   /** Clicking an object asks the workspace to open it as a tab. */
   onOpenTable: (node: SchemaNode & NodeContext) => void;
   /** Clicking a database asks the session to switch to it. */
@@ -69,6 +87,16 @@ export function SchemaTree({
     refresh: (() => void) | null,
   ) => void;
 }) {
+  const [filter, setFilter] = useState("");
+  /**
+   * The filter actually applied, a beat behind what is being typed.
+   *
+   * Every keystroke otherwise re-walks and re-renders the whole tree, and on
+   * the schema this feature exists for — thousands of loaded objects — that is
+   * felt as the box not keeping up with typing. The input stays instant; only
+   * the work behind it waits.
+   */
+  const [applied, setApplied] = useState("");
   const [roots, setRoots] = useState<SchemaNode[] | null>(null);
   const [rootError, setRootError] = useState<string | null>(null);
   const [tree, setTree] = useState<TreeState>({
@@ -98,6 +126,17 @@ export function SchemaTree({
       cancelled = true;
     };
   }, [connectionId]);
+
+  useEffect(() => {
+    // Clearing is instant — there is no work to defer, and a box that empties
+    // but leaves the tree filtered for another beat reads as broken.
+    if (filter === "") {
+      setApplied("");
+      return;
+    }
+    const timer = setTimeout(() => setApplied(filter), FILTER_DELAY);
+    return () => clearTimeout(timer);
+  }, [filter]);
 
   /** Forget a node's children and fetch them again. */
   const reload = useCallback(
@@ -171,6 +210,100 @@ export function SchemaTree({
     [connectionId, tree.expanded, tree.children],
   );
 
+  // Deliberately not `filter`: see `applied` above.
+  const needle = applied.trim();
+
+  /**
+   * Which nodes survive the filter, and how many matched by name.
+   *
+   * Computed once for the whole tree rather than per node: with several
+   * thousand objects loaded, asking each row to search its own subtree turns
+   * one pass into thousands of overlapping ones.
+   *
+   * A node survives if its own name matches or anything beneath it does —
+   * otherwise a match three levels down would be unreachable, which is the
+   * same as not matching.
+   *
+   * `null` means no filter is on, which is different from a filter that
+   * matched nothing.
+   */
+  const { visible, onPath, matched } = useMemo(() => {
+    if (!needle) {
+      return { visible: null as Set<string> | null, onPath: new Set<string>(), matched: 0 };
+    }
+
+    const ids = new Set<string>();
+    // Nodes with a match *below* them, which are the only ones worth opening
+    // on the filter's behalf. A node that matches by its own name keeps
+    // whatever expansion state the user gave it — filtering for a table should
+    // find the table, not splay its columns open.
+    const path = new Set<string>();
+    let count = 0;
+
+    const walk = (node: SchemaNode): boolean => {
+      // Children first, so a matching descendant is recorded even when the
+      // parent matches too and would otherwise short-circuit the walk.
+      let below = false;
+      for (const child of tree.children[node.id] ?? []) {
+        if (walk(child)) below = true;
+      }
+
+      const self = matchesName(node.name, needle);
+      if (self) count += 1;
+      if (below) path.add(node.id);
+      if (self || below) {
+        ids.add(node.id);
+        return true;
+      }
+      return false;
+    };
+
+    for (const root of roots ?? []) walk(root);
+    return { visible: ids, onPath: path, matched: count };
+  }, [roots, tree.children, needle]);
+
+  /**
+   * The filter box.
+   *
+   * Sticky rather than scrolling away with the tree: on the list this exists
+   * for, scrolling back to the top to change the filter is the problem.
+   */
+  const search = (
+    <div className="sticky top-0 z-10 border-b border-border bg-surface-1 p-1.5">
+      <div className="relative">
+        <input
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setFilter("");
+          }}
+          placeholder="Filter objects…"
+          aria-label="Filter objects by name"
+          spellCheck={false}
+          className="h-6 w-full rounded border border-border bg-surface-0 pr-5 pl-1.5 text-[11px] outline-none focus:border-accent"
+        />
+        {filter && (
+          <button
+            onClick={() => setFilter("")}
+            aria-label="Clear the filter"
+            className="absolute inset-y-0 right-0 w-5 text-[11px] text-text-muted hover:text-text"
+          >
+            ✕
+          </button>
+        )}
+      </div>
+      {needle && (
+        <p className="px-0.5 pt-1 text-[10px] text-text-muted">
+          {matched === 0 ? "Nothing loaded matches" : `${matched} matching`}
+          {/* Said plainly, because a filter that searched only part of the tree
+              and did not say so would read as "this database has no such
+              table". */}
+          <span className="text-text-muted/60"> · searches what is expanded</span>
+        </p>
+      )}
+    </div>
+  );
+
   if (rootError) {
     return (
       <p role="alert" className="px-2 py-3 text-[11px] text-danger">
@@ -192,24 +325,31 @@ export function SchemaTree({
   }
 
   return (
-    <ul className="py-1">
-      {roots.map((node) => (
-        <TreeNode
-          key={node.id}
-          node={node}
-          depth={0}
-          tree={tree}
-          context={{}}
-          activeDatabase={activeDatabase}
-          onToggle={toggle}
-          onOpenTable={onOpenTable}
-          onSelectDatabase={onSelectDatabase}
-          onOpenScript={onOpenScript}
-          onContextMenu={onContextMenu}
-          onReload={reload}
-        />
-      ))}
-    </ul>
+    <>
+      {search}
+      <ul className="py-1">
+        {roots.map((node) => (
+          <TreeNode
+            key={node.id}
+            node={node}
+            depth={0}
+            tree={tree}
+            context={{}}
+            activeDatabase={activeDatabase}
+            onToggle={toggle}
+            onOpenTable={onOpenTable}
+            onSelectDatabase={onSelectDatabase}
+            onOpenScript={onOpenScript}
+            onContextMenu={onContextMenu}
+            onReload={reload}
+            activeObject={activeObject}
+            visible={visible}
+            onPath={onPath}
+            needle={needle}
+          />
+        ))}
+      </ul>
+    </>
   );
 }
 
@@ -225,6 +365,10 @@ function TreeNode({
   onOpenScript,
   onContextMenu,
   onReload,
+  activeObject,
+  visible,
+  onPath,
+  needle,
 }: {
   node: SchemaNode;
   depth: number;
@@ -242,8 +386,28 @@ function TreeNode({
     refresh: (() => void) | null,
   ) => void;
   onReload: (node: SchemaNode) => void;
+  activeObject: { name: string; schema?: string | undefined; database?: string | undefined } | null;
+  /** Node ids that survive the filter, or `null` when no filter is on. */
+  visible: Set<string> | null;
+  /** Node ids with a match somewhere beneath them. */
+  onPath: Set<string>;
+  needle: string;
 }) {
-  const expanded = tree.expanded.has(node.id);
+  // A filtered-out node renders nothing at all rather than being hidden with
+  // CSS: on a schema with thousands of objects the point is to stop building
+  // the rows, not to build them and then not show them.
+  if (visible && !visible.has(node.id)) return null;
+
+  const filtering = visible !== null;
+  const userExpanded = tree.expanded.has(node.id);
+  // Anything on the path to a match opens itself: a match three levels down
+  // that you still have to click your way to is a match you had to already
+  // know about. Only the path, though — a node that matched by its own name
+  // keeps the state the user gave it.
+  //
+  // Written to a local rather than into `tree.expanded`, so clearing the
+  // filter puts the tree back exactly as they had it.
+  const expanded = userExpanded || (filtering && onPath.has(node.id));
   const loading = tree.loading.has(node.id);
   const children = tree.children[node.id];
   const error = tree.failed[node.id];
@@ -257,6 +421,18 @@ function TreeNode({
   const scripted = node.kind === "function" || node.kind === "procedure" || node.kind === "trigger";
   const isDatabase = node.kind === "database";
   const isActiveDatabase = isDatabase && node.name === activeDatabase;
+
+  // The object the active tab is showing. Matched on schema and database as
+  // well as name, because two schemas holding a `users` table is the normal
+  // case and marking both would point at a table nobody opened. A side that is
+  // unknown on either the node or the tab is not evidence of a mismatch, so it
+  // does not count against the comparison.
+  const isActiveObject =
+    (opens || scripted) &&
+    activeObject !== null &&
+    node.name === activeObject.name &&
+    (!activeObject.schema || !context.schema || activeObject.schema === context.schema) &&
+    (!activeObject.database || !context.database || activeObject.database === context.database);
 
   // Each level contributes its own name to what its children inherit.
   const childContext: NodeContext = {
@@ -305,7 +481,7 @@ function TreeNode({
         style={{ paddingLeft: depth * 12 + 6 }}
         className={cx(
           "flex cursor-default items-center gap-1.5 py-[3px] pr-2 hover:bg-surface-2",
-          isActiveDatabase && "bg-surface-2",
+          (isActiveDatabase || isActiveObject) && "bg-surface-2",
         )}
         title={node.detail ? `${node.name} — ${node.detail}` : node.name}
       >
@@ -332,13 +508,25 @@ function TreeNode({
         <span
           className={cx(
             "truncate text-[11.5px]",
-            // The database in use is the one every unqualified statement runs
-            // against, which is worth more than a subtle highlight.
-            isActiveDatabase ? "font-medium text-accent" : "text-text",
-            node.kind === "folder" && "text-text-muted uppercase tracking-wide text-[10px]",
+            // Two different kinds of "you are here", both worth more than a
+            // subtle highlight: the database every unqualified statement runs
+            // against, and the object the tab in front of you is showing.
+            isActiveDatabase && "font-bold text-accent",
+            isActiveObject && !isActiveDatabase && "font-bold text-text",
+            !isActiveDatabase && !isActiveObject && "text-text",
+            node.kind === "folder" && "text-[10px] tracking-wide text-text-muted uppercase",
           )}
         >
-          {node.name}
+          {/* Split around the filter so it is visible *why* a row is in the
+              list — over thousands of similar names, "it matched somewhere" is
+              not enough to scan by. */}
+          {needle
+            ? splitHighlight(node.name, needle).map((part, i) => (
+                <span key={i} className={part.match ? "text-accent underline" : undefined}>
+                  {part.text}
+                </span>
+              ))
+            : node.name}
         </span>
         {node.detail && (
           <span className="ml-auto shrink-0 truncate pl-2 font-mono text-[9.5px] text-text-muted/70">
@@ -359,7 +547,7 @@ function TreeNode({
 
       {expanded && children && (
         <ul>
-          {children.length === 0 ? (
+          {children.length === 0 && !filtering ? (
             <li
               style={{ paddingLeft: (depth + 1) * 12 + 20 }}
               className="py-1 text-[10.5px] text-text-muted/60"
@@ -381,6 +569,10 @@ function TreeNode({
                 onOpenScript={onOpenScript}
                 onContextMenu={onContextMenu}
                 onReload={onReload}
+                activeObject={activeObject}
+                visible={visible}
+                onPath={onPath}
+                needle={needle}
               />
             ))
           )}
