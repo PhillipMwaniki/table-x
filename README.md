@@ -15,7 +15,7 @@ Windows · Linux · macOS · iOS · Android
 ---
 
 > [!WARNING]
-> **Status: pre-release (v0.2.0).** Five drivers, the editor, the grid, tunnelling and
+> **Status: pre-release (v0.3.0).** Five drivers, the editor, the grid, tunnelling and
 > the power features are built and tested — see [Roadmap](#roadmap) for exactly what
 > works today. Windows and Linux installers are produced by CI but are **not code-signed
 > yet**, so the first launch warns. macOS is not built by CI — signing it needs a paid
@@ -671,7 +671,7 @@ To cut a release:
 ```bash
 # The tag and the version in tauri.conf.json and Cargo.toml must agree —
 # nothing enforces that yet, so check it by eye.
-git tag v0.2.0 && git push origin v0.2.0
+git tag v0.3.0 && git push origin v0.3.0
 ```
 
 The release is left as a draft on purpose: somebody should read the generated notes and
