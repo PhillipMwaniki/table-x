@@ -1029,9 +1029,15 @@ export function Workspace({
                     </span>
                   )}
 
-                  {/* Only where the engine has them. ClickHouse would get
-                      three buttons that can do nothing but produce an error. */}
-                  {transaction?.supported && tab.kind === "query" && (
+                  {/* Only where the engine has them: ClickHouse would get three
+                      buttons that can do nothing but produce an error.
+
+                      On table tabs as well as query ones. The transaction
+                      belongs to the connection rather than to a tab, so hiding
+                      the badge on the tab somebody happened to switch to would
+                      hide the fact that their edits are still uncommitted —
+                      and a grid edit lands inside it just as a statement does. */}
+                  {transaction?.supported && (
                     <TransactionControls
                       open={transaction.open}
                       readOnly={connection.read_only}
@@ -1639,7 +1645,10 @@ function TransactionControls({
     <span className="flex items-center gap-1.5">
       {/* Loud on purpose. Uncommitted work that the user has forgotten about is
           work that a disconnect throws away. */}
-      <span className="rounded bg-warn/15 px-1.5 py-0.5 text-[10px] font-medium text-warn">
+      <span
+        className="rounded bg-warn/15 px-1.5 py-0.5 text-[10px] font-medium text-warn"
+        title="Nothing since Begin is visible to anyone else yet. Grid editing is unavailable until this is settled; statements in the editor run inside it."
+      >
         IN TRANSACTION
       </span>
       <Button variant="ghost" className="h-6" onClick={() => onEnd("commit")} title="Keep it all">

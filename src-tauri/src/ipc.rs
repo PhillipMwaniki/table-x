@@ -1319,6 +1319,34 @@ pub async fn kill_session(
     Ok(guard.kill_session(&session_id).await?)
 }
 
+/// Refuse a grid edit while the user is holding a transaction open.
+///
+/// Every driver's edit path opens a transaction of its own — that is the whole
+/// mechanism behind "exactly one row or nothing", and it is what makes inline
+/// editing safe. Nested inside a transaction the user opened, the same mechanism
+/// turns dangerous rather than merely redundant: MySQL's `START TRANSACTION`
+/// implicitly commits the pending one, and PostgreSQL's inner `COMMIT` ends the
+/// outer one. Either way an inline cell edit would silently commit work somebody
+/// opened a transaction specifically to review first.
+///
+/// So it is refused, and named. The statement editor still works — a typed
+/// `UPDATE` runs inside the transaction exactly as expected, because it is not
+/// wrapped in one.
+///
+/// The proper fix is a savepoint around the row check rather than a transaction,
+/// which every one of these engines supports; until each driver does that, this
+/// is the honest answer.
+fn refuse_edit_inside_transaction(session: &crate::sessions::Session) -> IpcResult<()> {
+    if session.in_transaction() {
+        return Err(tablex_core::Error::Unsupported(
+            "grid edits are not available while a transaction is open — commit or roll back              first, or write the statement in the editor, which does run inside it"
+                .into(),
+        )
+        .into());
+    }
+    Ok(())
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub async fn apply_edit(
     state: tauri::State<'_, AppState>,
@@ -1333,6 +1361,7 @@ pub async fn apply_edit(
     }
 
     let session = state.sessions.get(&connection_id).await?;
+    refuse_edit_inside_transaction(&session)?;
     let mut guard = session.connection.lock().await;
     Ok(guard.apply_edit(&edit).await?)
 }
@@ -1355,6 +1384,7 @@ pub async fn insert_row(
     }
 
     let session = state.sessions.get(&connection_id).await?;
+    refuse_edit_inside_transaction(&session)?;
     let mut guard = session.connection.lock().await;
     Ok(guard.insert_row(&insert).await?)
 }
@@ -1374,6 +1404,7 @@ pub async fn delete_row(
     }
 
     let session = state.sessions.get(&connection_id).await?;
+    refuse_edit_inside_transaction(&session)?;
     let mut guard = session.connection.lock().await;
     Ok(guard.delete_row(&delete).await?)
 }
