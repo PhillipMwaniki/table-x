@@ -14,6 +14,9 @@
 import { create } from "zustand";
 import { ipc, IpcError } from "@/lib/ipc";
 import { useSettings } from "@/store/settings";
+import { load as loadStore } from "@tauri-apps/plugin-store";
+import type { Store } from "@tauri-apps/plugin-store";
+import { parseSaved, shouldAutoRun, toSaved } from "@/lib/session";
 import type {
   CompletionScope,
   DiffReport,
@@ -117,6 +120,56 @@ export function tabsOf(state: { tabs: Record<string, Tab[]> }, connectionId: str
   return state.tabs[connectionId] ?? (NO_TABS as Tab[]);
 }
 
+const WORKSPACE_FILE = "workspace.json";
+
+/**
+ * How long to wait before writing tabs to disk, in ms.
+ *
+ * Every keystroke in the editor changes a tab. Writing on each one would put a
+ * file write in the typing path for no benefit — what is being protected
+ * against is a crash, and half a second of typing is what such a crash costs.
+ */
+const PERSIST_DELAY = 500;
+
+let handle: Store | null = null;
+/** One pending write per connection — two connections must not cancel each other. */
+const persistTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/**
+ * Write one connection's tabs, a beat after they stop changing.
+ *
+ * Failures are logged and swallowed. A workspace that could not be saved is
+ * annoying at the next launch; an error dialog in the middle of typing is
+ * annoying now, and about something the user cannot act on.
+ */
+function persist(connectionId: string, tabs: Tab[], activeId: string | undefined) {
+  // An empty list is not saved. Disconnecting clears a connection's tabs, and
+  // writing that through would erase the workspace someone expects to find
+  // when they connect again — the cost of the other choice is that closing
+  // every tab by hand does not clear the file, which is the harmless failure.
+  if (tabs.length === 0) return;
+
+  const pending = persistTimers.get(connectionId);
+  if (pending) clearTimeout(pending);
+
+  persistTimers.set(
+    connectionId,
+    setTimeout(async () => {
+      persistTimers.delete(connectionId);
+      try {
+        handle ??= await loadStore(WORKSPACE_FILE);
+        await handle.set(connectionId, toSaved(tabs, activeId));
+        await handle.save();
+      } catch (e) {
+        // A workspace that could not be saved is annoying at the next launch;
+        // an error dialog mid-typing is annoying now, about something the user
+        // cannot act on.
+        console.warn("could not save the workspace", e);
+      }
+    }, PERSIST_DELAY),
+  );
+}
+
 let counter = 0;
 function nextId(): string {
   counter += 1;
@@ -193,6 +246,8 @@ interface WorkspaceState {
   goToPage: (connectionId: string, tabId: string, offset: number) => Promise<void>;
 
   loadSession: (connectionId: string) => Promise<void>;
+  /** Bring back the tabs this connection had when the app last closed. */
+  restore: (connectionId: string) => Promise<void>;
   /**
    * Point the session at another database.
    *
@@ -476,8 +531,56 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       // simply will not mark one.
     }
 
+    // Only for a connection with nothing open. Reconnecting mid-session must
+    // not throw away the tabs already in front of somebody.
+    if (tabsOf(get(), id).length === 0) await get().restore(id);
+
     // Every connection starts with somewhere to type.
     if (tabsOf(get(), id).length === 0) get().openQuery(id);
+  },
+
+  restore: async (id) => {
+    let saved;
+    try {
+      handle ??= await loadStore(WORKSPACE_FILE);
+      saved = parseSaved(await handle.get(id));
+    } catch (e) {
+      // A workspace that cannot be read is a workspace that starts empty,
+      // which is recoverable. Failing the connection over it would not be.
+      console.warn("could not read the saved workspace", e);
+      return;
+    }
+    if (!saved) return;
+
+    // Fresh ids rather than the saved ones: the counter that hands them out
+    // starts at zero each launch, so reusing them would collide with the very
+    // next tab opened.
+    const tabs = saved.tabs.map((entry) =>
+      blankTab({
+        kind: entry.kind,
+        title: entry.title,
+        database: entry.database,
+        schema: entry.schema,
+        sql: entry.sql,
+        ...(entry.view ? { view: entry.view } : {}),
+        ...(entry.cells ? { cells: entry.cells } : {}),
+        notebookId: entry.notebookId,
+      }),
+    );
+
+    const active = tabs[saved.active] ?? tabs[0];
+    set((s) => ({
+      tabs: { ...s.tabs, [id]: tabs },
+      active: { ...s.active, [id]: active?.id ?? "" },
+    }));
+
+    // Only the one being looked at, and only if it is safe to run unbidden —
+    // see `shouldAutoRun`. Loading every restored tab would fire a query per
+    // tab at connect time.
+    const entry = saved.tabs[saved.active];
+    if (active && entry && shouldAutoRun(entry)) {
+      void get().run(id, active.id);
+    }
   },
 
   switchDatabase: async (id, database) => {
@@ -740,3 +843,14 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     }
   },
 }));
+
+// Saving is wired here rather than into each action that changes a tab. There
+// are a dozen of those, and one of them forgetting would be a bug nobody
+// notices until the crash it was supposed to protect against.
+useWorkspace.subscribe((state, previous) => {
+  for (const id of Object.keys(state.tabs)) {
+    const changed =
+      state.tabs[id] !== previous.tabs[id] || state.active[id] !== previous.active[id];
+    if (changed) persist(id, state.tabs[id] ?? [], state.active[id]);
+  }
+});
