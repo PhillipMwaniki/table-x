@@ -832,7 +832,15 @@ impl MysqlConnection {
         // An empty column set means the statement returned no rows — a write or
         // DDL. More reliable than sniffing the leading keyword, which misjudges
         // CTEs and `INSERT ... RETURNING` on MariaDB.
-        let meta = result.columns();
+        //
+        // Both spellings of "no columns" have to be caught. A write reports its
+        // OK packet as `None` on some server and crate combinations and as
+        // `Some([])` on others — MySQL 8.4 does the latter — and only checking
+        // for `None` sent writes down the rows path, so an `INSERT` came back as
+        // an empty result set with no affected-row count. A real result set
+        // always has at least one column, so filtering the empty case cannot
+        // swallow one.
+        let meta = result.columns().filter(|columns| !columns.is_empty());
         let Some(meta) = meta else {
             let affected = result.affected_rows();
             let last_insert_id = result.last_insert_id();

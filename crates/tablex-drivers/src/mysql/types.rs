@@ -108,7 +108,62 @@ fn decode_int(i: i64, column: &Column) -> Value {
     Value::Int(i)
 }
 
-fn decode_bytes(bytes: &[u8], column: &Column, _unsigned: bool, binary: bool) -> Value {
+/// Decode an integer the text protocol handed over as digits.
+///
+/// This is the path that matters in practice: `query_iter` speaks the text
+/// protocol, so every value the grid shows arrives as bytes and lands here,
+/// while the binary protocol's already-typed `UInt` is handled in [`decode`].
+///
+/// The unsigned flag is the only thing that says whether the digits fit an
+/// `i64`. Parsing as `i64` unconditionally fails above `i64::MAX` and then falls
+/// through to text, which turned `UNSIGNED BIGINT` values near the top of the
+/// range into strings — sortable as text, not as numbers, and no longer marked
+/// exact.
+fn decode_int_text(bytes: &[u8], column: &Column, unsigned: bool) -> Value {
+    let Ok(s) = std::str::from_utf8(bytes) else {
+        return Value::Bytes(bytes.to_vec());
+    };
+
+    match parse_int_text(s, unsigned) {
+        Some(IntText::Signed(i)) => decode_int(i, column),
+        Some(IntText::Unsigned(u)) => Value::UInt(u),
+        None => text_or_bytes(bytes),
+    }
+}
+
+/// Which integer variant a run of digits needs to stay exact.
+#[derive(Debug, PartialEq, Eq)]
+enum IntText {
+    /// Fits an `i64`, so the column's own rules still apply — `TINYINT(1)` is a
+    /// bool, everything else an `Int`.
+    Signed(i64),
+    /// Past `i64::MAX` and unsigned, so only `UInt` holds it without wrapping.
+    Unsigned(u64),
+}
+
+/// Widest exact variant a run of integer digits fits, or `None` if they are not
+/// an integer at all.
+///
+/// Split out from [`decode_int_text`] so the rule can be tested without
+/// fabricating a `mysql_async::Column`, which has no public constructor — and
+/// this is a rule worth testing offline, since getting it wrong silently
+/// downgrades an exact value rather than failing.
+fn parse_int_text(s: &str, unsigned: bool) -> Option<IntText> {
+    // Tried first only when the column says unsigned. A signed column holding
+    // "-1" must not be read as a u64 — `parse::<u64>` rejects it anyway, so this
+    // is belt as much as order.
+    if unsigned {
+        if let Ok(u) = s.parse::<u64>() {
+            return Some(match i64::try_from(u) {
+                Ok(i) => IntText::Signed(i),
+                Err(_) => IntText::Unsigned(u),
+            });
+        }
+    }
+    s.parse::<i64>().ok().map(IntText::Signed)
+}
+
+fn decode_bytes(bytes: &[u8], column: &Column, unsigned: bool, binary: bool) -> Value {
     use ColumnType::*;
 
     match column.column_type() {
@@ -164,11 +219,7 @@ fn decode_bytes(bytes: &[u8], column: &Column, _unsigned: bool, binary: bool) ->
             .unwrap_or_else(|| text_or_bytes(bytes)),
 
         MYSQL_TYPE_TINY | MYSQL_TYPE_SHORT | MYSQL_TYPE_LONG | MYSQL_TYPE_LONGLONG
-        | MYSQL_TYPE_INT24 | MYSQL_TYPE_YEAR => std::str::from_utf8(bytes)
-            .ok()
-            .and_then(|s| s.parse::<i64>().ok())
-            .map(|i| decode_int(i, column))
-            .unwrap_or_else(|| text_or_bytes(bytes)),
+        | MYSQL_TYPE_INT24 | MYSQL_TYPE_YEAR => decode_int_text(bytes, column, unsigned),
 
         _ => text_or_bytes(bytes),
     }
@@ -290,6 +341,48 @@ mod tests {
     #[test]
     fn null_has_no_parameter_text() {
         assert_eq!(to_param(&Value::Null), None);
+    }
+
+    #[test]
+    fn unsigned_integers_past_i64_stay_exact() {
+        // The bug this pins: `query_iter` speaks the text protocol, so every
+        // value the grid shows arrives as digits. Parsing them as i64 first
+        // fails above i64::MAX and fell through to text, so an UNSIGNED BIGINT
+        // near the top of its range was shown as a string — sorted as text and
+        // no longer marked exact.
+        assert_eq!(
+            parse_int_text("18446744073709551615", true),
+            Some(IntText::Unsigned(u64::MAX))
+        );
+    }
+
+    #[test]
+    fn values_that_fit_i64_stay_signed_so_the_column_rules_still_apply() {
+        // Narrowing when it fits is what keeps TINYINT(1) decoding as a bool
+        // rather than as 1 and 0: that decision belongs to `decode_int`, which
+        // only sees the signed case.
+        assert_eq!(parse_int_text("1", true), Some(IntText::Signed(1)));
+        assert_eq!(
+            parse_int_text("9223372036854775807", true),
+            Some(IntText::Signed(i64::MAX))
+        );
+    }
+
+    #[test]
+    fn a_signed_column_never_reads_its_value_as_unsigned() {
+        // Negatives must survive, and a signed column holding a value that only
+        // fits a u64 is a contradiction — reporting the digits as text is the
+        // honest answer, not silently choosing a variant for it.
+        assert_eq!(parse_int_text("-1", false), Some(IntText::Signed(-1)));
+        assert_eq!(parse_int_text("-1", true), Some(IntText::Signed(-1)));
+        assert_eq!(parse_int_text("18446744073709551615", false), None);
+    }
+
+    #[test]
+    fn what_is_not_an_integer_is_not_claimed_to_be_one() {
+        assert_eq!(parse_int_text("", true), None);
+        assert_eq!(parse_int_text("12.5", true), None);
+        assert_eq!(parse_int_text("banana", false), None);
     }
 
     #[test]

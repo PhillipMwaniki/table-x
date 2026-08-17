@@ -5,8 +5,12 @@
 //! unless `TABLEX_TEST_MYSQL` is set to a connection URL:
 //!
 //! ```text
-//! TABLEX_TEST_MYSQL=mysql://root:password@localhost:3306/mysql cargo test -p tablex-drivers
+//! TABLEX_TEST_MYSQL=mysql://root:password@localhost:3306/tablex_scratch cargo test -p tablex-drivers
 //! ```
+//!
+//! Point it at a scratch database rather than at `mysql`: these tests create and
+//! drop tables, and the object tree hides the system schemas, so a suite aimed at
+//! one cannot exercise browsing.
 //!
 //! Skipped rather than failed when unset, for the same reason as the PostgreSQL
 //! suite: a missing database is a missing environment, not a broken driver.
@@ -280,31 +284,72 @@ async fn apply_edit_updates_one_row_and_refuses_a_non_unique_key() {
 #[tokio::test]
 async fn browse_walks_databases_then_tables_then_columns() {
     requires_server!(conn);
-    exec(&mut conn, "DROP TABLE IF EXISTS tx_browse").await;
+
+    // In a database of its own rather than the connected one, because the tree
+    // deliberately hides the system schemas -- `mysql` among them, which is where
+    // the README used to point this suite. Browsing from inside a hidden schema
+    // cannot find anything by design, so the walk needs a database it can see.
+    let db = "tx_browse_db";
+    let created = conn
+        .execute(
+            &format!("CREATE DATABASE IF NOT EXISTS {db}"),
+            &FetchOptions::default(),
+        )
+        .await;
+    if created.is_err() {
+        // Skipped rather than failed: no CREATE DATABASE privilege is a missing
+        // environment, the same call the suite makes about a missing server.
+        eprintln!("skipping: could not create {db} -- CREATE DATABASE privilege needed");
+        return;
+    }
+
+    exec(&mut conn, &format!("DROP TABLE IF EXISTS {db}.tx_browse")).await;
     exec(
         &mut conn,
-        "CREATE TABLE tx_browse (id INT PRIMARY KEY, label VARCHAR(64) NOT NULL)",
+        &format!("CREATE TABLE {db}.tx_browse (id INT PRIMARY KEY, label VARCHAR(64) NOT NULL)"),
     )
     .await;
-
-    let db = test_config().expect("config").0.database.unwrap();
 
     let databases = conn.browse(None).await.expect("browse databases");
     // System catalogs are noise and must be hidden.
     assert!(!databases.iter().any(|d| d.name == "information_schema"));
     assert!(!databases.iter().any(|d| d.name == "performance_schema"));
 
-    let tables = conn.browse(Some(&db)).await.expect("browse tables");
-    assert!(tables.iter().any(|t| t.name == "tx_browse"));
+    // Each level is expanded by the id the level above handed back, rather than
+    // by a path built here. Ids are an encoded form — `/` separated, with
+    // separators in a name escaped — so a hand-built string both assumes the
+    // encoding and skips the folder level that sits between a database and its
+    // tables. This walk is the contract the UI actually uses.
+    let database = databases
+        .iter()
+        .find(|d| d.name == db)
+        .unwrap_or_else(|| panic!("browse did not list {db}"));
+    // The hiding the database above works around, asserted rather than assumed.
+    assert!(!databases.iter().any(|d| d.name == "mysql"));
 
-    let columns = conn
-        .browse(Some(&format!("{db}.tx_browse")))
+    let folders = conn
+        .browse(Some(&database.id))
         .await
-        .expect("browse columns");
+        .expect("browse folders");
+    let tables_folder = folders
+        .iter()
+        .find(|f| f.name == "Tables")
+        .expect("a Tables folder");
+
+    let tables = conn
+        .browse(Some(&tables_folder.id))
+        .await
+        .expect("browse tables");
+    let table = tables
+        .iter()
+        .find(|t| t.name == "tx_browse")
+        .expect("tx_browse under Tables");
+
+    let columns = conn.browse(Some(&table.id)).await.expect("browse columns");
     let names: Vec<_> = columns.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(names, vec!["id", "label"]);
 
-    exec(&mut conn, "DROP TABLE tx_browse").await;
+    exec(&mut conn, &format!("DROP DATABASE {db}")).await;
 }
 
 #[tokio::test]

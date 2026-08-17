@@ -532,7 +532,7 @@ The other server-backed drivers work the same way, each with its own variable:
 | Variable | Example |
 |---|---|
 | `TABLEX_TEST_PG` | `postgres://user:password@localhost:5432/postgres` |
-| `TABLEX_TEST_MYSQL` | `mysql://root:password@localhost:3306/mysql` |
+| `TABLEX_TEST_MYSQL` | `mysql://root:password@localhost:3306/tablex_scratch` |
 | `TABLEX_TEST_MSSQL` | `mssql://sa:Password123@localhost:1433/master` |
 | `TABLEX_TEST_CLICKHOUSE` | `clickhouse://default:@localhost:8123/default` |
 
