@@ -120,7 +120,8 @@ Milestone 1 ("core + power features") is the current target.
 | ✅ | **SQL Server driver** | Exact `DECIMAL`, `sys.*` introspection, escaped-literal edits. Read-only results — tiberius exposes no column provenance. 24 tests. |
 | ✅ | **IPC + session registry** | 14 commands, per-session locking, atomic connection persistence, OS keychain. |
 | ✅ | **Connection manager UI** | Per-driver forms, test-connection, colour tags, read-only flag. |
-| ✅ | **Schema browser** | Lazily expanded object tree with per-node caching. |
+| ✅ | **Schema browser** | Lazily expanded object tree with per-node caching, a name filter, and the database and open object marked. |
+| ✅ | **Table structure** | Columns, types, nullability, defaults, indexes and foreign keys, behind a Data/Structure toggle in the table's own tab. |
 | ✅ | **SQL editor** | CodeMirror 6, schema-aware autocomplete, run-selection, error positioning. |
 | ✅ | **Result grid** | Virtualized rows, inline editing, sorting, filtering, undo/redo. |
 | 🚧 | **Query cancellation** | SQLite and PostgreSQL can stop a running statement; the button is hidden on the three drivers that cannot yet. |

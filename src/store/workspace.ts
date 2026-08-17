@@ -72,6 +72,14 @@ export interface Tab {
   plan?: Plan | null;
   /** A schema comparison, for a diff tab. */
   diff?: DiffReport | null;
+  /**
+   * Which half of a table tab is showing.
+   *
+   * On the tab rather than in the view, so switching to another tab and back
+   * returns to the side you were on — the two are views of one thing, and
+   * losing your place on every switch would make the toggle a chore.
+   */
+  view?: "data" | "structure";
   /** The cells of a notebook tab. Results are held in the view, not here. */
   cells?: NotebookCell[];
   /** The stored notebook this tab is editing, once it has been saved. */
@@ -162,6 +170,7 @@ interface WorkspaceState {
   openDiff: (connectionId: string, title: string, report: DiffReport) => void;
   openNotebook: (connectionId: string, notebook?: Notebook) => void;
   setCells: (connectionId: string, tabId: string, cells: NotebookCell[]) => void;
+  setTabView: (connectionId: string, tabId: string, view: "data" | "structure") => void;
   renameNotebookTab: (
     connectionId: string,
     tabId: string,
@@ -312,6 +321,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   },
 
   setCells: (id, tabId, cells) => set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { cells }) })),
+
+  setTabView: (id, tabId, view) => set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { view }) })),
 
   renameNotebookTab: (id, tabId, notebookId, name) =>
     set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { notebookId, title: name }) })),

@@ -25,6 +25,7 @@ import { CompareDialog } from "./CompareDialog";
 import { PrivilegesPanel } from "./PrivilegesPanel";
 import { ConfirmDestructive } from "./ConfirmDestructive";
 import { NotebookView } from "./NotebookView";
+import { StructureView } from "./StructureView";
 import { Button, Spinner, cx } from "../ui/primitives";
 import { ContextMenu } from "../ui/ContextMenu";
 import { Dialog } from "../ui/Dialog";
@@ -93,6 +94,7 @@ export function Workspace({
     openDiff,
     openNotebook,
     setCells,
+    setTabView,
     renameNotebookTab,
     setTabError,
     setTabNotice,
@@ -859,6 +861,29 @@ export function Workspace({
                     <span className="text-[10.5px] text-text-muted">Ctrl+Enter</span>
                   )}
 
+                  {/* Two views of one table, so a toggle rather than a second
+                      tab: looking at a table means moving between what is in
+                      it and how it is built, repeatedly. */}
+                  {tab.kind === "table" && (
+                    <span className="flex overflow-hidden rounded border border-border">
+                      {(["data", "structure"] as const).map((mode) => (
+                        <button
+                          key={mode}
+                          onClick={() => setTabView(connection.id, tab.id, mode)}
+                          aria-pressed={(tab.view ?? "data") === mode}
+                          className={cx(
+                            "px-2 py-0.5 text-[11px] capitalize",
+                            (tab.view ?? "data") === mode
+                              ? "bg-surface-3 text-text"
+                              : "text-text-muted hover:bg-surface-2 hover:text-text",
+                          )}
+                        >
+                          {mode}
+                        </button>
+                      ))}
+                    </span>
+                  )}
+
                   {connection.read_only && (
                     <span className="rounded bg-warn/15 px-1.5 py-0.5 text-[10px] font-medium text-warn">
                       READ-ONLY
@@ -974,6 +999,8 @@ export function Workspace({
                 readOnly={connection.read_only}
                 onOpenQuery={(sql) => openScriptTab(connection.id, { title: "Statement", sql })}
               />
+            ) : tab.kind === "table" && tab.view === "structure" ? (
+              <StructureView connectionId={connection.id} table={tab.title} schema={tab.schema} />
             ) : (
               <div ref={splitRef} className="flex min-h-0 flex-1 flex-col">
                 {tab.kind === "query" && (
