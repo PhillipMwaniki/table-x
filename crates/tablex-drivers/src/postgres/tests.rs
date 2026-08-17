@@ -500,3 +500,12 @@ async fn ping_succeeds_on_a_live_connection() {
     requires_server!(conn);
     conn.ping().await.expect("ping");
 }
+
+#[test]
+fn transaction_control_uses_this_engine_s_spelling() {
+    // Every engine spells these differently and only some accept the others, so
+    // the words are pinned rather than left to a careless edit.
+    assert_eq!(super::TX.begin, "BEGIN");
+    assert_eq!(super::TX.commit, "COMMIT");
+    assert_eq!(super::TX.rollback, "ROLLBACK");
+}

@@ -13,8 +13,8 @@ use tablex_core::{
     config::ConnectionConfig,
     diagram::{GraphTable, SchemaGraph},
     driver::{
-        Capabilities, CancelHandle, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
-        PlaceholderStyle, RowDelete, RowEdit, RowInsert, RowSink, STREAM_BATCH,
+        CancelHandle, Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
+        PlaceholderStyle, RowDelete, RowEdit, RowInsert, RowSink, TxStatements, STREAM_BATCH,
     },
     error::{Error, Result},
     plan::{Plan, PlanRow},
@@ -23,6 +23,14 @@ use tablex_core::{
     sql::{quote_ident, split_statements},
 };
 use types::Affinity;
+
+/// SQLite's own spelling. `END` is a synonym for `COMMIT` here, but the
+/// explicit word is what the rest of the application scans for.
+pub(crate) const TX: TxStatements = TxStatements {
+    begin: "BEGIN",
+    commit: "COMMIT",
+    rollback: "ROLLBACK",
+};
 
 const QUOTE: char = '"';
 
@@ -534,8 +542,11 @@ impl Connection for SqliteConnection {
                 placeholders
             );
 
-            let params: Vec<rusqlite::types::Value> =
-                insert.values.iter().map(|(_, v)| types::to_sql(v)).collect();
+            let params: Vec<rusqlite::types::Value> = insert
+                .values
+                .iter()
+                .map(|(_, v)| types::to_sql(v))
+                .collect();
 
             conn.execute(&sql, rusqlite::params_from_iter(params.iter()))
                 .map_err(map_err)?;
@@ -608,6 +619,10 @@ impl Connection for SqliteConnection {
 
     fn cancel_handle(&self) -> Option<Arc<dyn CancelHandle>> {
         Some(Arc::new(SqliteCancel(Arc::clone(&self.interrupt))))
+    }
+
+    fn transaction_statements(&self) -> Option<TxStatements> {
+        Some(TX)
     }
 
     async fn ping(&mut self) -> Result<()> {

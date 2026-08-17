@@ -8,10 +8,12 @@
 //! rather than corrupting the protocol stream.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tablex_core::{
     driver::CancelHandle,
     error::{Error, Result},
+    sql::TxEffect,
     Connection,
 };
 use tablex_tunnel::Tunnel;
@@ -29,6 +31,15 @@ pub struct LiveSession {
     /// that queued for it would arrive after the thing it was cancelling had
     /// finished. This lock is only ever held long enough to clone the handle.
     cancel: Mutex<Option<Arc<dyn CancelHandle>>>,
+    /// Whether this session is currently inside a transaction.
+    ///
+    /// Tracked here rather than asked of the server on every keystroke: three of
+    /// the four engines that have transactions will answer, but each answers
+    /// differently and one round trip per poll to redraw an indicator is a poor
+    /// trade. Atomic rather than behind the connection's lock so the indicator
+    /// can be read while a statement is running — which is exactly when somebody
+    /// looks at it.
+    in_transaction: AtomicBool,
 }
 
 impl LiveSession {
@@ -40,7 +51,57 @@ impl LiveSession {
             connection: Mutex::new(connection),
             tunnel,
             cancel: Mutex::new(cancel),
+            in_transaction: AtomicBool::new(false),
         }
+    }
+
+    /// Whether a transaction is open on this session.
+    pub fn in_transaction(&self) -> bool {
+        self.in_transaction.load(Ordering::SeqCst)
+    }
+
+    /// Record what a submission did to the transaction state.
+    ///
+    /// Called after every successful execute, so a `BEGIN` somebody typed into
+    /// the editor moves the indicator exactly as the button does. An indicator
+    /// that says "no transaction" while the connection is holding locks is worse
+    /// than no indicator, because it is believed.
+    pub fn note_effect(&self, effect: Option<TxEffect>) {
+        match effect {
+            Some(TxEffect::Opened) => self.in_transaction.store(true, Ordering::SeqCst),
+            Some(TxEffect::Closed) => self.in_transaction.store(false, Ordering::SeqCst),
+            None => {}
+        }
+    }
+
+    /// Open a transaction.
+    pub async fn begin(&self) -> Result<()> {
+        // The flag moves only after the server agreed. Setting it first would
+        // show an open transaction that does not exist, and the next statement
+        // would silently auto-commit under a badge saying it had not.
+        self.connection.lock().await.begin().await?;
+        self.in_transaction.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// Commit the open transaction.
+    pub async fn commit(&self) -> Result<()> {
+        self.connection.lock().await.commit().await?;
+        self.in_transaction.store(false, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// Roll back the open transaction.
+    ///
+    /// A failed rollback still clears the flag. The usual cause is that the
+    /// transaction is already gone — the server rolled it back itself on a fatal
+    /// error, or the connection dropped — and in every one of those cases there
+    /// is no transaction left to be in. Leaving the badge lit would strand the
+    /// user with a button that cannot succeed.
+    pub async fn rollback(&self) -> Result<()> {
+        let result = self.connection.lock().await.rollback().await;
+        self.in_transaction.store(false, Ordering::SeqCst);
+        result
     }
 
     /// Stop whatever this session is running, if the engine can.
@@ -77,6 +138,9 @@ impl LiveSession {
         // travel with the swap — otherwise cancel would keep aiming at a
         // connection that is already closed.
         *self.cancel.lock().await = connection.cancel_handle();
+        // A new socket is not inside anything. Whatever was open went away with
+        // the old one, rolled back by the server.
+        self.in_transaction.store(false, Ordering::SeqCst);
         let mut guard = self.connection.lock().await;
         let mut previous = std::mem::replace(&mut *guard, connection);
         // Best effort: a socket that will not close cleanly must not stop the
@@ -206,6 +270,52 @@ mod tests {
         Box::new(FakeConnection {
             closes: Arc::clone(closes),
         })
+    }
+
+    #[tokio::test]
+    async fn a_typed_transaction_statement_moves_the_indicator() {
+        // The buttons are not the only way in. Someone who types BEGIN into the
+        // editor is just as inside a transaction, and an indicator that missed
+        // it would be believed anyway.
+        let closes = Arc::new(AtomicUsize::new(0));
+        let session = LiveSession::new(fake(&closes), None);
+        assert!(!session.in_transaction());
+
+        session.note_effect(Some(TxEffect::Opened));
+        assert!(session.in_transaction());
+
+        session.note_effect(None);
+        assert!(
+            session.in_transaction(),
+            "an ordinary statement changes nothing"
+        );
+
+        session.note_effect(Some(TxEffect::Closed));
+        assert!(!session.in_transaction());
+    }
+
+    #[tokio::test]
+    async fn switching_database_leaves_no_transaction_behind() {
+        // The transaction went away with the old socket. Reporting one on the
+        // new one would offer a commit that cannot land.
+        let closes = Arc::new(AtomicUsize::new(0));
+        let session = LiveSession::new(fake(&closes), None);
+        session.note_effect(Some(TxEffect::Opened));
+
+        session.replace(fake(&closes)).await;
+        assert!(!session.in_transaction());
+    }
+
+    #[tokio::test]
+    async fn a_driver_without_transactions_says_so() {
+        let closes = Arc::new(AtomicUsize::new(0));
+        let session = LiveSession::new(fake(&closes), None);
+        match session.begin().await {
+            Err(Error::Unsupported(_)) => {}
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
+        // And it must not claim to be in one it could not open.
+        assert!(!session.in_transaction());
     }
 
     #[tokio::test]

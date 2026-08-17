@@ -197,6 +197,18 @@ pub trait CancelHandle: Send + Sync {
     async fn cancel(&self) -> Result<()>;
 }
 
+/// How one engine spells the three transaction statements.
+///
+/// The only thing that differs between engines here is the wording, so the
+/// trait implements begin, commit and rollback once in terms of these rather
+/// than asking every driver to write the same three methods.
+#[derive(Debug, Clone, Copy)]
+pub struct TxStatements {
+    pub begin: &'static str,
+    pub commit: &'static str,
+    pub rollback: &'static str,
+}
+
 /// A new row, applied as a targeted `INSERT`.
 ///
 /// Only the columns the user filled in. Everything omitted is left to the
@@ -278,6 +290,56 @@ pub trait Connection: Send + Sync {
         Err(crate::error::Error::Unsupported(
             "this driver cannot delete rows".into(),
         ))
+    }
+
+    /// How this engine spells `BEGIN`, `COMMIT` and `ROLLBACK`.
+    ///
+    /// `None` where it has no transactions, which is what
+    /// [`Capabilities::transactions`] reports so the UI does not offer them.
+    fn transaction_statements(&self) -> Option<TxStatements> {
+        None
+    }
+
+    /// Open a transaction.
+    ///
+    /// Issued as a statement on this same session rather than held as an
+    /// object, because a transaction here spans several separate calls — the
+    /// user runs something, looks at it, and then decides. The server holds the
+    /// state, which is where it is true.
+    async fn begin(&mut self) -> Result<()> {
+        let statement = self.transaction_only()?.begin;
+        self.run_control(statement).await
+    }
+
+    async fn commit(&mut self) -> Result<()> {
+        let statement = self.transaction_only()?.commit;
+        self.run_control(statement).await
+    }
+
+    async fn rollback(&mut self) -> Result<()> {
+        let statement = self.transaction_only()?.rollback;
+        self.run_control(statement).await
+    }
+
+    /// The three statements, or a refusal naming why there are none.
+    fn transaction_only(&self) -> Result<TxStatements> {
+        self.transaction_statements().ok_or_else(|| {
+            crate::error::Error::Unsupported("this driver has no transactions".into())
+        })
+    }
+
+    /// Run one transaction-control statement.
+    async fn run_control(&mut self, statement: &str) -> Result<()> {
+        self.execute(
+            statement,
+            &FetchOptions {
+                max_rows: Some(1),
+                offset: 0,
+                timeout_secs: Some(30),
+            },
+        )
+        .await
+        .map(|_| ())
     }
 
     /// Cheap liveness check used before reusing a pooled session.

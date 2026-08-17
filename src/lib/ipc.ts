@@ -36,6 +36,7 @@ import type {
   SshConfig,
   TableDetail,
   Value,
+  TransactionState,
 } from "./types";
 
 /** An error from the backend, carrying its category so callers can branch. */
@@ -219,6 +220,13 @@ export const ipc = {
    * statement has often already finished.
    */
   cancelQuery: (connection_id: string) => call<void>("cancel_query", { connection_id }),
+
+  transactionState: (connection_id: string) =>
+    call<TransactionState>("transaction_state", { connection_id }),
+  beginTransaction: (connection_id: string) => call<void>("begin_transaction", { connection_id }),
+  commitTransaction: (connection_id: string) => call<void>("commit_transaction", { connection_id }),
+  rollbackTransaction: (connection_id: string) =>
+    call<void>("rollback_transaction", { connection_id }),
 
   /** What a submission would destroy, and whether this connection asks first. */
   inspectStatement: (connection_id: string, sql: string) =>

@@ -563,3 +563,13 @@ export interface BackendInfo {
   version: string;
   drivers: string[];
 }
+
+/** A session's transaction state, for the toolbar indicator. */
+export interface TransactionState {
+  /**
+   * Whether this engine has transactions at all. `false` hides the controls
+   * rather than offering buttons that can only produce an error.
+   */
+  supported: boolean;
+  open: boolean;
+}

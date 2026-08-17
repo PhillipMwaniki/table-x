@@ -20,8 +20,8 @@ use tablex_core::{
     config::{ConnectionConfig, TlsMode},
     diagram::SchemaGraph,
     driver::{
-        Capabilities, CancelHandle, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
-        PlaceholderStyle, RowDelete, RowEdit, RowInsert, RowSink, STREAM_BATCH,
+        CancelHandle, Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
+        PlaceholderStyle, RowDelete, RowEdit, RowInsert, RowSink, TxStatements, STREAM_BATCH,
     },
     error::{Error, Result},
     plan::Plan,
@@ -31,6 +31,14 @@ use tablex_core::{
     sql::{quote_ident, split_statements},
 };
 use tokio_postgres::{Client, NoTls};
+
+/// PostgreSQL accepts `START TRANSACTION` too; `BEGIN` is the shorter
+/// spelling it documents first.
+pub(crate) const TX: TxStatements = TxStatements {
+    begin: "BEGIN",
+    commit: "COMMIT",
+    rollback: "ROLLBACK",
+};
 
 const QUOTE: char = '"';
 
@@ -650,6 +658,10 @@ impl Connection for PostgresConnection {
 
     fn cancel_handle(&self) -> Option<Arc<dyn CancelHandle>> {
         Some(self.cancel.clone())
+    }
+
+    fn transaction_statements(&self) -> Option<TxStatements> {
+        Some(TX)
     }
 
     async fn ping(&mut self) -> Result<()> {

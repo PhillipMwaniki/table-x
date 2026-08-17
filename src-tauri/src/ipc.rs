@@ -405,6 +405,12 @@ pub async fn execute(
         guard.execute(&request.sql, &opts).await
     };
 
+    // A BEGIN somebody typed leaves the session just as inside a transaction as
+    // the button does, and only a submission that succeeded changed anything.
+    if outcome.is_ok() {
+        session.note_effect(tablex_core::sql::transaction_effect(&request.sql));
+    }
+
     // A paged fetch continues a query that is already in history; recording it
     // again would fill the panel with duplicates of whatever the user scrolled.
     if request.offset == 0 {
@@ -1004,6 +1010,64 @@ pub async fn cancel_query(
 ) -> IpcResult<()> {
     let session = state.sessions.get(&connection_id).await?;
     Ok(session.cancel().await?)
+}
+
+// ---------------------------------------------------------------------------
+// Transactions
+// ---------------------------------------------------------------------------
+
+/// A session's transaction state, for the indicator.
+#[derive(Serialize)]
+pub struct TransactionState {
+    /// Whether this engine has transactions at all. `false` hides the controls
+    /// rather than offering buttons that can only produce an error.
+    pub supported: bool,
+    pub open: bool,
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn transaction_state(
+    state: tauri::State<'_, AppState>,
+    connection_id: String,
+) -> IpcResult<TransactionState> {
+    let session = state.sessions.get(&connection_id).await?;
+    let supported = session
+        .connection
+        .lock()
+        .await
+        .transaction_statements()
+        .is_some();
+    Ok(TransactionState {
+        supported,
+        open: session.in_transaction(),
+    })
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn begin_transaction(
+    state: tauri::State<'_, AppState>,
+    connection_id: String,
+) -> IpcResult<()> {
+    let session = state.sessions.get(&connection_id).await?;
+    Ok(session.begin().await?)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn commit_transaction(
+    state: tauri::State<'_, AppState>,
+    connection_id: String,
+) -> IpcResult<()> {
+    let session = state.sessions.get(&connection_id).await?;
+    Ok(session.commit().await?)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn rollback_transaction(
+    state: tauri::State<'_, AppState>,
+    connection_id: String,
+) -> IpcResult<()> {
+    let session = state.sessions.get(&connection_id).await?;
+    Ok(session.rollback().await?)
 }
 
 /// What a submission would destroy, and whether this connection asks first.

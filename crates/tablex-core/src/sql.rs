@@ -643,6 +643,88 @@ pub fn hazards(sql: &str) -> Vec<Hazard> {
         .collect()
 }
 
+/// What a submission does to the session's transaction state.
+///
+/// The application knows about the transactions it opened through its own
+/// buttons. It would not know about one somebody typed into the editor — and an
+/// indicator that says "no transaction" while the connection is holding locks
+/// is worse than no indicator, because it is believed.
+///
+/// The last one wins: `COMMIT; BEGIN;` in one submission ends open, and
+/// reporting the first would describe a state that lasted microseconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TxEffect {
+    Opened,
+    Closed,
+}
+
+/// Scan a submission for transaction control.
+pub fn transaction_effect(sql: &str) -> Option<TxEffect> {
+    let words = bare_words(sql);
+    let mut effect = None;
+
+    // How many routine bodies and `CASE` expressions are currently open.
+    // `END` closes whichever of those is innermost, and only closes a
+    // transaction when none of them are open.
+    let mut nesting = 0usize;
+
+    let mut i = 0;
+    while i < words.len() {
+        let word = words[i].to_ascii_uppercase();
+        let next = words.get(i + 1).map(|w| w.to_ascii_uppercase());
+
+        match word.as_str() {
+            "START" if next.as_deref() == Some("TRANSACTION") => effect = Some(TxEffect::Opened),
+
+            // `BEGIN` also opens a routine body, where it is followed by the
+            // statements of that body rather than by the end of the statement.
+            // `BEGIN TRANSACTION`, `BEGIN WORK` and a bare `BEGIN` are the
+            // transaction; `BEGIN` followed by anything else opens a body, and
+            // is counted so the `END` that closes it is not read as a commit.
+            "BEGIN" => match next.as_deref() {
+                None | Some("TRANSACTION") | Some("WORK") | Some("ISOLATION") => {
+                    effect = Some(TxEffect::Opened)
+                }
+                _ => nesting += 1,
+            },
+
+            // `CASE ... END` is an expression, and its `END` is not a commit.
+            "CASE" => nesting += 1,
+
+            "COMMIT" | "ROLLBACK" | "END" => {
+                // `ROLLBACK TO SAVEPOINT` returns to a point inside the
+                // transaction and leaves it open, which is the opposite of what
+                // treating it as a close would report.
+                if word == "ROLLBACK" && next.as_deref() == Some("TO") {
+                    i += 1;
+                    continue;
+                }
+                // Only SQLite spells a commit `END`, and there it is far more
+                // often closing a body or a `CASE`. Whichever is innermost wins.
+                if word == "END" {
+                    if nesting > 0 {
+                        nesting -= 1;
+                        i += 1;
+                        continue;
+                    }
+                    // `END IF` / `END LOOP` / `END CASE` close a construct even
+                    // where the opener was not one this scan counted.
+                    if next.is_some() {
+                        i += 1;
+                        continue;
+                    }
+                }
+                effect = Some(TxEffect::Closed);
+            }
+
+            _ => {}
+        }
+        i += 1;
+    }
+
+    effect
+}
+
 /// Quote an identifier for interpolation into generated SQL.
 ///
 /// Used when building `UPDATE` statements for inline edits, where table and
@@ -667,6 +749,79 @@ pub fn quote_ident(name: &str, quote: char) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn transaction_control_is_recognised_in_every_spelling() {
+        assert_eq!(transaction_effect("BEGIN"), Some(TxEffect::Opened));
+        assert_eq!(
+            transaction_effect("begin transaction"),
+            Some(TxEffect::Opened)
+        );
+        assert_eq!(
+            transaction_effect("START TRANSACTION"),
+            Some(TxEffect::Opened)
+        );
+        assert_eq!(transaction_effect("COMMIT"), Some(TxEffect::Closed));
+        assert_eq!(
+            transaction_effect("ROLLBACK TRANSACTION"),
+            Some(TxEffect::Closed)
+        );
+    }
+
+    #[test]
+    fn an_ordinary_statement_changes_nothing() {
+        assert_eq!(transaction_effect("SELECT * FROM users"), None);
+        assert_eq!(transaction_effect("UPDATE t SET x = 1"), None);
+    }
+
+    #[test]
+    fn a_routine_body_is_not_a_transaction() {
+        // `BEGIN` opens a procedure body far more often than a transaction, and
+        // reporting one as the other would leave the indicator permanently on.
+        let body = "CREATE TRIGGER t AFTER INSERT ON x BEGIN UPDATE y SET n = 1; END";
+        assert_eq!(transaction_effect(body), None);
+    }
+
+    #[test]
+    fn a_case_expression_is_not_a_commit() {
+        // `CASE ... END` closes an expression. Reading its `END` as a commit
+        // would clear the indicator on an ordinary SELECT.
+        let sql = "SELECT CASE WHEN n > 1 THEN 'many' ELSE 'one' END FROM t";
+        assert_eq!(transaction_effect(sql), None);
+    }
+
+    #[test]
+    fn a_commit_still_counts_after_a_body_has_closed() {
+        // The nesting counter must come back down, or every statement after a
+        // trigger definition would be misread.
+        let sql = "CREATE TRIGGER t AFTER INSERT ON x BEGIN UPDATE y SET n = 1; END; COMMIT";
+        assert_eq!(transaction_effect(sql), Some(TxEffect::Closed));
+    }
+
+    #[test]
+    fn rolling_back_to_a_savepoint_leaves_the_transaction_open() {
+        // It returns to a point inside the transaction. Treating it as a close
+        // would report the opposite of what happened.
+        assert_eq!(transaction_effect("ROLLBACK TO SAVEPOINT s1"), None);
+        assert_eq!(transaction_effect("ROLLBACK TO s1"), None);
+    }
+
+    #[test]
+    fn the_last_one_in_a_submission_wins() {
+        // `COMMIT; BEGIN;` ends open, and reporting the first would describe a
+        // state that lasted microseconds.
+        assert_eq!(transaction_effect("COMMIT; BEGIN;"), Some(TxEffect::Opened));
+        assert_eq!(
+            transaction_effect("BEGIN; SELECT 1; COMMIT;"),
+            Some(TxEffect::Closed)
+        );
+    }
+
+    #[test]
+    fn the_words_do_not_count_inside_a_string_or_a_comment() {
+        assert_eq!(transaction_effect("SELECT 'commit'"), None);
+        assert_eq!(transaction_effect("SELECT 1 -- COMMIT"), None);
+    }
 
     #[test]
     fn a_delete_without_a_where_is_the_case_the_gate_exists_for() {

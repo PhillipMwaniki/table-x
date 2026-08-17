@@ -103,6 +103,8 @@ export function Workspace({
     applyEdit,
     goToPage,
     cancelQuery,
+    beginTransaction,
+    endTransaction,
     explain,
     clearPlan,
     undo,
@@ -179,6 +181,7 @@ export function Workspace({
   const tab = activeTab(connection.id);
   const completion = useWorkspace((s) => s.completion[connection.id] ?? null);
   const database = useWorkspace((s) => s.database[connection.id] ?? null);
+  const transaction = useWorkspace((s) => s.transaction[connection.id]);
 
   // The session's database and the first tab are established once per
   // connection; autocomplete is fetched once rather than per keystroke.
@@ -1026,6 +1029,17 @@ export function Workspace({
                     </span>
                   )}
 
+                  {/* Only where the engine has them. ClickHouse would get
+                      three buttons that can do nothing but produce an error. */}
+                  {transaction?.supported && tab.kind === "query" && (
+                    <TransactionControls
+                      open={transaction.open}
+                      readOnly={connection.read_only}
+                      onBegin={() => void beginTransaction(connection.id)}
+                      onEnd={(how) => void endTransaction(connection.id, how)}
+                    />
+                  )}
+
                   {connection.read_only && (
                     <span className="rounded bg-warn/15 px-1.5 py-0.5 text-[10px] font-medium text-warn">
                       READ-ONLY
@@ -1582,6 +1596,65 @@ export function menuFor(
   }
 
   return items;
+}
+
+/**
+ * Begin, commit, roll back — and the badge that says which.
+ *
+ * The badge is the point. Three of the four engines here leave a failed
+ * statement's transaction open and refuse everything after it, and somebody who
+ * cannot see that they are inside one reads the resulting wall of errors as the
+ * database being broken. The buttons are the smaller half of this feature.
+ *
+ * Nothing here is offered on a read-only connection: a transaction that can only
+ * contain reads is a lock held for no reason.
+ */
+function TransactionControls({
+  open,
+  readOnly,
+  onBegin,
+  onEnd,
+}: {
+  open: boolean;
+  readOnly: boolean;
+  onBegin: () => void;
+  onEnd: (how: "commit" | "rollback") => void;
+}) {
+  if (readOnly) return null;
+
+  if (!open) {
+    return (
+      <Button
+        variant="ghost"
+        className="h-6"
+        onClick={onBegin}
+        title="Open a transaction, so the next statements can be taken back"
+      >
+        Begin
+      </Button>
+    );
+  }
+
+  return (
+    <span className="flex items-center gap-1.5">
+      {/* Loud on purpose. Uncommitted work that the user has forgotten about is
+          work that a disconnect throws away. */}
+      <span className="rounded bg-warn/15 px-1.5 py-0.5 text-[10px] font-medium text-warn">
+        IN TRANSACTION
+      </span>
+      <Button variant="ghost" className="h-6" onClick={() => onEnd("commit")} title="Keep it all">
+        Commit
+      </Button>
+      <Button
+        variant="danger"
+        className="h-6"
+        onClick={() => onEnd("rollback")}
+        title="Discard everything since Begin"
+      >
+        Roll back
+      </Button>
+    </span>
+  );
 }
 
 function StatementTabs({

@@ -23,7 +23,7 @@ use tablex_core::{
     diagram::{GraphTable, SchemaGraph},
     driver::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
-        PlaceholderStyle, RowDelete, RowEdit, RowInsert, RowSink, STREAM_BATCH,
+        PlaceholderStyle, RowDelete, RowEdit, RowInsert, RowSink, TxStatements, STREAM_BATCH,
     },
     error::{Error, Result},
     plan::{Plan, PlanRow},
@@ -37,6 +37,14 @@ use tokio::net::TcpStream;
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 
 use futures_util::StreamExt;
+
+/// T-SQL requires the noun. A bare `COMMIT` is accepted, but the full form
+/// matches what the engine's own error messages talk about.
+pub(crate) const TX: TxStatements = TxStatements {
+    begin: "BEGIN TRANSACTION",
+    commit: "COMMIT TRANSACTION",
+    rollback: "ROLLBACK TRANSACTION",
+};
 
 /// SQL Server quotes identifiers with brackets; the closing bracket doubles.
 const QUOTE: char = '[';
@@ -694,6 +702,10 @@ impl Connection for MssqlConnection {
             .await
             .map_err(map_err)?;
         Ok(())
+    }
+
+    fn transaction_statements(&self) -> Option<TxStatements> {
+        Some(TX)
     }
 
     async fn ping(&mut self) -> Result<()> {

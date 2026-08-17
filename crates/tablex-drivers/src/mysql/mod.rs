@@ -19,7 +19,7 @@ use tablex_core::{
     diagram::{GraphTable, SchemaGraph},
     driver::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
-        PlaceholderStyle, RowDelete, RowEdit, RowInsert, RowSink, STREAM_BATCH,
+        PlaceholderStyle, RowDelete, RowEdit, RowInsert, RowSink, TxStatements, STREAM_BATCH,
     },
     error::{is_connection_refused, root_cause, Error, Result},
     plan::Plan,
@@ -30,6 +30,14 @@ use tablex_core::{
 };
 
 use mysql_async::prelude::*;
+
+/// `BEGIN` also works, but `START TRANSACTION` is the standard spelling and
+/// is unambiguous next to the `BEGIN` that opens a stored-procedure body.
+pub(crate) const TX: TxStatements = TxStatements {
+    begin: "START TRANSACTION",
+    commit: "COMMIT",
+    rollback: "ROLLBACK",
+};
 
 const QUOTE: char = '`';
 
@@ -663,6 +671,10 @@ impl Connection for MysqlConnection {
         }
         tx.commit().await.map_err(map_err)?;
         Ok(())
+    }
+
+    fn transaction_statements(&self) -> Option<TxStatements> {
+        Some(TX)
     }
 
     async fn ping(&mut self) -> Result<()> {

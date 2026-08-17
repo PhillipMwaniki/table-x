@@ -26,6 +26,7 @@ import type {
   QueryOutcome,
   RowEdit,
   StatementResult,
+  TransactionState,
   Value,
 } from "@/lib/types";
 
@@ -206,6 +207,14 @@ interface WorkspaceState {
   database: Record<string, string | null>;
   /** Set while a database switch is in flight, so the tree can show it. */
   switching: Record<string, boolean>;
+  /**
+   * Transaction state per connection.
+   *
+   * Refreshed after anything that could have changed it rather than polled: the
+   * backend already knows, and a badge that lags behind by a poll interval is a
+   * badge that is wrong at exactly the moment somebody reads it.
+   */
+  transaction: Record<string, TransactionState | undefined>;
 
   tabsFor: (connectionId: string) => Tab[];
   activeTab: (connectionId: string) => Tab | null;
@@ -242,6 +251,12 @@ interface WorkspaceState {
   run: (connectionId: string, tabId: string, sqlOverride?: string) => Promise<void>;
   /** Stop whatever this connection is running. */
   cancelQuery: (connectionId: string) => Promise<void>;
+  /** Re-read whether a transaction is open. */
+  refreshTransaction: (connectionId: string) => Promise<void>;
+  /** Open a transaction, so the next statements can be taken back. */
+  beginTransaction: (connectionId: string) => Promise<void>;
+  /** Settle the open transaction, one way or the other. */
+  endTransaction: (connectionId: string, how: "commit" | "rollback") => Promise<void>;
   /** Re-run this tab's statement at a different offset. */
   goToPage: (connectionId: string, tabId: string, offset: number) => Promise<void>;
 
@@ -297,6 +312,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   completion: {},
   database: {},
   switching: {},
+  transaction: {},
 
   tabsFor: (id) => tabsOf(get(), id),
   activeTab: (id) => {
@@ -531,6 +547,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       // simply will not mark one.
     }
 
+    // Whether the engine has transactions at all decides whether the controls
+    // are drawn, so it is known before the first tab appears.
+    await get().refreshTransaction(id);
+
     // Only for a connection with nothing open. Reconnecting mid-session must
     // not throw away the tabs already in front of somebody.
     if (tabsOf(get(), id).length === 0) await get().restore(id);
@@ -630,6 +650,35 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { plan: null }) }));
   },
 
+  refreshTransaction: async (id) => {
+    try {
+      const state = await ipc.transactionState(id);
+      set((s) => ({ transaction: { ...s.transaction, [id]: state } }));
+    } catch {
+      // A connection that has gone away has no transaction state to show, and
+      // failing the query that triggered this refresh would report the wrong
+      // problem.
+      set((s) => ({ transaction: { ...s.transaction, [id]: undefined } }));
+    }
+  },
+
+  beginTransaction: async (id) => {
+    await ipc.beginTransaction(id);
+    await get().refreshTransaction(id);
+  },
+
+  endTransaction: async (id, how) => {
+    try {
+      if (how === "commit") await ipc.commitTransaction(id);
+      else await ipc.rollbackTransaction(id);
+    } finally {
+      // Even on failure. A commit that was refused usually means the
+      // transaction is already gone, and leaving the badge lit would strand the
+      // user with buttons that cannot succeed.
+      await get().refreshTransaction(id);
+    }
+  },
+
   cancelQuery: async (id) => {
     // Nothing is patched here. The statement's own rejection is what ends the
     // running state, and pre-emptively clearing it would leave the tab looking
@@ -690,6 +739,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
           redo: [],
         }),
       }));
+      // A statement can open or close a transaction without going anywhere near
+      // the buttons. The backend already knows which; asking it is cheaper than
+      // keeping a second SQL scanner here that could disagree.
+      void get().refreshTransaction(id);
     } catch (e) {
       const err = e as IpcError;
       // Cancelling is something the user asked for, so it is reported the way

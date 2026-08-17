@@ -1132,7 +1132,9 @@ async fn a_running_statement_can_be_cancelled() {
     // blocking pool is inside the query.
     let mut conn = connect().await;
 
-    let handle = conn.cancel_handle().expect("SQLite advertises cancellation");
+    let handle = conn
+        .cancel_handle()
+        .expect("SQLite advertises cancellation");
 
     // A recursive CTE with no bound: it never completes on its own, so a test
     // that passes cannot be passing because the query happened to finish.
@@ -1165,7 +1167,11 @@ async fn a_running_statement_can_be_cancelled() {
     let err = outcome.expect_err("an interrupted statement does not return rows");
     // Reported as cancelled rather than as a query error: the user asked for
     // this, and a red error message for something that worked is wrong.
-    assert_eq!(err.category(), tablex_core::ErrorCategory::Cancelled, "{err:?}");
+    assert_eq!(
+        err.category(),
+        tablex_core::ErrorCategory::Cancelled,
+        "{err:?}"
+    );
 }
 
 #[tokio::test]
@@ -1292,4 +1298,13 @@ async fn a_delete_with_no_key_is_refused_before_it_runs() {
 
     let rs = query(&mut conn, "SELECT count(*) FROM users").await;
     assert_eq!(rs.rows[0][0], Value::Int(2), "rows were deleted");
+}
+
+#[test]
+fn transaction_control_uses_this_engine_s_spelling() {
+    // Every engine spells these differently and only some accept the others, so
+    // the words are pinned rather than left to a careless edit.
+    assert_eq!(super::TX.begin, "BEGIN");
+    assert_eq!(super::TX.commit, "COMMIT");
+    assert_eq!(super::TX.rollback, "ROLLBACK");
 }
