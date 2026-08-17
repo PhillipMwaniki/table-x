@@ -197,6 +197,32 @@ pub trait CancelHandle: Send + Sync {
     async fn cancel(&self) -> Result<()>;
 }
 
+/// A new row, applied as a targeted `INSERT`.
+///
+/// Only the columns the user filled in. Everything omitted is left to the
+/// server, which is the only thing that knows what a default or a generated
+/// key should be — sending an explicit NULL instead would override a default
+/// with nothing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RowInsert {
+    pub schema: Option<String>,
+    pub table: String,
+    pub values: Vec<(String, Value)>,
+}
+
+/// One row removed, applied as a targeted `DELETE`.
+///
+/// Carries the full key the row had when it was read, for the same reason
+/// [`RowEdit`] does: it is what makes the statement safe against the row having
+/// changed since, and what lets the driver refuse when it matches other than
+/// exactly one row.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RowDelete {
+    pub schema: Option<String>,
+    pub table: String,
+    pub key: Vec<(String, Value)>,
+}
+
 /// A database driver: a stateless factory for connections.
 #[async_trait]
 pub trait Driver: Send + Sync {
@@ -231,6 +257,28 @@ pub trait Connection: Send + Sync {
     /// Apply an inline grid edit. Implementations must verify exactly one row was
     /// affected and roll back otherwise.
     async fn apply_edit(&mut self, edit: &RowEdit) -> Result<()>;
+
+    /// Add a row.
+    ///
+    /// Defaulted where the engine cannot do this safely — see the ClickHouse
+    /// driver, which refuses for the same reason it refuses an edit.
+    async fn insert_row(&mut self, _insert: &RowInsert) -> Result<()> {
+        Err(crate::error::Error::Unsupported(
+            "this driver cannot insert rows".into(),
+        ))
+    }
+
+    /// Remove a row.
+    ///
+    /// Implementations must verify exactly one row was affected and roll back
+    /// otherwise, exactly as [`Connection::apply_edit`] does. A delete that
+    /// matched two rows has already destroyed one too many by the time anyone
+    /// reads the count, unless it was in a transaction.
+    async fn delete_row(&mut self, _delete: &RowDelete) -> Result<()> {
+        Err(crate::error::Error::Unsupported(
+            "this driver cannot delete rows".into(),
+        ))
+    }
 
     /// Cheap liveness check used before reusing a pooled session.
     async fn ping(&mut self) -> Result<()>;

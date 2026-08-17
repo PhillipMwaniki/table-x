@@ -809,7 +809,9 @@ fn driver_advertises_only_what_it_implements() {
     assert!(info.capabilities.column_provenance);
     // Deliberately unsupported — see the comment on `info()`.
     assert!(!info.capabilities.schemas);
-    assert!(!info.capabilities.cancel);
+    // `sqlite3_interrupt` is callable from another thread, which is exactly
+    // what the flag claims. Exercised end to end by the cancellation tests.
+    assert!(info.capabilities.cancel);
 }
 
 /// Collects what a stream hands over, so tests can assert on the pieces.
@@ -1177,4 +1179,117 @@ async fn cancelling_an_idle_connection_is_harmless() {
     // And the connection is still usable afterwards.
     let rs = query(&mut conn, "SELECT count(*) FROM users").await;
     assert_eq!(rs.rows.len(), 1);
+}
+
+#[tokio::test]
+async fn a_row_can_be_inserted_and_deleted() {
+    let mut conn = seeded().await;
+
+    conn.insert_row(&RowInsert {
+        schema: None,
+        table: "users".into(),
+        values: vec![
+            ("id".into(), Value::Int(9)),
+            ("email".into(), Value::Text("new@example.com".into())),
+        ],
+    })
+    .await
+    .expect("insert");
+
+    let rs = query(&mut conn, "SELECT email FROM users WHERE id = 9").await;
+    assert_eq!(rs.rows[0][0], Value::Text("new@example.com".into()));
+
+    conn.delete_row(&RowDelete {
+        schema: None,
+        table: "users".into(),
+        key: vec![("id".into(), Value::Int(9))],
+    })
+    .await
+    .expect("delete");
+
+    let rs = query(&mut conn, "SELECT count(*) FROM users WHERE id = 9").await;
+    assert_eq!(rs.rows[0][0], Value::Int(0));
+}
+
+#[tokio::test]
+async fn an_omitted_column_takes_the_servers_default() {
+    // Only what the user filled in is sent. Sending an explicit NULL for the
+    // rest would override a default with nothing, which is a different row
+    // from the one they asked for.
+    let mut conn = seeded().await;
+
+    conn.insert_row(&RowInsert {
+        schema: None,
+        table: "users".into(),
+        values: vec![
+            ("id".into(), Value::Int(10)),
+            ("email".into(), Value::Text("defaulted@example.com".into())),
+        ],
+    })
+    .await
+    .expect("insert");
+
+    // `active BOOLEAN NOT NULL DEFAULT 1` was never mentioned.
+    let rs = query(&mut conn, "SELECT active FROM users WHERE id = 10").await;
+    assert_eq!(rs.rows[0][0], Value::Bool(true));
+}
+
+#[tokio::test]
+async fn a_delete_that_would_hit_more_than_one_row_is_refused() {
+    // The guarantee the edit path makes, on the operation where getting it
+    // wrong cannot be undone.
+    let mut conn = connect().await;
+    exec(&mut conn, "CREATE TABLE notes (tag TEXT, body TEXT)").await;
+    exec(
+        &mut conn,
+        "INSERT INTO notes (tag, body) VALUES ('x', 'one'), ('x', 'two')",
+    )
+    .await;
+
+    let err = conn
+        .delete_row(&RowDelete {
+            schema: None,
+            table: "notes".into(),
+            key: vec![("tag".into(), Value::Text("x".into()))],
+        })
+        .await
+        .expect_err("a key matching two rows must not delete both");
+    assert!(err.to_string().contains("expected exactly 1"), "{err}");
+
+    // And nothing was destroyed on the way to finding out.
+    let rs = query(&mut conn, "SELECT count(*) FROM notes").await;
+    assert_eq!(rs.rows[0][0], Value::Int(2));
+}
+
+#[tokio::test]
+async fn deleting_a_row_that_is_already_gone_is_refused_rather_than_silent() {
+    // Zero is as wrong as two: it means the row moved or somebody else removed
+    // it, and reporting success would say the opposite.
+    let mut conn = seeded().await;
+    let gone = RowDelete {
+        schema: None,
+        table: "users".into(),
+        key: vec![("id".into(), Value::Int(404))],
+    };
+    let err = conn.delete_row(&gone).await.expect_err("no such row");
+    assert!(err.to_string().contains("expected exactly 1"), "{err}");
+}
+
+#[tokio::test]
+async fn a_delete_with_no_key_is_refused_before_it_runs() {
+    // Without a key the WHERE clause matches every row, and this statement
+    // does not get a second chance.
+    let mut conn = seeded().await;
+    let err = conn
+        .delete_row(&RowDelete {
+            schema: None,
+            table: "users".into(),
+            key: Vec::new(),
+        })
+        .await
+        .expect_err("a keyless delete must be refused");
+    assert!(matches!(err, Error::Unsupported(_)), "{err:?}");
+
+    let rs = query(&mut conn, "SELECT count(*) FROM users").await;
+    assert_eq!(rs.rows[0][0], Value::Int(2), "rows were deleted");
 }

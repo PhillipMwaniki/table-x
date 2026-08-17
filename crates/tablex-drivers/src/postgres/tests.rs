@@ -109,8 +109,10 @@ fn driver_advertises_provenance_which_sqlite_cannot() {
     // The capability that makes ad-hoc results editable on PostgreSQL.
     assert!(info.capabilities.column_provenance);
     assert!(info.capabilities.schemas);
-    // Not yet wired to a cancel token, so not advertised.
-    assert!(!info.capabilities.cancel);
+    // Backed by a real cancel token, sent over its own connection — see
+    // `PostgresCancel`. The UI draws the stop button from this flag, so an
+    // advertisement without an implementation would be a button that fails.
+    assert!(info.capabilities.cancel);
     assert_eq!(
         info.capabilities.placeholder_style,
         tablex_core::driver::PlaceholderStyle::Dollar

@@ -80,6 +80,8 @@ pub fn run() {
             ipc::preview_csv,
             ipc::cancel_export,
             ipc::apply_edit,
+            ipc::insert_row,
+            ipc::delete_row,
             ipc::completion_scope,
             ipc::ssh_host_fingerprint,
             ipc::format_sql,

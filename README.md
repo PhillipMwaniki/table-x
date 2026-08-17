@@ -123,7 +123,7 @@ Milestone 1 ("core + power features") is the current target.
 | ✅ | **Schema browser** | Lazily expanded object tree with per-node caching, a name filter, and the database and open object marked. |
 | ✅ | **Table structure** | Columns, types, nullability, defaults, indexes and foreign keys, behind a Data/Structure toggle in the table's own tab. |
 | ✅ | **SQL editor** | CodeMirror 6, schema-aware autocomplete, run-selection, error positioning. |
-| ✅ | **Result grid** | Virtualized rows, inline editing, sorting, filtering, undo/redo. |
+| ✅ | **Result grid** | Virtualized rows, inline editing, row insert and delete, sorting, filtering, undo/redo. |
 | 🚧 | **Query cancellation** | SQLite and PostgreSQL can stop a running statement; the button is hidden on the three drivers that cannot yet. |
 | ✅ | **SSH tunnels** | Password / private key / agent auth, multi-hop chains (ProxyJump), mandatory per-hop host key verification. Tested end to end against an in-process SSH server. |
 | ✅ | **Query history** | Every run persisted with its timing and outcome, searchable across connections. 10 tests. |

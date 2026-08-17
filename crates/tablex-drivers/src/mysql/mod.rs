@@ -19,7 +19,7 @@ use tablex_core::{
     diagram::{GraphTable, SchemaGraph},
     driver::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
-        PlaceholderStyle, RowEdit, RowSink, STREAM_BATCH,
+        PlaceholderStyle, RowDelete, RowEdit, RowInsert, RowSink, STREAM_BATCH,
     },
     error::{is_connection_refused, root_cause, Error, Result},
     plan::Plan,
@@ -548,14 +548,7 @@ impl Connection for MysqlConnection {
             .collect::<Vec<_>>()
             .join(" AND ");
 
-        let qualified = match &edit.schema {
-            Some(db) => format!(
-                "{}.{}",
-                quote_ident(db, QUOTE),
-                quote_ident(&edit.table, QUOTE)
-            ),
-            None => quote_ident(&edit.table, QUOTE),
-        };
+        let qualified = qualify_opt(edit.schema.as_deref(), &edit.table);
         let sql = format!("UPDATE {qualified} SET {assignments} WHERE {predicate}");
 
         // A transaction so a mismatch can be rolled back rather than left applied.
@@ -578,6 +571,91 @@ impl Connection for MysqlConnection {
                 message: format!(
                     "edit matched {affected} rows, expected at most 1 — \
                      the key is not unique"
+                ),
+                position: None,
+                code: None,
+            });
+        }
+        tx.commit().await.map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn insert_row(&mut self, insert: &RowInsert) -> Result<()> {
+        if insert.values.is_empty() {
+            return Err(Error::Unsupported(
+                "an inserted row needs at least one value".into(),
+            ));
+        }
+
+        let mut params: Vec<mysql_async::Value> = Vec::new();
+        let columns = insert
+            .values
+            .iter()
+            .map(|(col, val)| {
+                params.push(param(val));
+                quote_ident(col, QUOTE)
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let placeholders = vec!["?"; insert.values.len()].join(", ");
+
+        let sql = format!(
+            "INSERT INTO {} ({columns}) VALUES ({placeholders})",
+            qualify_opt(insert.schema.as_deref(), &insert.table)
+        );
+
+        self.conn
+            .exec_drop(&sql, mysql_async::Params::Positional(params))
+            .await
+            .map_err(map_err)
+    }
+
+    async fn delete_row(&mut self, delete: &RowDelete) -> Result<()> {
+        if delete.key.is_empty() {
+            return Err(Error::Unsupported(
+                "cannot delete a row that has no unique key".into(),
+            ));
+        }
+
+        let mut params: Vec<mysql_async::Value> = Vec::new();
+        let predicate = delete
+            .key
+            .iter()
+            .map(|(col, val)| {
+                // `= NULL` is never true; only `IS NULL` matches.
+                if val.is_null() {
+                    return format!("{} IS NULL", quote_ident(col, QUOTE));
+                }
+                params.push(param(val));
+                format!("{} = ?", quote_ident(col, QUOTE))
+            })
+            .collect::<Vec<_>>()
+            .join(" AND ");
+
+        let sql = format!(
+            "DELETE FROM {} WHERE {predicate}",
+            qualify_opt(delete.schema.as_deref(), &delete.table)
+        );
+
+        let mut tx = self
+            .conn
+            .start_transaction(mysql_async::TxOpts::default())
+            .await
+            .map_err(map_err)?;
+        tx.exec_drop(&sql, mysql_async::Params::Positional(params))
+            .await
+            .map_err(map_err)?;
+        let affected = tx.affected_rows();
+
+        // Unlike an edit, zero is wrong here as well as two. An edit reports
+        // zero when the new value equals the old one; a delete that removed
+        // nothing means the row was already gone, and saying it worked would
+        // say the opposite.
+        if affected != 1 {
+            tx.rollback().await.map_err(map_err)?;
+            return Err(Error::Query {
+                message: format!(
+                    "delete matched {affected} rows, expected exactly 1 —                      the row may have changed since it was loaded"
                 ),
                 position: None,
                 code: None,
@@ -1108,3 +1186,15 @@ const MYSQL_FUNCTIONS: &[&str] = &[
 
 #[cfg(test)]
 mod tests;
+
+/// Like [`qualify`], but for a database name that may not have been given.
+///
+/// A row edit carries the schema it was read from, and an unqualified table
+/// resolves against whatever database the session is pointed at — which is the
+/// right behaviour when the caller genuinely does not know.
+fn qualify_opt(schema: Option<&str>, table: &str) -> String {
+    match schema {
+        Some(db) => qualify(db, table),
+        None => quote_ident(table, QUOTE),
+    }
+}

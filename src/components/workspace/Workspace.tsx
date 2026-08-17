@@ -26,6 +26,7 @@ import { PrivilegesPanel } from "./PrivilegesPanel";
 import { ConfirmDestructive } from "./ConfirmDestructive";
 import { NotebookView } from "./NotebookView";
 import { StructureView } from "./StructureView";
+import { InsertRowDialog } from "./InsertRowDialog";
 import { Button, Spinner, cx } from "../ui/primitives";
 import { ContextMenu } from "../ui/ContextMenu";
 import { Dialog } from "../ui/Dialog";
@@ -130,7 +131,18 @@ export function Workspace({
     tabId: string;
     sql: string;
     hazards: HazardItem[];
+    /**
+     * What to do if it is confirmed.
+     *
+     * Absent for a statement, which is simply run. Present for a grid delete,
+     * which is several statements and so cannot be described by one string —
+     * the gate is about the decision, not about the shape of what follows it.
+     */
+    onConfirm?: () => void;
   } | null>(null);
+
+  /** The table an insert form is open for, with its columns. */
+  const [inserting, setInserting] = useState<{ table: string; columns: ColumnDef[] } | null>(null);
 
   /** Rows picked in the grid, waiting for a format to be chosen. */
   const [exporting, setExporting] = useState<Value[][] | null>(null);
@@ -241,6 +253,136 @@ export function Workspace({
       if (current) {
         setTabError(connection.id, current.id, (e as Error).message);
       }
+    }
+  };
+
+  /**
+   * The one table a result's columns all came from.
+   *
+   * Not a field on the result: provenance lives per column, and `editable` is
+   * exactly the guarantee that they agree on a single table. Reading it back
+   * here rather than trusting a separate field keeps one source of truth.
+   */
+  const sourceOf = (result: StatementResult | undefined) => {
+    if (result?.type !== "rows" || !result.editable) return null;
+    const source = result.columns.find((c) => c.source)?.source;
+    return source ? { table: source.table, schema: source.schema } : null;
+  };
+
+  /**
+   * Open the insert form, once the table's columns are known.
+   *
+   * Fetched rather than taken from the result: a result carries the columns
+   * the *query* returned, and inserting needs the ones the table has —
+   * including the defaults and generated keys that decide which fields can be
+   * left alone.
+   */
+  const beginInsert = async () => {
+    const current = activeTab(connection.id);
+    const source = sourceOf(current?.outcome?.statements[current.activeStatement]);
+    if (!current || !source) return;
+
+    try {
+      const detail = await ipc.tableDetail(connection.id, source.table, source.schema);
+      setInserting({ table: detail.name, columns: detail.columns });
+    } catch (e) {
+      reportJobFailure(e as IpcError, current.id, "Reading the table");
+    }
+  };
+
+  /** Apply a filled-in insert form, then re-read so the new row is the server's. */
+  const insertRow = async (table: string, values: [string, Value][]) => {
+    const current = activeTab(connection.id);
+    const source = sourceOf(current?.outcome?.statements[current.activeStatement]);
+    if (!current) return;
+
+    try {
+      await ipc.insertRow(connection.id, {
+        schema: source?.schema,
+        table,
+        values,
+      });
+      await run(connection.id, current.id);
+      setTabNotice(connection.id, current.id, "Row inserted.");
+    } catch (e) {
+      reportJobFailure(e as IpcError, current.id, "Insert");
+    }
+  };
+
+  /**
+   * Confirm before deleting, using the same gate every other destructive path
+   * goes through — a row removed from the grid is as gone as one removed by a
+   * statement, and the connection that asks about one should ask about both.
+   */
+  const confirmDelete = async (rowIndexes: number[]) => {
+    if (rowIndexes.length === 0) return;
+    const current = activeTab(connection.id);
+    if (!current) return;
+
+    const report = await ipc
+      .inspectStatement(connection.id, "DELETE FROM x WHERE id = 1")
+      .catch(() => null);
+
+    if (report?.confirms) {
+      setPending({
+        tabId: current.id,
+        sql: `${rowIndexes.length} selected row${rowIndexes.length === 1 ? "" : "s"}`,
+        hazards: [
+          {
+            summary: `deletes ${rowIndexes.length} row${rowIndexes.length === 1 ? "" : "s"} from ${
+              sourceOf(current.outcome?.statements[current.activeStatement])?.table ?? "this table"
+            }`,
+            unbounded: false,
+          },
+        ],
+        onConfirm: () => void deleteRows(rowIndexes),
+      });
+      return;
+    }
+    await deleteRows(rowIndexes);
+  };
+
+  /**
+   * Delete the picked rows, one statement each.
+   *
+   * One at a time rather than a single `IN (…)`: each carries the full key the
+   * row had when it was read, and the driver refuses anything matching other
+   * than exactly one row. A combined statement could not make that check per
+   * row, which is the guarantee worth keeping on the operation that cannot be
+   * undone.
+   */
+  const deleteRows = async (rowIndexes: number[]) => {
+    const current = activeTab(connection.id);
+    const result = current?.outcome?.statements[current.activeStatement];
+    const source = sourceOf(result);
+    if (!current || result?.type !== "rows" || !source) return;
+
+    let removed = 0;
+    try {
+      for (const index of rowIndexes) {
+        const row = result.rows[index];
+        if (!row) continue;
+        const key: [string, Value][] = result.key_columns.map((name) => [
+          name,
+          row[result.columns.findIndex((c) => c.name === name)] ?? { kind: "null" },
+        ]);
+        await ipc.deleteRow(connection.id, {
+          schema: source.schema,
+          table: source.table,
+          key,
+        });
+        removed += 1;
+      }
+      // Re-read rather than splicing the grid: the rows that remain are the
+      // server's answer, and a locally patched view would disagree with it the
+      // moment anything cascaded.
+      await run(connection.id, current.id);
+      setTabNotice(connection.id, current.id, `Deleted ${removed} row${removed === 1 ? "" : "s"}.`);
+    } catch (e) {
+      // Whatever was removed before the failure stays removed, so the grid is
+      // refreshed either way rather than left describing rows that are gone.
+      await run(connection.id, current.id);
+      reportJobFailure(e as IpcError, current.id, `Delete after ${removed} row(s)`);
     }
   };
 
@@ -1111,6 +1253,10 @@ export function Workspace({
                       }}
                       onExportRows={(rows) => setExporting(rows)}
                       readOnlyDetail={readOnlyDetail}
+                      onInsertRow={active.editable ? () => void beginInsert() : undefined}
+                      onDeleteRows={
+                        active.editable ? (rows) => void confirmDelete(rows) : undefined
+                      }
                     />
                   ) : active?.type === "affected" ? (
                     <div className="flex flex-1 items-center justify-center text-[12px] text-text-muted">
@@ -1235,9 +1381,27 @@ export function Workspace({
           onConfirm={() => {
             const held = pending;
             setPending(null);
+            if (held.onConfirm) {
+              held.onConfirm();
+              return;
+            }
             // The statement the dialog showed, not whatever the editor holds
             // now — they can differ if something changed while it was open.
             void run(connection.id, held.tabId, held.sql);
+          }}
+        />
+      )}
+
+      {inserting && (
+        <InsertRowDialog
+          open
+          table={inserting.table}
+          columns={inserting.columns}
+          onClose={() => setInserting(null)}
+          onInsert={(values) => {
+            const table = inserting.table;
+            setInserting(null);
+            void insertRow(table, values);
           }}
         />
       )}

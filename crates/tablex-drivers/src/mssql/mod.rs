@@ -23,7 +23,7 @@ use tablex_core::{
     diagram::{GraphTable, SchemaGraph},
     driver::{
         Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
-        PlaceholderStyle, RowEdit, RowSink, STREAM_BATCH,
+        PlaceholderStyle, RowDelete, RowEdit, RowInsert, RowSink, STREAM_BATCH,
     },
     error::{Error, Result},
     plan::{Plan, PlanRow},
@@ -598,6 +598,92 @@ impl Connection for MssqlConnection {
                  THROW 51000, 'edit matched more than one row, expected at most 1 - the key is not unique', 1; \
              END \
              COMMIT TRANSACTION;"
+        );
+
+        self.client
+            .simple_query(batch)
+            .await
+            .map_err(map_err)?
+            .into_results()
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn insert_row(&mut self, insert: &RowInsert) -> Result<()> {
+        if insert.values.is_empty() {
+            return Err(Error::Unsupported(
+                "an inserted row needs at least one value".into(),
+            ));
+        }
+
+        let schema = insert.schema.as_deref().unwrap_or(&self.default_schema);
+        let columns = insert
+            .values
+            .iter()
+            .map(|(col, _)| quote_ident(col, QUOTE))
+            .collect::<Vec<_>>()
+            .join(", ");
+        // Escaped literals rather than parameters, matching the edit path —
+        // tiberius binds by position across a whole batch, which does not
+        // compose with a statement built column by column.
+        let literals = insert
+            .values
+            .iter()
+            .map(|(_, val)| types::literal(val))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let sql = format!(
+            "INSERT INTO {}.{} ({columns}) VALUES ({literals})",
+            quote_ident(schema, QUOTE),
+            quote_ident(&insert.table, QUOTE)
+        );
+
+        self.client
+            .simple_query(sql)
+            .await
+            .map_err(map_err)?
+            .into_results()
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn delete_row(&mut self, delete: &RowDelete) -> Result<()> {
+        if delete.key.is_empty() {
+            return Err(Error::Unsupported(
+                "cannot delete a row that has no unique key".into(),
+            ));
+        }
+
+        let predicate = delete
+            .key
+            .iter()
+            .map(|(col, val)| {
+                // `= NULL` is never true in SQL; only `IS NULL` matches.
+                if val.is_null() {
+                    format!("{} IS NULL", quote_ident(col, QUOTE))
+                } else {
+                    format!("{} = {}", quote_ident(col, QUOTE), types::literal(val))
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" AND ");
+
+        let schema = delete.schema.as_deref().unwrap_or(&self.default_schema);
+        let qualified = format!(
+            "{}.{}",
+            quote_ident(schema, QUOTE),
+            quote_ident(&delete.table, QUOTE)
+        );
+
+        // One batch so the rollback is atomic. Unlike the edit, anything other
+        // than exactly one row is refused: zero means the row was already gone,
+        // and a delete that removed nothing reporting success would say the
+        // opposite of what happened.
+        let batch = format!(
+            "BEGIN TRANSACTION;              DELETE FROM {qualified} WHERE {predicate};              IF @@ROWCOUNT <> 1 BEGIN ROLLBACK TRANSACTION;                  THROW 51000, 'delete matched other than exactly one row - the row may have changed since it was loaded', 1;              END              COMMIT TRANSACTION;"
         );
 
         self.client

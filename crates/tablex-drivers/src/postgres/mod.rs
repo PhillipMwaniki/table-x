@@ -21,7 +21,7 @@ use tablex_core::{
     diagram::SchemaGraph,
     driver::{
         Capabilities, CancelHandle, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
-        PlaceholderStyle, RowEdit, RowSink, STREAM_BATCH,
+        PlaceholderStyle, RowDelete, RowEdit, RowInsert, RowSink, STREAM_BATCH,
     },
     error::{Error, Result},
     plan::Plan,
@@ -519,6 +519,126 @@ impl Connection for PostgresConnection {
                 message: format!(
                     "edit matched {affected} rows, expected exactly 1 — \
                      the row may have changed since it was loaded"
+                ),
+                position: None,
+                code: None,
+            });
+        }
+        tx.commit().await.map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn insert_row(&mut self, insert: &RowInsert) -> Result<()> {
+        if insert.values.is_empty() {
+            return Err(Error::Unsupported(
+                "an inserted row needs at least one value".into(),
+            ));
+        }
+
+        let schema = insert.schema.as_deref().unwrap_or("public");
+        let col_types = introspect::column_types(&self.client, schema, &insert.table).await?;
+
+        // Same binding rule as an edit: every parameter goes as text and the
+        // server casts it to the column's own type, so exact numerics travel as
+        // their digits rather than through a fixed-width intermediate.
+        let mut params: Vec<Option<String>> = Vec::new();
+        let mut n = 0usize;
+
+        let columns = insert
+            .values
+            .iter()
+            .map(|(col, _)| quote_ident(col, QUOTE))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let placeholders = insert
+            .values
+            .iter()
+            .map(|(col, val)| {
+                n += 1;
+                params.push(types::to_param(val));
+                let ty = col_types.get(col).cloned().unwrap_or_else(|| "text".into());
+                format!("${}::text::{}", n, quote_ident(&ty, QUOTE))
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let sql = format!(
+            "INSERT INTO {}.{} ({}) VALUES ({})",
+            quote_ident(schema, QUOTE),
+            quote_ident(&insert.table, QUOTE),
+            columns,
+            placeholders
+        );
+
+        let bindings: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params
+            .iter()
+            .map(|p| p as &(dyn tokio_postgres::types::ToSql + Sync))
+            .collect();
+
+        self.client
+            .execute(sql.as_str(), &bindings)
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn delete_row(&mut self, delete: &RowDelete) -> Result<()> {
+        if delete.key.is_empty() {
+            return Err(Error::Unsupported(
+                "cannot delete a row that has no unique key".into(),
+            ));
+        }
+
+        let schema = delete.schema.as_deref().unwrap_or("public");
+        let col_types = introspect::column_types(&self.client, schema, &delete.table).await?;
+
+        let mut params: Vec<Option<String>> = Vec::new();
+        let mut n = 0usize;
+
+        let predicate = delete
+            .key
+            .iter()
+            .map(|(col, val)| {
+                // NULL never equals NULL; a NULL key needs IS NULL.
+                if val.is_null() {
+                    return format!("{} IS NULL", quote_ident(col, QUOTE));
+                }
+                n += 1;
+                params.push(types::to_param(val));
+                let ty = col_types.get(col).cloned().unwrap_or_else(|| "text".into());
+                format!(
+                    "{} = ${}::text::{}",
+                    quote_ident(col, QUOTE),
+                    n,
+                    quote_ident(&ty, QUOTE)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" AND ");
+
+        let sql = format!(
+            "DELETE FROM {}.{} WHERE {}",
+            quote_ident(schema, QUOTE),
+            quote_ident(&delete.table, QUOTE),
+            predicate
+        );
+
+        let bindings: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params
+            .iter()
+            .map(|p| p as &(dyn tokio_postgres::types::ToSql + Sync))
+            .collect();
+
+        let tx = self.client.transaction().await.map_err(map_err)?;
+        let affected = tx.execute(sql.as_str(), &bindings).await.map_err(map_err)?;
+
+        // In a transaction on purpose: a delete that matched two rows has
+        // already destroyed one too many by the time the count is read.
+        if affected != 1 {
+            tx.rollback().await.map_err(map_err)?;
+            return Err(Error::Query {
+                message: format!(
+                    "delete matched {affected} rows, expected exactly 1 —                      the row may have changed since it was loaded"
                 ),
                 position: None,
                 code: None,

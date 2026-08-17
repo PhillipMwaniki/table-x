@@ -1273,6 +1273,47 @@ pub async fn apply_edit(
     Ok(guard.apply_edit(&edit).await?)
 }
 
+/// Add a row.
+///
+/// Gated on read-only exactly as an edit is: the flag means this connection
+/// does not change the database, and a new row is a change.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn insert_row(
+    state: tauri::State<'_, AppState>,
+    connection_id: String,
+    insert: tablex_core::driver::RowInsert,
+) -> IpcResult<()> {
+    let config = state.config_for(&connection_id).await?;
+    if config.read_only {
+        return Err(
+            tablex_core::Error::Unsupported("this connection is marked read-only".into()).into(),
+        );
+    }
+
+    let session = state.sessions.get(&connection_id).await?;
+    let mut guard = session.connection.lock().await;
+    Ok(guard.insert_row(&insert).await?)
+}
+
+/// Remove a row.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn delete_row(
+    state: tauri::State<'_, AppState>,
+    connection_id: String,
+    delete: tablex_core::driver::RowDelete,
+) -> IpcResult<()> {
+    let config = state.config_for(&connection_id).await?;
+    if config.read_only {
+        return Err(
+            tablex_core::Error::Unsupported("this connection is marked read-only".into()).into(),
+        );
+    }
+
+    let session = state.sessions.get(&connection_id).await?;
+    let mut guard = session.connection.lock().await;
+    Ok(guard.delete_row(&delete).await?)
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub async fn completion_scope(
     state: tauri::State<'_, AppState>,

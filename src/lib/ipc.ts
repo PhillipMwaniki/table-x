@@ -27,7 +27,9 @@ import type {
   HistoryQuery,
   Notebook,
   QueryOutcome,
+  RowDelete,
   RowEdit,
+  RowInsert,
   SchemaNode,
   SessionInfo,
   Snippet,
@@ -201,6 +203,14 @@ export const ipc = {
   saveNotebook: (notebook: Notebook) => call<Notebook>("save_notebook", { notebook }),
 
   deleteNotebook: (id: string) => call<void>("delete_notebook", { id }),
+
+  /** Add a row. Only the columns given; the rest are left to the server. */
+  insertRow: (connection_id: string, insert: RowInsert) =>
+    call<void>("insert_row", { connection_id, insert }),
+
+  /** Remove one row, matched on the key it had when it was read. */
+  deleteRow: (connection_id: string, del: RowDelete) =>
+    call<void>("delete_row", { connection_id, delete: del }),
 
   /**
    * Stop whatever this connection is running.

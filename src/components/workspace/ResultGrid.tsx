@@ -93,6 +93,8 @@ export function ResultGrid({
   paging,
   onExportRows,
   readOnlyDetail,
+  onInsertRow,
+  onDeleteRows,
 }: {
   result: ResultSet;
   onEdit: (rowIndex: number, columnIndex: number, next: Value) => Promise<void>;
@@ -102,6 +104,10 @@ export function ResultGrid({
   onExportRows?: ((rows: Value[][]) => void) | undefined;
   /** Why editing is off, and what would turn it on. */
   readOnlyDetail?: { reason: string; remedy: string } | undefined;
+  /** Add a row. Absent where the result is not a single writable table. */
+  onInsertRow?: (() => void) | undefined;
+  /** Remove these rows, given by their index in the result. */
+  onDeleteRows?: ((rowIndexes: number[]) => void) | undefined;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   // Row height and column widths are both measured in characters, so they have
@@ -394,6 +400,17 @@ export function ResultGrid({
         onExportSelected={onExportRows ? () => onExportRows(selectedRows) : undefined}
         onExplain={() => setShowGuarantees(true)}
         onChart={() => setCharting(true)}
+        onInsertRow={onInsertRow}
+        onDeleteSelected={
+          onDeleteRows
+            ? () =>
+                onDeleteRows(
+                  // Source indices, in display order, so the confirmation lists
+                  // them the way they are on screen.
+                  view.filter((entry) => selected.has(entry.index)).map((entry) => entry.index),
+                )
+            : undefined
+        }
       />
 
       {cellError && (
@@ -679,6 +696,8 @@ function GridToolbar({
   onExportSelected,
   onExplain,
   onChart,
+  onInsertRow,
+  onDeleteSelected,
 }: {
   result: ResultSet;
   filter: string;
@@ -691,6 +710,8 @@ function GridToolbar({
   onExportSelected?: (() => void) | undefined;
   onExplain: () => void;
   onChart: () => void;
+  onInsertRow?: (() => void) | undefined;
+  onDeleteSelected?: (() => void) | undefined;
 }) {
   return (
     <div className="flex h-7 shrink-0 items-center gap-2 border-b border-border bg-surface-1 px-2 text-[11px]">
@@ -719,6 +740,14 @@ function GridToolbar({
               className="rounded px-1.5 py-0.5 text-text-muted hover:bg-surface-3 hover:text-text"
             >
               Export…
+            </button>
+          )}
+          {onDeleteSelected && (
+            <button
+              onClick={onDeleteSelected}
+              className="rounded px-1.5 py-0.5 text-text-muted hover:bg-danger/10 hover:text-danger"
+            >
+              Delete…
             </button>
           )}
           <button
@@ -759,6 +788,16 @@ function GridToolbar({
       )}
 
       <div className="flex-1" />
+
+      {onInsertRow && (
+        <button
+          onClick={onInsertRow}
+          className="rounded px-1.5 py-0.5 text-text-muted hover:bg-surface-3 hover:text-text"
+          title="Add a row to this table"
+        >
+          + Row
+        </button>
+      )}
 
       <button
         onClick={onChart}

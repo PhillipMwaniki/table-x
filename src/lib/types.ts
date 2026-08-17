@@ -246,6 +246,20 @@ export interface SchemaNode {
 /** File formats a table can be written out as. */
 export type ExportFormat = "csv" | "json" | "sql";
 
+/** A new row: only the columns the user filled in. */
+export interface RowInsert {
+  schema?: string | undefined;
+  table: string;
+  values: [string, Value][];
+}
+
+/** One row to remove, identified by the key it had when it was read. */
+export interface RowDelete {
+  schema?: string | undefined;
+  table: string;
+  key: [string, Value][];
+}
+
 /** One cell of a notebook. */
 export interface NotebookCell {
   id: string;

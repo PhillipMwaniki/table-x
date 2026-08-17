@@ -14,7 +14,7 @@ use tablex_core::{
     diagram::{GraphTable, SchemaGraph},
     driver::{
         Capabilities, CancelHandle, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
-        PlaceholderStyle, RowEdit, RowSink, STREAM_BATCH,
+        PlaceholderStyle, RowDelete, RowEdit, RowInsert, RowSink, STREAM_BATCH,
     },
     error::{Error, Result},
     plan::{Plan, PlanRow},
@@ -496,6 +496,105 @@ impl Connection for SqliteConnection {
                     message: format!(
                         "edit matched {affected} rows, expected exactly 1 — \
                          the row may have changed since it was loaded"
+                    ),
+                    position: None,
+                    code: None,
+                });
+            }
+            tx.commit().map_err(map_err)?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn insert_row(&mut self, insert: &RowInsert) -> Result<()> {
+        if insert.values.is_empty() {
+            // `INSERT INTO t DEFAULT VALUES` is a different statement with
+            // different failure modes; a form with nothing filled in is a
+            // mistake, not a request for it.
+            return Err(Error::Unsupported(
+                "an inserted row needs at least one value".into(),
+            ));
+        }
+        let insert = insert.clone();
+
+        self.with_conn(move |conn| {
+            let columns = insert
+                .values
+                .iter()
+                .map(|(c, _)| quote_ident(c, QUOTE))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let placeholders = vec!["?"; insert.values.len()].join(", ");
+
+            let sql = format!(
+                "INSERT INTO {} ({}) VALUES ({})",
+                quote_ident(&insert.table, QUOTE),
+                columns,
+                placeholders
+            );
+
+            let params: Vec<rusqlite::types::Value> =
+                insert.values.iter().map(|(_, v)| types::to_sql(v)).collect();
+
+            conn.execute(&sql, rusqlite::params_from_iter(params.iter()))
+                .map_err(map_err)?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn delete_row(&mut self, delete: &RowDelete) -> Result<()> {
+        if delete.key.is_empty() {
+            // Without a key the WHERE clause would match every row, and this
+            // statement does not get a second chance.
+            return Err(Error::Unsupported(
+                "cannot delete a row that has no unique key".into(),
+            ));
+        }
+        let delete = delete.clone();
+
+        self.with_conn(move |conn| {
+            // NULL never equals NULL, so a key column that is NULL needs
+            // IS NULL — the same trap as an edit, with a worse outcome.
+            let predicate = delete
+                .key
+                .iter()
+                .map(|(c, v)| {
+                    if v.is_null() {
+                        format!("{} IS NULL", quote_ident(c, QUOTE))
+                    } else {
+                        format!("{} = ?", quote_ident(c, QUOTE))
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" AND ");
+
+            let sql = format!(
+                "DELETE FROM {} WHERE {}",
+                quote_ident(&delete.table, QUOTE),
+                predicate
+            );
+
+            let params: Vec<rusqlite::types::Value> = delete
+                .key
+                .iter()
+                .filter(|(_, v)| !v.is_null())
+                .map(|(_, v)| types::to_sql(v))
+                .collect();
+
+            let tx = conn.transaction().map_err(map_err)?;
+            let affected = tx
+                .execute(&sql, rusqlite::params_from_iter(params.iter()))
+                .map_err(map_err)?;
+
+            // In a transaction on purpose: a delete that matched two rows has
+            // already destroyed one too many by the time the count is read.
+            if affected != 1 {
+                tx.rollback().map_err(map_err)?;
+                return Err(Error::Query {
+                    message: format!(
+                        "delete matched {affected} rows, expected exactly 1 —                          the row may have changed since it was loaded"
                     ),
                     position: None,
                     code: None,
