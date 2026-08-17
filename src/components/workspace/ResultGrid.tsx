@@ -113,6 +113,7 @@ export function ResultGrid({
   // Row height and column widths are both measured in characters, so they have
   // to be recomputed when the data font size changes rather than read from CSS.
   const fontSize = useSettings((s) => s.dataFontSize);
+  const striped = useSettings((s) => s.stripedRows);
   const rowHeight = rowHeightFor(fontSize);
   const [sort, setSort] = useState<Sort | null>(null);
   const [filter, setFilter] = useState("");
@@ -514,12 +515,21 @@ export function ResultGrid({
               if (!entry) return null;
               const { row, index: sourceIndex } = entry;
               const isSelected = selected.has(sourceIndex);
+              // Banded on the row's position in the view, not its index in the
+              // result: under a filter or a sort those differ, and banding by
+              // the source index would put two of the same shade side by side —
+              // which is the one thing banding exists to prevent.
+              const banded = striped && virtual.index % 2 === 1;
               return (
                 <div
                   key={virtual.key}
                   className={cx(
                     "absolute flex border-b border-border/40",
-                    isSelected ? "bg-accent/15" : "hover:bg-surface-1",
+                    // Hover is a step above the band rather than equal to it, or
+                    // it would be invisible on every other row.
+                    isSelected
+                      ? "bg-accent/15"
+                      : cx(banded && "bg-surface-1", "hover:bg-surface-2"),
                   )}
                   style={{
                     top: 0,
@@ -544,7 +554,10 @@ export function ResultGrid({
                       "text-right font-mono text-[10px] leading-[var(--row-height)] tabular-nums",
                       isSelected
                         ? "bg-accent/25 text-text"
-                        : "bg-surface-1 text-text-muted/60 hover:text-text",
+                        : cx(
+                            banded ? "bg-surface-2" : "bg-surface-1",
+                            "text-text-muted/60 hover:text-text",
+                          ),
                     )}
                     // The number is the row's place in the page, not its id —
                     // and with an offset it continues from where the last page

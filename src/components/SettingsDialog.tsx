@@ -7,7 +7,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Dialog } from "./ui/Dialog";
-import { Button, Field, Input, Select, cx } from "./ui/primitives";
+import { Button, Checkbox, Field, Input, Select, cx } from "./ui/primitives";
 import { useSettings } from "@/store/settings";
 import { DATA_FONTS, MAX_FONT_SIZE, MIN_FONT_SIZE, THEMES, UI_FONTS } from "@/lib/settings";
 
@@ -35,6 +35,8 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
     uiFont,
     dataFont,
     dataFontSize,
+    stripedRows,
+    setStripedRows,
     setTheme,
     setUiFont,
     setDataFont,
@@ -171,6 +173,36 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
           <p className="mt-1 font-mono text-[length:var(--text-data)] text-text-muted">
             123456789012345678.1234567890 · NULL · 2026-08-14
           </p>
+        </div>
+      </section>
+
+      <section className="mt-4 space-y-2">
+        <h3 className="text-[11px] font-medium text-text-muted">Grid</h3>
+
+        <Checkbox
+          label="Alternating row colours"
+          hint="Banding stops the eye sliding a line up or down on a wide result."
+          checked={stripedRows}
+          onChange={setStripedRows}
+        />
+
+        {/* Four rows of nothing in particular, banded the way the grid bands
+            them. The effect is small by design, so describing it is worse than
+            showing it. */}
+        <div className="overflow-hidden rounded-md border border-border">
+          {[0, 1, 2, 3].map((i) => (
+            <div
+              key={i}
+              className={cx(
+                "flex gap-4 px-2 font-mono text-[length:var(--text-data)] leading-6 text-text-muted",
+                stripedRows && i % 2 === 1 ? "bg-surface-1" : "bg-surface-0",
+              )}
+            >
+              <span className="w-4 text-right text-text-muted/50">{i + 1}</span>
+              <span>{["alice", "bob", "carol", "dave"][i]}</span>
+              <span className="ml-auto tabular-nums">{[128.5, 4.0, 96.25, 31.75][i]}</span>
+            </div>
+          ))}
         </div>
       </section>
     </Dialog>

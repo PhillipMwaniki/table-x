@@ -36,6 +36,7 @@ interface SettingsState extends Settings {
   setDataFontSize: (size: number) => void;
   setEditorRatio: (ratio: number) => void;
   setPageSize: (rows: number) => void;
+  setStripedRows: (striped: boolean) => void;
   reset: () => void;
 }
 
@@ -87,7 +88,7 @@ export const useSettings = create<SettingsState>((set, get) => {
     // Destructured rather than spread from `get()`, which also carries the
     // actions: writing those into the persisted file would put function-shaped
     // holes in it that `normalize` then has to throw away on the next launch.
-    const { theme, uiFont, dataFont, dataFontSize, editorRatio, pageSize } = get();
+    const { theme, uiFont, dataFont, dataFontSize, editorRatio, pageSize, stripedRows } = get();
     const next: Settings = {
       theme,
       uiFont,
@@ -95,6 +96,7 @@ export const useSettings = create<SettingsState>((set, get) => {
       dataFontSize,
       editorRatio,
       pageSize,
+      stripedRows,
       ...changes,
     };
     set(next);
@@ -137,6 +139,7 @@ export const useSettings = create<SettingsState>((set, get) => {
     // per frame would mean a file write per frame.
     setEditorRatio: (editorRatio) => commit({ editorRatio: clampRatio(editorRatio) }),
     setPageSize: (pageSize) => commit({ pageSize: clampPageSize(pageSize) }),
+    setStripedRows: (stripedRows) => commit({ stripedRows }),
     reset: () => commit(DEFAULT_SETTINGS),
   };
 });

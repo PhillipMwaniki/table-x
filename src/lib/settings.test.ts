@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   clampFontSize,
@@ -115,4 +116,83 @@ describe("normalize", () => {
   it("preserves 'system' as a choice in its own right", () => {
     expect(normalize({ theme: "system" }).theme).toBe("system");
   });
+});
+
+describe("stripedRows", () => {
+  it("bands rows unless somebody has turned it off", () => {
+    expect(DEFAULT_SETTINGS.stripedRows).toBe(true);
+    expect(normalize({ stripedRows: false }).stripedRows).toBe(false);
+  });
+
+  it("keeps the default for anything that is not a boolean", () => {
+    // A file holding the string "false" would otherwise turn banding *on*,
+    // because a non-empty string is truthy.
+    expect(normalize({ stripedRows: "false" }).stripedRows).toBe(true);
+    expect(normalize({ stripedRows: 0 }).stripedRows).toBe(true);
+    expect(normalize({}).stripedRows).toBe(true);
+  });
+});
+
+describe("the theme list", () => {
+  it("offers Tokyo Night, and calls it dark", () => {
+    const tokyo = THEMES.filter((t) => t.id.startsWith("tokyo-night"));
+    expect(tokyo.map((t) => t.id)).toEqual(["tokyo-night", "tokyo-night-storm"]);
+    // `appearance` is what the `dark:` variant keys on; getting it wrong gives
+    // a dark palette light-theme component styling.
+    expect(tokyo.every((t) => t.appearance === "dark")).toBe(true);
+  });
+
+  it("has no two themes sharing an id", () => {
+    // resolveTheme finds by id, so a duplicate would make one unreachable.
+    expect(new Set(THEMES.map((t) => t.id)).size).toBe(THEMES.length);
+  });
+
+  it("resolves every listed theme, which is what stops an unstyled app", () => {
+    for (const theme of THEMES) {
+      expect(resolveTheme(theme.id, false).id).toBe(theme.id);
+    }
+  });
+});
+
+describe("every theme has a palette", () => {
+  // A theme listed in the picker with no block in styles.css does not fail —
+  // it silently renders as the base tokens, so picking it appears to do
+  // nothing. Checked against the stylesheet because that is the only place
+  // that would know.
+  const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+
+  /** The pair that *are* the base tokens, and so correctly have no block. */
+  const BASE = ["tablex-dark", "tablex-light"];
+
+  for (const theme of THEMES.filter((t) => !BASE.includes(t.id))) {
+    it(`defines tokens for ${theme.id}`, () => {
+      // Found by scanning rather than by regex: the selector contains brackets
+      // and quotes, and escaping those correctly is a worse problem than
+      // slicing to the closing brace.
+      const selector = `[data-theme="${theme.id}"]`;
+      const start = css.indexOf(selector);
+      expect(start, `no ${selector} block in styles.css`).toBeGreaterThan(-1);
+      const block = css.slice(start, css.indexOf("}", start));
+
+      // The whole set, not just some of it: a block that redefines the ground
+      // but not the text colour gives one theme's text on another's background.
+      for (const token of [
+        "--color-surface-0",
+        "--color-surface-1",
+        "--color-surface-2",
+        "--color-surface-3",
+        "--color-border",
+        "--color-text",
+        "--color-text-muted",
+        "--color-accent",
+        "--color-accent-fg",
+        "--color-ok",
+        "--color-warn",
+        "--color-danger",
+        "--color-null",
+      ]) {
+        expect(block, `${theme.id} is missing ${token}`).toContain(`${token}:`);
+      }
+    });
+  }
 });

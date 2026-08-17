@@ -138,6 +138,47 @@
   --color-null: #6c71c4;
 }
 
+/* Tokyo Night — Enno Kockmann (MIT). Its identity is a deep indigo ground that
+   is noticeably blue rather than grey, with the accents kept bright against it.
+   The "night" variant is the darker of the two the palette publishes. */
+[data-theme="tokyo-night"] {
+  --color-surface-0: #1a1b26; /* bg           */
+  --color-surface-1: #1f2029;
+  --color-surface-2: #24283b; /* bg_highlight */
+  --color-surface-3: #2f334d;
+  --color-border: #3b4261;
+  --color-text: #c0caf5; /* fg           */
+  --color-text-muted: #7f88b3; /* toward comment */
+
+  --color-accent: #7aa2f7; /* blue         */
+  --color-accent-fg: #1a1b26;
+
+  --color-ok: #9ece6a; /* green        */
+  --color-warn: #e0af68; /* yellow       */
+  --color-danger: #f7768e; /* red          */
+  --color-null: #bb9af7; /* magenta      */
+}
+
+/* Storm is the same hues on a lighter ground, for rooms where Night is too dark
+   to see the banding between rows. */
+[data-theme="tokyo-night-storm"] {
+  --color-surface-0: #24283b; /* bg           */
+  --color-surface-1: #2a2f45;
+  --color-surface-2: #303551; /* bg_highlight */
+  --color-surface-3: #3b4261;
+  --color-border: #474e75;
+  --color-text: #c0caf5;
+  --color-text-muted: #8590ba;
+
+  --color-accent: #7aa2f7;
+  --color-accent-fg: #24283b;
+
+  --color-ok: #9ece6a;
+  --color-warn: #e0af68;
+  --color-danger: #f7768e;
+  --color-null: #bb9af7;
+}
+
 /* High contrast — for bright rooms and for anyone who finds the low-contrast
    greys hard to read. Borders are visible rather than implied, which is the
    point: in a grid, the cell boundaries carry meaning. */

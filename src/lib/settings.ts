@@ -55,6 +55,18 @@ export const THEMES: Theme[] = [
     note: "Solarized on its warm paper base.",
   },
   {
+    id: "tokyo-night",
+    name: "Tokyo Night",
+    appearance: "dark",
+    note: "Deep indigo ground, cyan and magenta accents.",
+  },
+  {
+    id: "tokyo-night-storm",
+    name: "Tokyo Night Storm",
+    appearance: "dark",
+    note: "The same palette a shade lighter.",
+  },
+  {
     id: "high-contrast",
     name: "High Contrast",
     appearance: "dark",
@@ -90,6 +102,14 @@ export interface Settings {
    * fast and lets someone who wants more ask for it.
    */
   pageSize: number;
+  /**
+   * Tint every other result row.
+   *
+   * Worth a setting rather than being simply on: banding is what stops the eye
+   * sliding up a line on a wide result, and it is also the first thing some
+   * people turn off. Neither camp is wrong, so neither is overruled.
+   */
+  stripedRows: boolean;
 }
 
 /** Page sizes offered in the grid. */
@@ -112,6 +132,7 @@ export const DEFAULT_SETTINGS: Settings = {
   dataFontSize: 12,
   editorRatio: 0.38,
   pageSize: 1000,
+  stripedRows: true,
 };
 
 /**
@@ -209,5 +230,9 @@ export function normalize(stored: unknown): Settings {
     dataFontSize: clampFontSize(Number(raw.dataFontSize ?? DEFAULT_SETTINGS.dataFontSize)),
     editorRatio: clampRatio(Number(raw.editorRatio ?? DEFAULT_SETTINGS.editorRatio)),
     pageSize: clampPageSize(Number(raw.pageSize ?? DEFAULT_SETTINGS.pageSize)),
+    // Only an actual boolean, so a file holding a string keeps the default
+    // rather than turning banding on because "false" is truthy.
+    stripedRows:
+      typeof raw.stripedRows === "boolean" ? raw.stripedRows : DEFAULT_SETTINGS.stripedRows,
   };
 }
