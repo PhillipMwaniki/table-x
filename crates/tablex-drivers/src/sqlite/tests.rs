@@ -1121,3 +1121,60 @@ async fn a_self_referencing_table_survives_the_round_trip() {
     assert_eq!(diagram.edges.len(), 1);
     assert!(diagram.edges[0].reflexive);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_running_statement_can_be_cancelled() {
+    // The property the whole feature exists for: a statement that would run for
+    // a very long time stops when asked, rather than the process having to be
+    // killed. Multi-threaded on purpose — the interrupt has to arrive while the
+    // blocking pool is inside the query.
+    let mut conn = connect().await;
+
+    let handle = conn.cancel_handle().expect("SQLite advertises cancellation");
+
+    // A recursive CTE with no bound: it never completes on its own, so a test
+    // that passes cannot be passing because the query happened to finish.
+    let query = tokio::spawn(async move {
+        let opts = FetchOptions {
+            max_rows: None,
+            offset: 0,
+            timeout_secs: None,
+        };
+        let result = conn
+            .execute(
+                "WITH RECURSIVE forever(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM forever) \
+                 SELECT count(*) FROM forever",
+                &opts,
+            )
+            .await;
+        result
+    });
+
+    // Long enough for the statement to be running, short enough that a broken
+    // cancel fails the test rather than hanging it.
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    handle.cancel().await.expect("cancel");
+
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(10), query)
+        .await
+        .expect("the statement should have stopped, not run to the timeout")
+        .expect("the task should not panic");
+
+    let err = outcome.expect_err("an interrupted statement does not return rows");
+    // Reported as cancelled rather than as a query error: the user asked for
+    // this, and a red error message for something that worked is wrong.
+    assert_eq!(err.category(), tablex_core::ErrorCategory::Cancelled, "{err:?}");
+}
+
+#[tokio::test]
+async fn cancelling_an_idle_connection_is_harmless() {
+    // A click often lands after the statement has already finished. Treating
+    // that as a failure would report the good outcome as the bad one.
+    let mut conn = seeded().await;
+    let handle = conn.cancel_handle().expect("handle");
+    handle.cancel().await.expect("cancelling nothing succeeds");
+
+    // And the connection is still usable afterwards.
+    let rs = query(&mut conn, "SELECT count(*) FROM users").await;
+    assert_eq!(rs.rows.len(), 1);
+}

@@ -178,6 +178,8 @@ interface WorkspaceState {
   setTabNotice: (connectionId: string, tabId: string, message: string) => void;
   setActiveStatement: (connectionId: string, tabId: string, index: number) => void;
   run: (connectionId: string, tabId: string, sqlOverride?: string) => Promise<void>;
+  /** Stop whatever this connection is running. */
+  cancelQuery: (connectionId: string) => Promise<void>;
   /** Re-run this tab's statement at a different offset. */
   goToPage: (connectionId: string, tabId: string, offset: number) => Promise<void>;
 
@@ -514,6 +516,13 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { plan: null }) }));
   },
 
+  cancelQuery: async (id) => {
+    // Nothing is patched here. The statement's own rejection is what ends the
+    // running state, and pre-emptively clearing it would leave the tab looking
+    // idle while the query was still being torn down.
+    await ipc.cancelQuery(id);
+  },
+
   goToPage: async (id, tabId, offset) => {
     // Written before the run so the fetch reads it, and clamped because a
     // "previous" from the first page is a request for row minus one thousand.
@@ -569,10 +578,17 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       }));
     } catch (e) {
       const err = e as IpcError;
+      // Cancelling is something the user asked for, so it is reported the way
+      // a finished job is rather than as a failure. A red alert for the button
+      // you just pressed working is the wrong signal.
+      const cancelled = err.category === "cancelled";
       set((s) => ({
         tabs: patchTab(s.tabs, id, tabId, {
           running: false,
-          error: { message: err.message, position: err.position, code: err.code },
+          error: cancelled
+            ? null
+            : { message: err.message, position: err.position, code: err.code },
+          ...(cancelled ? { notice: "Cancelled." } : {}),
           // Keep the previous outcome visible. Blanking the grid on a typo
           // loses results the user may still be reading.
         }),

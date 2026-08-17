@@ -12,6 +12,7 @@ mod types;
 
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use futures_util::StreamExt;
 use tablex_core::{
@@ -19,7 +20,7 @@ use tablex_core::{
     config::{ConnectionConfig, TlsMode},
     diagram::SchemaGraph,
     driver::{
-        Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
+        Capabilities, CancelHandle, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
         PlaceholderStyle, RowEdit, RowSink, STREAM_BATCH,
     },
     error::{Error, Result},
@@ -74,7 +75,7 @@ impl Driver for PostgresDriver {
                 // Cancellation needs a cancel token held alongside the session;
                 // that belongs with the connection registry, so it is not
                 // advertised until it is actually wired up.
-                cancel: false,
+                cancel: true,
                 // query_raw yields rows as the server sends them.
                 streaming: true,
                 activity: true,
@@ -104,7 +105,14 @@ impl Driver for PostgresDriver {
         }
         pg.application_name("Table X");
 
-        let client = establish(&pg, config.tls.mode).await?;
+        let (client, tls) = establish(&pg, config.tls.mode).await?;
+        // Taken now, while the connection is still ours to ask: cancelling
+        // needs a *second* connection to the same server, so the handle carries
+        // whatever transport the first one settled on.
+        let cancel = Arc::new(PostgresCancel {
+            token: client.cancel_token(),
+            tls,
+        });
 
         // Asked rather than taken from the config: with no `dbname` the server
         // connects you to one named after the user, and the tree has to mark the
@@ -118,13 +126,51 @@ impl Driver for PostgresDriver {
         Ok(Box::new(PostgresConnection {
             client,
             database,
+            cancel,
             type_cache: HashMap::new(),
         }))
     }
 }
 
+/// How a cancel request should reach the server.
+///
+/// A cancel is a separate, short-lived connection, and it has to be made the
+/// same way the session was: sending it in the clear to a server that requires
+/// TLS gets it dropped, and the query it was meant to stop keeps running.
+#[derive(Clone)]
+enum CancelTls {
+    Plain,
+    Rustls(Arc<rustls::ClientConfig>),
+}
+
+/// Stops the running statement by asking the server to.
+///
+/// PostgreSQL cancellation is out of band: the request travels on its own
+/// connection carrying a secret the session was given at startup, which is why
+/// this works while the session itself is busy.
+struct PostgresCancel {
+    token: tokio_postgres::CancelToken,
+    tls: CancelTls,
+}
+
+#[async_trait]
+impl CancelHandle for PostgresCancel {
+    async fn cancel(&self) -> Result<()> {
+        match &self.tls {
+            CancelTls::Plain => self.token.cancel_query(NoTls).await.map_err(map_err),
+            CancelTls::Rustls(config) => self
+                .token
+                .cancel_query(tokio_postgres_rustls::MakeRustlsConnect::new(
+                    (**config).clone(),
+                ))
+                .await
+                .map_err(map_err),
+        }
+    }
+}
+
 /// Open a session honouring the configured TLS mode.
-async fn establish(pg: &tokio_postgres::Config, mode: TlsMode) -> Result<Client> {
+async fn establish(pg: &tokio_postgres::Config, mode: TlsMode) -> Result<(Client, CancelTls)> {
     match mode {
         TlsMode::Disable => connect_plain(pg).await,
 
@@ -146,13 +192,13 @@ async fn establish(pg: &tokio_postgres::Config, mode: TlsMode) -> Result<Client>
     }
 }
 
-async fn connect_plain(pg: &tokio_postgres::Config) -> Result<Client> {
+async fn connect_plain(pg: &tokio_postgres::Config) -> Result<(Client, CancelTls)> {
     let (client, connection) = pg.connect(NoTls).await.map_err(map_err)?;
     spawn_connection(connection);
-    Ok(client)
+    Ok((client, CancelTls::Plain))
 }
 
-async fn connect_tls(pg: &tokio_postgres::Config) -> Result<Client> {
+async fn connect_tls(pg: &tokio_postgres::Config) -> Result<(Client, CancelTls)> {
     let mut roots = rustls::RootCertStore::empty();
     let native = rustls_native_certs::load_native_certs();
     for cert in native.certs {
@@ -167,11 +213,14 @@ async fn connect_tls(pg: &tokio_postgres::Config) -> Result<Client> {
     let tls_config = rustls::ClientConfig::builder()
         .with_root_certificates(roots)
         .with_no_client_auth();
-    let tls = tokio_postgres_rustls::MakeRustlsConnect::new(tls_config);
+    // Kept as well as used: a cancel needs its own connection built the same
+    // way, and rebuilding it would mean reloading the system root store.
+    let shared = Arc::new(tls_config);
+    let tls = tokio_postgres_rustls::MakeRustlsConnect::new((*shared).clone());
 
     let (client, connection) = pg.connect(tls).await.map_err(map_err)?;
     spawn_connection(connection);
-    Ok(client)
+    Ok((client, CancelTls::Rustls(shared)))
 }
 
 /// tokio-postgres splits the client from the I/O driver; the driver must be
@@ -208,6 +257,8 @@ impl PostgresConnection {
 
 pub struct PostgresConnection {
     client: Client,
+    /// Cancels whatever this session is running, over its own connection.
+    cancel: Arc<PostgresCancel>,
     /// The database this session is attached to. Fixed for its lifetime — the
     /// protocol offers no way to change it — so switching means reconnecting.
     database: String,
@@ -475,6 +526,10 @@ impl Connection for PostgresConnection {
         }
         tx.commit().await.map_err(map_err)?;
         Ok(())
+    }
+
+    fn cancel_handle(&self) -> Option<Arc<dyn CancelHandle>> {
+        Some(self.cancel.clone())
     }
 
     async fn ping(&mut self) -> Result<()> {

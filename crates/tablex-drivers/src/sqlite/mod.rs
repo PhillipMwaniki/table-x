@@ -13,7 +13,7 @@ use tablex_core::{
     config::ConnectionConfig,
     diagram::{GraphTable, SchemaGraph},
     driver::{
-        Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
+        Capabilities, CancelHandle, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
         PlaceholderStyle, RowEdit, RowSink, STREAM_BATCH,
     },
     error::{Error, Result},
@@ -75,7 +75,7 @@ impl Driver for SqliteDriver {
                 privileges: false,
                 column_provenance: true,
                 stored_procedures: false,
-                cancel: false,
+                cancel: true,
                 placeholder_style: PlaceholderStyle::Question,
                 identifier_quote: QUOTE,
             },
@@ -112,14 +112,37 @@ impl Driver for SqliteDriver {
         conn.execute_batch("PRAGMA foreign_keys = ON;")
             .map_err(map_err)?;
 
+        // Taken before the connection is locked away: `get_interrupt_handle`
+        // needs `&Connection`, and the whole point of the handle is to be
+        // reachable while something else holds that lock.
+        let interrupt = Arc::new(conn.get_interrupt_handle());
+
         Ok(Box::new(SqliteConnection {
             conn: Arc::new(Mutex::new(conn)),
+            interrupt,
         }))
     }
 }
 
 pub struct SqliteConnection {
     conn: Arc<Mutex<rusqlite::Connection>>,
+    /// Interrupts whatever statement is running, from any thread.
+    interrupt: Arc<rusqlite::InterruptHandle>,
+}
+
+/// Stops the current statement by asking SQLite to abandon it.
+///
+/// `sqlite3_interrupt` is safe to call from another thread and takes effect at
+/// the next point the running statement checks — which for the scans and sorts
+/// that make a query slow enough to want cancelling is very soon.
+struct SqliteCancel(Arc<rusqlite::InterruptHandle>);
+
+#[async_trait]
+impl CancelHandle for SqliteCancel {
+    async fn cancel(&self) -> Result<()> {
+        self.0.interrupt();
+        Ok(())
+    }
 }
 
 impl SqliteConnection {
@@ -482,6 +505,10 @@ impl Connection for SqliteConnection {
             Ok(())
         })
         .await
+    }
+
+    fn cancel_handle(&self) -> Option<Arc<dyn CancelHandle>> {
+        Some(Arc::new(SqliteCancel(Arc::clone(&self.interrupt))))
     }
 
     async fn ping(&mut self) -> Result<()> {
@@ -986,6 +1013,9 @@ fn map_err(e: rusqlite::Error) -> Error {
                 rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked => {
                     Error::Network(text)
                 }
+                // The user asked for this. Reporting it as a query error would
+                // put a red message on screen for something that worked.
+                rusqlite::ErrorCode::OperationInterrupted => Error::Cancelled,
                 _ => Error::Query {
                     message: text,
                     position: None,

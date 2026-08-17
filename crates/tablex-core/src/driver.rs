@@ -181,6 +181,22 @@ pub struct RowEdit {
     pub key: Vec<(String, Value)>,
 }
 
+/// Stops a statement that is already running.
+///
+/// Separate from [`Connection`] and deliberately not `&mut self`, because the
+/// thing being cancelled is holding the connection: a cancel that waited its
+/// turn for the same lock would arrive after the statement it was meant to
+/// stop had already finished. The handle is taken once when the session opens
+/// and kept beside it.
+///
+/// How the stop is delivered is the engine's business — SQLite interrupts the
+/// running statement in place, PostgreSQL opens a second connection to send a
+/// cancel request, others issue a `KILL`.
+#[async_trait]
+pub trait CancelHandle: Send + Sync {
+    async fn cancel(&self) -> Result<()>;
+}
+
 /// A database driver: a stateless factory for connections.
 #[async_trait]
 pub trait Driver: Send + Sync {
@@ -218,6 +234,16 @@ pub trait Connection: Send + Sync {
 
     /// Cheap liveness check used before reusing a pooled session.
     async fn ping(&mut self) -> Result<()>;
+
+    /// A handle that can stop whatever this connection is running.
+    ///
+    /// Taken once, when the session opens, and held outside the connection's
+    /// own lock — see [`CancelHandle`]. `None` where the engine offers no way
+    /// to interrupt work already in progress, which is what
+    /// [`Capabilities::cancel`] reports to the UI so the button is not drawn.
+    fn cancel_handle(&self) -> Option<std::sync::Arc<dyn CancelHandle>> {
+        None
+    }
 
     /// Close cleanly. Best-effort: a dropped connection must not leak either way.
     async fn close(&mut self) -> Result<()>;

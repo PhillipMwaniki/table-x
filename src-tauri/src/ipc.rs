@@ -993,6 +993,19 @@ fn csv_field(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
 }
 
+/// Stop whatever a connection is running.
+///
+/// Deliberately does not take the connection lock: the statement being
+/// cancelled is holding it.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn cancel_query(
+    state: tauri::State<'_, AppState>,
+    connection_id: String,
+) -> IpcResult<()> {
+    let session = state.sessions.get(&connection_id).await?;
+    Ok(session.cancel().await?)
+}
+
 /// What a submission would destroy, and whether this connection asks first.
 ///
 /// Analysed in Rust rather than the frontend because the same scanner backs the

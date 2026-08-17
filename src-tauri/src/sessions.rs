@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use tablex_core::{
+    driver::CancelHandle,
     error::{Error, Result},
     Connection,
 };
@@ -21,13 +22,39 @@ pub struct LiveSession {
     pub connection: Mutex<Box<dyn Connection>>,
     /// Kept alive with the session: the tunnel shuts down when this is dropped.
     tunnel: Option<Tunnel>,
+    /// Stops whatever the connection is running.
+    ///
+    /// Behind its own lock rather than reached through the connection's,
+    /// because the statement being cancelled is holding that one — a cancel
+    /// that queued for it would arrive after the thing it was cancelling had
+    /// finished. This lock is only ever held long enough to clone the handle.
+    cancel: Mutex<Option<Arc<dyn CancelHandle>>>,
 }
 
 impl LiveSession {
     pub fn new(connection: Box<dyn Connection>, tunnel: Option<Tunnel>) -> Self {
+        // Taken before the connection is locked away — that is the whole point
+        // of the handle.
+        let cancel = connection.cancel_handle();
         LiveSession {
             connection: Mutex::new(connection),
             tunnel,
+            cancel: Mutex::new(cancel),
+        }
+    }
+
+    /// Stop whatever this session is running, if the engine can.
+    ///
+    /// Cancelling nothing succeeds: by the time a click reaches here the
+    /// statement has often already finished, and reporting that as a failure
+    /// would be reporting the good outcome as the bad one.
+    pub async fn cancel(&self) -> Result<()> {
+        let handle = self.cancel.lock().await.clone();
+        match handle {
+            Some(handle) => handle.cancel().await,
+            None => Err(Error::Unsupported(
+                "this driver cannot cancel a running statement".into(),
+            )),
         }
     }
 
@@ -46,6 +73,10 @@ impl LiveSession {
     /// `Arc` keeps working — the connection underneath simply points somewhere
     /// else now.
     pub async fn replace(&self, connection: Box<dyn Connection>) {
+        // The handle belongs to the socket, not to the session, so it has to
+        // travel with the swap — otherwise cancel would keep aiming at a
+        // connection that is already closed.
+        *self.cancel.lock().await = connection.cancel_handle();
         let mut guard = self.connection.lock().await;
         let mut previous = std::mem::replace(&mut *guard, connection);
         // Best effort: a socket that will not close cleanly must not stop the

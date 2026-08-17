@@ -99,6 +99,7 @@ export function Workspace({
     switchDatabase,
     applyEdit,
     goToPage,
+    cancelQuery,
     explain,
     clearPlan,
     undo,
@@ -829,15 +830,31 @@ export function Workspace({
                 </span>
               ) : (
                 <>
-                  <Button
-                    variant="primary"
-                    onClick={() => void runGuarded(tab.id)}
-                    busy={tab.running}
-                    disabled={!tab.sql.trim()}
-                    className="h-6"
-                  >
-                    {tab.kind === "table" ? "Refresh" : "Run"}
-                  </Button>
+                  {/* While something is running, the primary button stops it
+                      rather than sitting there spinning. A spinner with no way
+                      out is the state this whole feature exists to remove —
+                      and it is only offered where the driver can actually do
+                      it, rather than being drawn and then failing. */}
+                  {tab.running && driver?.capabilities.cancel ? (
+                    <Button
+                      variant="danger"
+                      onClick={() => void cancelQuery(connection.id)}
+                      className="h-6"
+                      title="Stop this statement"
+                    >
+                      Cancel
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="primary"
+                      onClick={() => void runGuarded(tab.id)}
+                      busy={tab.running}
+                      disabled={!tab.sql.trim()}
+                      className="h-6"
+                    >
+                      {tab.kind === "table" ? "Refresh" : "Run"}
+                    </Button>
+                  )}
                   {tab.kind === "query" && (
                     <span className="text-[10.5px] text-text-muted">Ctrl+Enter</span>
                   )}

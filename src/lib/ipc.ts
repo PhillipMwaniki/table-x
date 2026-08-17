@@ -202,6 +202,14 @@ export const ipc = {
 
   deleteNotebook: (id: string) => call<void>("delete_notebook", { id }),
 
+  /**
+   * Stop whatever this connection is running.
+   *
+   * Succeeds when there was nothing to stop: by the time a click arrives the
+   * statement has often already finished.
+   */
+  cancelQuery: (connection_id: string) => call<void>("cancel_query", { connection_id }),
+
   /** What a submission would destroy, and whether this connection asks first. */
   inspectStatement: (connection_id: string, sql: string) =>
     call<HazardReport>("inspect_statement", { connection_id, sql }),
