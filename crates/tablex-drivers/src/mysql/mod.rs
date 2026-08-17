@@ -13,12 +13,13 @@ mod privileges;
 mod types;
 
 use async_trait::async_trait;
+use std::sync::Arc;
 use tablex_core::{
     activity::ServerActivity,
     config::{ConnectionConfig, TlsMode},
     diagram::{GraphTable, SchemaGraph},
     driver::{
-        Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
+        CancelHandle, Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
         PlaceholderStyle, RowDelete, RowEdit, RowInsert, RowSink, TxStatements, STREAM_BATCH,
     },
     error::{is_connection_refused, root_cause, Error, Result},
@@ -162,7 +163,8 @@ impl Driver for MysqlDriver {
                 // `org_table` and `org_name` come back in the column definition
                 // packet, so results can be traced to their source.
                 column_provenance: true,
-                cancel: false,
+                // `KILL QUERY` from a second connection — see `MysqlCancel`.
+                cancel: true,
                 // query_iter is a cursor over the wire, not a materialized set.
                 streaming: true,
                 activity: true,
@@ -202,15 +204,75 @@ impl Driver for MysqlDriver {
         };
 
         let conn = mysql_async::Conn::new(builder).await.map_err(map_err)?;
+        // Both taken now, while the session is still idle: the thread id is what
+        // `KILL QUERY` names, and the options are how the cancelling connection
+        // reaches the same server the same way.
+        let cancel = Arc::new(MysqlCancel {
+            opts: conn.opts().clone(),
+            thread_id: conn.id(),
+        });
+
         Ok(Box::new(MysqlConnection {
             conn,
+            cancel,
             default_db: config.database.clone(),
         }))
     }
 }
 
+/// Stops the running statement with `KILL QUERY`, sent on its own connection.
+///
+/// MySQL has no out-of-band cancel channel the way PostgreSQL does: the request
+/// is ordinary SQL, so it needs a connection of its own to travel on — the one
+/// being cancelled is busy with the statement to be stopped.
+///
+/// `KILL QUERY` rather than plain `KILL`, and the difference matters: `KILL`
+/// ends the session, which would roll back an open transaction and drop the
+/// connection the user is working in. `KILL QUERY` stops only the statement, so
+/// a cancelled query inside a transaction leaves the transaction standing.
+struct MysqlCancel {
+    /// The options the session was built from, so the cancelling connection
+    /// reaches the same server over the same TLS mode as the one it targets.
+    opts: mysql_async::Opts,
+    /// The server's id for the session being cancelled.
+    thread_id: u32,
+}
+
+#[async_trait]
+impl CancelHandle for MysqlCancel {
+    async fn cancel(&self) -> Result<()> {
+        let mut conn = mysql_async::Conn::new(self.opts.clone())
+            .await
+            .map_err(map_err)?;
+
+        // Interpolated rather than bound: `KILL` takes no placeholders, and the
+        // value is a `u32` the server issued, so there is no text to escape.
+        let killed = conn
+            .query_drop(format!("KILL QUERY {}", self.thread_id))
+            .await;
+
+        // Closed whichever way the kill went. A cancel that leaked a connection
+        // per click would exhaust `max_connections` on the server it was asked
+        // to relieve.
+        let _ = conn.disconnect().await;
+
+        match killed {
+            Ok(()) => Ok(()),
+            // 1094 unknown thread id: the session has gone since this handle was
+            // taken, so whatever it was running has stopped too. That is the
+            // outcome the caller asked for, not a failure to deliver it.
+            Err(mysql_async::Error::Server(ref e)) if e.code == 1094 => Ok(()),
+            Err(e) => Err(map_err(e)),
+        }
+    }
+}
+
 pub struct MysqlConnection {
     conn: mysql_async::Conn,
+    /// Cancels this session's running statement, over a connection of its own.
+    /// Held here so `cancel_handle` can hand out a clone without the lock the
+    /// running statement is inside — see [`CancelHandle`].
+    cancel: Arc<MysqlCancel>,
     /// The database named in the connection, used to qualify unqualified names.
     default_db: Option<String>,
 }
@@ -673,6 +735,10 @@ impl Connection for MysqlConnection {
         Ok(())
     }
 
+    fn cancel_handle(&self) -> Option<Arc<dyn CancelHandle>> {
+        Some(self.cancel.clone())
+    }
+
     fn transaction_statements(&self) -> Option<TxStatements> {
         Some(TX)
     }
@@ -1117,6 +1183,13 @@ pub(crate) fn map_err(e: mysql_async::Error) -> Error {
     use mysql_async::Error as E;
     match &e {
         E::Server(server) => {
+            // 1317 query execution was interrupted — what the server reports to
+            // the session a `KILL QUERY` was aimed at. Reported as cancelled
+            // rather than as a query error: the user asked for this, and showing
+            // a red failure for something that worked is wrong.
+            if server.code == 1317 {
+                return Error::Cancelled;
+            }
             // 1045 access denied, 1044 access denied for database,
             // 1698 auth plugin rejection.
             if matches!(server.code, 1045 | 1044 | 1698) {

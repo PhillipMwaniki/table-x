@@ -11,6 +11,30 @@
 //!   count attached. Re-running it through `execute` would run a write twice,
 //!   which is unacceptable, so the count comes from `SELECT @@ROWCOUNT` on the
 //!   same session instead.
+//!
+//! # Why there is no cancellation
+//!
+//! Stopping a running statement is the one power feature this driver does not
+//! have, and it is worth stating why rather than rediscovering it.
+//!
+//! TDS cancels a statement with an attention packet: the client sends one on the
+//! *same* connection, out of band, and the server abandons the batch and leaves
+//! the session intact. That is the mechanism every other engine's cancel is
+//! equivalent to. tiberius knows the packet type — `PacketType::AttentionSignal`
+//! in its header codec — but never sends one and exposes no API to, so it is not
+//! reachable from here.
+//!
+//! The obvious workaround is `KILL <spid>` from a second connection, and it is
+//! not equivalent. `KILL` ends the *session*: it rolls back the open transaction,
+//! drops the connection, and loses the temp tables on it. Offering that behind a
+//! "stop query" button would be exactly the failing affordance
+//! [`Capabilities`] exists to prevent, so `cancel` stays false and the button
+//! stays hidden.
+//!
+//! Killing a session is still available where it is honestly labelled as that —
+//! the Server activity panel, via [`Connection::kill_session`]. Restoring real
+//! cancellation means an attention packet, which means either a tiberius change
+//! or a fork.
 
 mod activity;
 mod privileges;
@@ -152,6 +176,8 @@ impl Driver for MssqlDriver {
                 // table, so ad-hoc results cannot be safely edited.
                 table_scripts: false,
                 column_provenance: false,
+                // See the module docs: tiberius sends no attention packet, and
+                // `KILL` ends the session rather than the statement.
                 cancel: false,
                 // QueryItems arrive as the server sends them.
                 streaming: true,

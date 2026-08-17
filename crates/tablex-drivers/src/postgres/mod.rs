@@ -80,9 +80,8 @@ impl Driver for PostgresDriver {
                 // The wire protocol reports table OID and attribute number per
                 // column, so results can be traced back to their source table.
                 column_provenance: true,
-                // Cancellation needs a cancel token held alongside the session;
-                // that belongs with the connection registry, so it is not
-                // advertised until it is actually wired up.
+                // A cancel token taken at connect time and sent over its own
+                // connection — see `PostgresCancel`.
                 cancel: true,
                 // query_raw yields rows as the server sends them.
                 streaming: true,

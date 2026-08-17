@@ -421,3 +421,77 @@ fn transaction_control_uses_this_engine_s_spelling() {
     assert_eq!(super::TX.commit, "COMMIT");
     assert_eq!(super::TX.rollback, "ROLLBACK");
 }
+
+/// A statement that will not finish on its own, so a passing cancellation test
+/// cannot be passing because the query happened to end.
+///
+/// `SLEEP()` is deliberately not used: MySQL documents it as *returning 1* when
+/// interrupted, so the statement can complete successfully and the test would be
+/// asserting nothing. A cross join over the data dictionary has no such special
+/// case — it is an ordinary scan the server abandons when told to.
+const NEVER_FINISHES: &str = "SELECT COUNT(*) FROM information_schema.columns a \
+     JOIN information_schema.columns b ON 1 = 1 \
+     JOIN information_schema.columns c ON 1 = 1";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_running_statement_can_be_cancelled_without_losing_the_session() {
+    requires_server!(conn);
+
+    let handle = conn.cancel_handle().expect("MySQL advertises cancellation");
+
+    // The connection comes back out with the result: the point of `KILL QUERY`
+    // over `KILL` is that there is still a session to hand back.
+    let running = tokio::spawn(async move {
+        let opts = FetchOptions {
+            max_rows: None,
+            offset: 0,
+            timeout_secs: None,
+        };
+        let result = conn.execute(NEVER_FINISHES, &opts).await;
+        (conn, result)
+    });
+
+    // Long enough for the statement to be running on the server, short enough
+    // that a broken cancel fails the test rather than hanging it.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    handle.cancel().await.expect("cancel");
+
+    let (mut conn, result) = tokio::time::timeout(std::time::Duration::from_secs(30), running)
+        .await
+        .expect("the statement should have stopped, not run to the timeout")
+        .expect("the task should not panic");
+
+    let err = result.expect_err("an interrupted statement does not return rows");
+    // Reported as cancelled rather than as a query error: the user asked for
+    // this, and a red error message for something that worked is wrong.
+    assert_eq!(
+        err.category(),
+        tablex_core::ErrorCategory::Cancelled,
+        "{err:?}"
+    );
+
+    // The property that distinguishes this from `KILL`: the session survived, so
+    // the tab the user was working in is still connected.
+    let rs = query(&mut conn, "SELECT 1 AS one").await;
+    assert_eq!(rs.rows[0][0], Value::Int(1));
+}
+
+#[tokio::test]
+async fn cancelling_an_idle_connection_is_harmless() {
+    // A click often lands after the statement has already finished. `KILL QUERY`
+    // against a session running nothing is a no-op on the server, and treating
+    // it as a failure would report the good outcome as the bad one.
+    requires_server!(conn);
+    let handle = conn.cancel_handle().expect("handle");
+    handle.cancel().await.expect("cancelling nothing succeeds");
+
+    let rs = query(&mut conn, "SELECT 1 AS one").await;
+    assert_eq!(rs.rows[0][0], Value::Int(1));
+}
+
+#[test]
+fn cancellation_is_advertised_because_kill_query_is_wired_up() {
+    // The UI draws the stop button from this flag, so advertising it without an
+    // implementation would be a button that fails.
+    assert!(MysqlDriver::new().info().capabilities.cancel);
+}

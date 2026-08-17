@@ -102,6 +102,30 @@ fn driver_reports_no_provenance_so_results_stay_read_only() {
 }
 
 #[test]
+fn cancellation_stays_unadvertised_and_unimplemented() {
+    // Pinned as a pair on purpose. The honest options on SQL Server are an
+    // attention packet, which tiberius will not send, or `KILL <spid>`, which
+    // ends the session rather than the statement — see the module docs. Flipping
+    // the flag to reach for the second one would give the user a "stop query"
+    // button that silently drops their connection and rolls back their
+    // transaction, so the flag and the missing handle are asserted together.
+    let driver = MssqlDriver::new();
+    assert!(!driver.info().capabilities.cancel);
+}
+
+#[tokio::test]
+async fn asking_a_live_session_to_cancel_is_refused_rather_than_faked() {
+    requires_server!(conn);
+    // Live, so the assertion below is about cancellation rather than about a
+    // connection that never worked.
+    conn.ping().await.expect("ping");
+    // Nothing to hand out, which is what keeps the button hidden. The Server
+    // activity panel's `kill_session` is where ending a session lives, labelled
+    // as what it actually does.
+    assert!(conn.cancel_handle().is_none());
+}
+
+#[test]
 fn identifiers_use_brackets_with_a_doubled_closing_bracket() {
     assert_eq!(quote_ident("users", QUOTE), "[users]");
     // A `]` inside a name must not close the identifier early.

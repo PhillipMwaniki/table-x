@@ -118,6 +118,7 @@ async fn inline_edits_are_refused_with_an_explanation() {
         user: "default".into(),
         password: String::new(),
         database: "default".into(),
+        running: Default::default(),
     };
 
     let err = conn
@@ -349,4 +350,81 @@ async fn syntax_errors_carry_a_code() {
 async fn ping_succeeds_on_a_live_connection() {
     requires_server!(conn);
     conn.ping().await.expect("ping");
+}
+
+#[test]
+fn a_generated_query_id_is_one_kill_query_will_accept() {
+    // The two are written apart — `next_query_id` here, the charset check in
+    // `activity::kill_sql` — so a change to either that made ids unkillable
+    // would otherwise only show up against a live server.
+    let id = super::next_query_id();
+    assert!(activity::kill_sql(&id).is_ok(), "{id} was rejected");
+    // And distinct per statement, so a cancel cannot name the wrong one.
+    assert_ne!(id, super::next_query_id());
+}
+
+#[test]
+fn cancellation_is_advertised_because_kill_query_is_wired_up() {
+    // The UI draws the stop button from this flag, so advertising it without an
+    // implementation would be a button that fails.
+    assert!(ClickhouseDriver::new().info().capabilities.cancel);
+}
+
+/// A statement that will not finish on its own within the test's patience.
+///
+/// `sleep()` is not used: ClickHouse caps it at a few seconds per block and
+/// recent versions reject longer ones outright. Hashing every number forces real
+/// work that cannot be folded away by the optimizer the way a bare `count()`
+/// over `numbers` can.
+const NEVER_FINISHES: &str = "SELECT sum(sipHash64(number)) FROM numbers_mt(100000000000)";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_running_statement_can_be_cancelled() {
+    requires_server!(conn);
+
+    let handle = conn
+        .cancel_handle()
+        .expect("ClickHouse advertises cancellation");
+
+    let running = tokio::spawn(async move {
+        let opts = FetchOptions {
+            max_rows: None,
+            offset: 0,
+            timeout_secs: None,
+        };
+        conn.execute(NEVER_FINISHES, &opts).await
+    });
+
+    // Long enough for the query to be registered in `system.processes` — a
+    // `KILL QUERY` that arrives before it is there would match nothing and the
+    // statement would run on.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    handle.cancel().await.expect("cancel");
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(30), running)
+        .await
+        .expect("the statement should have stopped, not run to the timeout")
+        .expect("the task should not panic");
+
+    let err = result.expect_err("a killed statement does not return rows");
+    // Reported as cancelled rather than as a query error: the user asked for
+    // this, and a red error message for something that worked is wrong.
+    assert_eq!(
+        err.category(),
+        tablex_core::ErrorCategory::Cancelled,
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn cancelling_when_nothing_is_running_is_harmless() {
+    // Ids are never reused, so a click landing after the statement finished
+    // names one no longer in `system.processes` and matches nothing. Treating
+    // that as a failure would report the good outcome as the bad one.
+    requires_server!(conn);
+    let handle = conn.cancel_handle().expect("handle");
+    handle.cancel().await.expect("cancelling nothing succeeds");
+
+    let rs = query(&mut conn, "SELECT 1 AS one").await;
+    assert_eq!(rs.rows.len(), 1);
 }

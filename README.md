@@ -126,7 +126,7 @@ Milestone 1 ("core + power features") is the current target.
 | ✅ | **SQL editor** | CodeMirror 6, schema-aware autocomplete, run-selection, error positioning. |
 | ✅ | **Result grid** | Virtualized rows, inline editing, row insert and delete, sorting, filtering, undo/redo, optional row banding. |
 | ✅ | **Transactions** | Begin, commit and roll back on the four engines that have them, each in its own spelling. The indicator follows a `BEGIN` typed into the editor, not only the buttons. |
-| 🚧 | **Query cancellation** | SQLite and PostgreSQL can stop a running statement; the button is hidden on the three drivers that cannot yet. |
+| ✅ | **Query cancellation** | Stops a running statement on four engines, each by the only mechanism it offers: `sqlite3_interrupt`, a PostgreSQL cancel request on its own connection, `KILL QUERY` from a second MySQL connection, and `KILL QUERY` by client-supplied `query_id` on ClickHouse. The session survives in every case. Hidden on SQL Server, which offers no way to stop a statement without ending the session — see [Why SQL Server cannot cancel](#why-sql-server-cannot-cancel). |
 | ✅ | **SSH tunnels** | Password / private key / agent auth, multi-hop chains (ProxyJump), mandatory per-hop host key verification. Tested end to end against an in-process SSH server. |
 | ✅ | **Query history** | Every run persisted with its timing and outcome, searchable across connections. 10 tests. |
 | ✅ | **Appearance** | Eight themes plus follow-system, data and interface fonts, adjustable data size, row banding. 26 tests, including one that fails a theme missing a token. |
@@ -154,6 +154,30 @@ Milestone 1 ("core + power features") is the current target.
 
 Deliberately **out of scope** for milestone 1, and tracked for later: the third-party
 plugin system, AI chat and query assistance, MCP server integration, and settings sync.
+
+### Why SQL Server cannot cancel
+
+Every other engine here can be told to abandon a running statement and keep the session:
+SQLite has `sqlite3_interrupt`, PostgreSQL has an out-of-band cancel request, and MySQL and
+ClickHouse both have a `KILL QUERY` that targets the statement rather than the connection.
+
+TDS — SQL Server's protocol — has the equivalent. The client sends an *attention packet* on
+the same connection, out of band, and the server abandons the batch and leaves the session
+intact. The obstacle is that `tiberius` never sends one: its header codec names the packet
+type and nothing else references it, and there is no public API to reach it.
+
+The tempting substitute is `KILL <spid>` from a second connection, and it is not the same
+thing. `KILL` ends the *session* — it rolls back the open transaction, drops the connection,
+and takes the temporary tables on it. Wiring that to a button labelled "stop" would be
+precisely the failing affordance that [capabilities defaulting to
+"unsupported"](#capabilities-default-to-unsupported) exists to prevent, so the driver leaves
+`cancel` false and the button is not drawn. A pair of tests pins the flag and the absent
+handle together so neither drifts.
+
+Ending a session is still available where it is labelled as what it does: the Server
+activity panel. Real cancellation needs an attention packet, which means a change to
+`tiberius` or a fork of it — worth doing upstream, and not something to fake locally in the
+meantime.
 
 ### Why mobile is not simply another build target
 
@@ -502,6 +526,25 @@ cargo test -p tablex-drivers postgres::tests:: -- --nocapture | grep skipping
 
 These tests create and drop tables prefixed `tx_`. Point them at a scratch
 database, not one you care about.
+
+The other server-backed drivers work the same way, each with its own variable:
+
+| Variable | Example |
+|---|---|
+| `TABLEX_TEST_PG` | `postgres://user:password@localhost:5432/postgres` |
+| `TABLEX_TEST_MYSQL` | `mysql://root:password@localhost:3306/mysql` |
+| `TABLEX_TEST_MSSQL` | `mssql://sa:Password123@localhost:1433/master` |
+| `TABLEX_TEST_CLICKHOUSE` | `clickhouse://default:@localhost:8123/default` |
+
+Cancellation is the one feature whose tests are worth singling out. What a cancel has to
+prove — that the statement stopped *and* the session is still usable — can only be observed
+against a real server, so the unit tests cover the flag and the `query_id` plumbing while the
+behaviour itself lives behind these variables. Setting them is the only way to know the stop
+button works:
+
+```bash
+cargo test -p tablex-drivers cancel -- --nocapture | grep skipping
+```
 
 ### Logging
 

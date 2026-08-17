@@ -24,11 +24,12 @@ mod types;
 
 use async_trait::async_trait;
 use futures_util::StreamExt;
+use std::sync::{Arc, Mutex};
 use tablex_core::{
     activity::ServerActivity,
     config::{ConnectionConfig, TlsMode},
     driver::{
-        Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
+        CancelHandle, Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
         PlaceholderStyle, RowEdit, RowSink, STREAM_BATCH,
     },
     error::{Error, Result},
@@ -124,7 +125,8 @@ impl Driver for ClickhouseDriver {
                 stored_procedures: false,
                 // Each statement is its own HTTP request; the driver splits them.
                 multi_statement: true,
-                cancel: false,
+                // `KILL QUERY` by client-supplied id — see `ClickhouseCancel`.
+                cancel: true,
                 // JSONCompactEachRow is line-delimited, so rows decode as the
                 // response body arrives.
                 streaming: true,
@@ -179,11 +181,86 @@ impl Driver for ClickhouseDriver {
                 .database
                 .clone()
                 .unwrap_or_else(|| "default".to_string()),
+            running: Arc::new(Mutex::new(None)),
         };
 
         // Fail at connect time rather than on the user's first query.
         conn.ping().await?;
         Ok(Box::new(conn))
+    }
+}
+
+/// Names a statement before it is sent, so a cancel has something to name back.
+///
+/// ClickHouse cancellation is `KILL QUERY WHERE query_id = …`, which means the
+/// id has to be decided by the client: the server assigns one, but reading it
+/// back means a round trip that only completes once the query it identifies is
+/// already done. The HTTP interface accepts a `query_id` parameter for exactly
+/// this reason.
+///
+/// The process id keeps two Table X processes against one server apart; the
+/// counter keeps every statement in one process apart. Both stay inside the
+/// character set [`activity::kill_sql`] will accept.
+fn next_query_id() -> String {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("tablex-{}-{n}", std::process::id())
+}
+
+/// Stops the running statement by asking the server to kill it by id.
+///
+/// There is no session to interrupt here — over HTTP each statement is its own
+/// request — so the cancel is a second request carrying `KILL QUERY`. It shares
+/// the connection's `reqwest::Client`, which is a pool: the cancel gets its own
+/// socket while the statement being cancelled holds another, and the TLS
+/// settings are already the ones the session was built with.
+struct ClickhouseCancel {
+    client: reqwest::Client,
+    base: String,
+    user: String,
+    password: String,
+    /// The id of the most recent statement this connection sent, or `None`
+    /// before it has sent any.
+    ///
+    /// Never cleared once set. Ids are not reused, so a cancel that lands after
+    /// its statement finished names an id no longer in `system.processes` and
+    /// matches nothing — which is the right answer for a click that arrived a
+    /// moment late, and is safer than a slot that could go stale into a *later*
+    /// statement's id.
+    running: Arc<Mutex<Option<String>>>,
+}
+
+#[async_trait]
+impl CancelHandle for ClickhouseCancel {
+    async fn cancel(&self) -> Result<()> {
+        let Some(query_id) = self.running.lock().expect("query id lock").clone() else {
+            // Nothing has run on this connection yet, so there is nothing to
+            // stop and no request worth making.
+            return Ok(());
+        };
+
+        let url = reqwest::Url::parse(&self.base)
+            .map_err(|e| Error::Config(format!("invalid ClickHouse URL {}: {e}", self.base)))?;
+
+        // Built without the format and 64-bit-quoting parameters `request` sets:
+        // `KILL QUERY` returns a status table nobody reads, so the only thing
+        // that matters is whether the server accepted it.
+        let response = self
+            .client
+            .post(url)
+            .header("X-ClickHouse-User", &self.user)
+            .header("X-ClickHouse-Key", &self.password)
+            .body(activity::kill_sql(&query_id)?)
+            .send()
+            .await
+            .map_err(|e| Error::Network(e.to_string()))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(map_http_error(status, &body));
+        }
+        Ok(())
     }
 }
 
@@ -193,6 +270,9 @@ pub struct ClickhouseConnection {
     user: String,
     password: String,
     database: String,
+    /// Shared with the cancel handle: `request` records each statement's id here
+    /// before sending it, and a cancel reads whatever is current.
+    running: Arc<Mutex<Option<String>>>,
 }
 
 #[async_trait]
@@ -508,6 +588,16 @@ impl Connection for ClickhouseConnection {
         ))
     }
 
+    fn cancel_handle(&self) -> Option<Arc<dyn CancelHandle>> {
+        Some(Arc::new(ClickhouseCancel {
+            client: self.client.clone(),
+            base: self.base.clone(),
+            user: self.user.clone(),
+            password: self.password.clone(),
+            running: Arc::clone(&self.running),
+        }))
+    }
+
     async fn ping(&mut self) -> Result<()> {
         self.query_raw("SELECT 1", None).await.map(|_| ())
     }
@@ -650,8 +740,16 @@ impl ClickhouseConnection {
     ) -> Result<reqwest::Response> {
         let mut url = reqwest::Url::parse(&self.base)
             .map_err(|e| Error::Config(format!("invalid ClickHouse URL {}: {e}", self.base)))?;
+
+        // Recorded before the request goes out rather than after it returns: a
+        // cancel is only useful while the statement is still running, which is
+        // exactly the window in which this call has not come back yet.
+        let query_id = next_query_id();
+        *self.running.lock().expect("query id lock") = Some(query_id.clone());
+
         {
             let mut q = url.query_pairs_mut();
+            q.append_pair("query_id", &query_id);
             q.append_pair("database", &self.database);
             // Set as a parameter rather than appended to the SQL, so DDL and
             // INSERT — which reject a FORMAT clause — still work.
@@ -870,6 +968,12 @@ fn map_http_error(status: reqwest::StatusCode, body: &str) -> Error {
     // 81 UNKNOWN_DATABASE.
     if matches!(code, Some(81)) {
         return Error::Connection(body.trim().to_string());
+    }
+    // 394 QUERY_WAS_CANCELLED — what the killed statement's own request reports
+    // back. Cancelled rather than a query error: the user asked for this, and a
+    // red failure for something that worked is wrong.
+    if matches!(code, Some(394)) {
+        return Error::Cancelled;
     }
     if status.is_server_error() && code.is_none() {
         return Error::Network(format!("{status}: {}", body.trim()));
