@@ -15,11 +15,12 @@ Windows · Linux · macOS · iOS · Android
 ---
 
 > [!WARNING]
-> **Status: pre-release (v0.1.0).** Five drivers, the editor, the grid, tunnelling and
+> **Status: pre-release (v0.2.0).** Five drivers, the editor, the grid, tunnelling and
 > the power features are built and tested — see [Roadmap](#roadmap) for exactly what
-> works today. Installers are produced by CI but are **not code-signed yet**, so the
-> first launch warns on Windows and macOS. Nothing here has been through a release
-> anyone else has installed.
+> works today. Windows and Linux installers are produced by CI but are **not code-signed
+> yet**, so the first launch warns. macOS is not built by CI — signing it needs a paid
+> Apple membership, and an unsigned `.dmg` is refused rather than warned about. Nothing
+> here has been through a release anyone else has installed.
 
 ---
 
@@ -102,8 +103,8 @@ best at. Tauri splits along that seam.
 
 The tradeoff Tauri makes is that each OS renders in its own webview (WebView2, WKWebView,
 WebKitGTK), so rendering differences are real and must be tested per platform. That is
-handled with a conservative build target and a CI matrix that builds all three desktop
-OSes.
+handled with a conservative build target and a CI matrix that builds every desktop OS
+being shipped — Windows and Linux today, macOS once it can be signed.
 
 ## Roadmap
 
@@ -149,7 +150,7 @@ Milestone 1 ("core + power features") is the current target.
 | ✅ | **MCP server** | `tablex mcp` — query, list, describe and explain for an agent, read-only by default, row caps enforced, every call audited. 11 tests over real stdio. |
 | ✅ | **Correctness made visible** | Exact columns marked in the grid, a per-result panel explaining what is guaranteed, and "read-only" replaced by which of four reasons applies. |
 | ✅ | **Privileges and roles** | Principals, grants, role inheritance, and SQL Server denials on four engines. Privilege names stay in the engine's own words. 14 tests. |
-| 🚧 | **CI/CD + packaging** | GitHub Actions builds MSI/NSIS, .dmg (Intel and Apple silicon), .deb, .rpm and AppImage on every tag. **Code signing and notarization are not set up**, and mobile bundles are not built — see [Releases and signing](#releases-and-signing). |
+| 🚧 | **CI/CD + packaging** | GitHub Actions builds MSI/NSIS, .deb, .rpm and AppImage on every tag. **Code signing is not set up**; macOS and mobile bundles are not built — see [Releases and signing](#releases-and-signing). |
 
 Deliberately **out of scope** for milestone 1, and tracked for later: the third-party
 plugin system, AI chat and query assistance, MCP server integration, and settings sync.
@@ -386,8 +387,10 @@ Subsequent builds are incremental and fast.
 pnpm app:build
 ```
 
-Artifacts land in `target/release/bundle/` — `.msi` and `.exe` on Windows, `.dmg` and
-`.app` on macOS, `.deb`/`.rpm`/`.AppImage` on Linux.
+Artifacts land in `target/release/bundle/` — `.msi` and `.exe` on Windows,
+`.deb`/`.rpm`/`.AppImage` on Linux, `.dmg` and `.app` on macOS. Building on a Mac works
+regardless of what CI does; it is distribution, not compilation, that needs the Apple
+membership.
 
 ## Project structure
 
@@ -584,7 +587,7 @@ impl Driver for MyDriver {
 |---|---|---|:---:|
 | Windows | 10 1809+ | `.msi`, `.exe` (NSIS) | ✅ |
 | Linux | glibc 2.35+ | `.deb`, `.rpm`, `.AppImage` | ✅ |
-| macOS | 10.15+ | `.dmg` (Intel and Apple silicon) | ✅ |
+| macOS | 10.15+ | `.dmg` (Intel and Apple silicon) | ⬜ |
 | iOS / iPadOS | 13+ | `.ipa` | ⬜ |
 | Android | 8.0+ (API 26) | `.apk`, `.aab` | ⬜ |
 
@@ -592,9 +595,17 @@ The Linux floor is glibc 2.35 because that is what the `ubuntu-22.04` runner lin
 against, and a binary built against a newer glibc will not start on an older
 distribution. Moving the build to an older image is the only way to lower it.
 
-macOS ships as two separate downloads rather than one universal binary: each is half
-the size, and a failure on one architecture names itself instead of taking the other
-down with it.
+macOS is **not currently built by CI**. Distributing a `.dmg` needs an Apple Developer
+Program membership to sign and notarize it, and on current macOS an unsigned download is
+refused outright rather than warned about — so the artifact would be one nobody could
+open. The matrix entries are kept commented in `release.yml` next to the Apple secrets
+they need; restoring the platform is uncommenting them once the membership exists. The
+code itself is unaffected — it compiles for macOS today, and `pnpm tauri build` on a Mac
+still produces a `.dmg`.
+
+When it returns it ships as two separate downloads rather than one universal binary:
+each is half the size, and a failure on one architecture names itself instead of taking
+the other down with it.
 
 Mobile shares the entire Rust core, but it is not a build target away — see
 [Why mobile is not simply another build target](#why-mobile-is-not-simply-another-build-target).
@@ -606,7 +617,7 @@ Two workflows, in `.github/workflows`:
 | Workflow | Runs on | Does |
 |---|---|---|
 | `ci.yml` | every push and PR | typecheck, frontend tests, `cargo fmt --check`, clippy with warnings denied, full Rust test suite |
-| `release.yml` | a `v*` tag, or manually | builds every installer, then opens a **draft** release with them attached |
+| `release.yml` | a `v*` tag, or manually | builds the Windows and Linux installers, then opens a **draft** release with them attached |
 
 Running `release.yml` from the Actions tab builds the same installers and attaches them
 to the run without touching releases — which is how to find out whether a change breaks
@@ -625,15 +636,17 @@ check the artifacts before they become something people can install.
 
 ### Signing is not set up
 
-The installers CI produces are **unsigned**. Windows SmartScreen warns on first run, and
-macOS Gatekeeper refuses to open the `.dmg` without a right-click → Open. Acceptable for
-a pre-release; not acceptable for something people are asked to trust with database
-credentials.
+The installers CI produces are **unsigned**, and Windows SmartScreen warns on first run.
+Acceptable for a pre-release; not acceptable for something people are asked to trust with
+database credentials.
 
-Both platforms need a paid identity, bought and held by whoever publishes. Prices and
+Signing needs a paid identity, bought and held by whoever publishes. Prices and
 eligibility rules move — check the vendor before committing.
 
 #### macOS — Apple Developer Program
+
+Not needed until macOS is back in the matrix, and it is out of the matrix precisely
+because this has not been bought. Kept here so the requirement is not rediscovered.
 
 There is one route and no alternative: **$99/year**, from
 [developer.apple.com/programs](https://developer.apple.com/programs/).

@@ -48,17 +48,24 @@ jobs:
             target: x86_64-pc-windows-msvc
             args: ""
 
-          # Split rather than a universal binary: two downloads half the size
-          # each, and a failure on one architecture names itself.
-          - name: macOS (Apple silicon)
-            os: macos-latest
-            target: aarch64-apple-darwin
-            args: "--target aarch64-apple-darwin"
-
-          - name: macOS (Intel)
-            os: macos-latest
-            target: x86_64-apple-darwin
-            args: "--target x86_64-apple-darwin"
+          # macOS is deliberately absent. Distributing a .dmg needs an Apple
+          # Developer Program membership to sign and notarize it, and without
+          # one Gatekeeper refuses the download outright on current macOS — not
+          # a warning that can be clicked through, a refusal. Building an
+          # artifact nobody can open is a job that only produces a false sense
+          # of coverage, so the platform waits for the membership rather than
+          # being half-shipped. Restoring it means re-adding the two entries
+          # below and the Apple secrets in the build step.
+          #
+          #   - name: macOS (Apple silicon)
+          #     os: macos-latest
+          #     target: aarch64-apple-darwin
+          #     args: "--target aarch64-apple-darwin"
+          #
+          #   - name: macOS (Intel)
+          #     os: macos-latest
+          #     target: x86_64-apple-darwin
+          #     args: "--target x86_64-apple-darwin"
 
     steps:
       - uses: actions/checkout@v4
@@ -110,16 +117,11 @@ jobs:
         id: tauri
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Signing is optional so an unsigned build still produces installers.
-          # Unsigned ones warn on first launch — SmartScreen on Windows,
-          # Gatekeeper on macOS — which is fine for a nightly and not fine for a
-          # public release. See the release notes in README.
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # No signing secrets are passed. Windows installers are unsigned and
+          # warn through SmartScreen on first launch, which is fine for a
+          # pre-release and not fine for a public one. The Apple variables that
+          # used to sit here went with the macOS matrix entries. See the release
+          # notes in README.
         with:
           args: ${{ matrix.args }}
 
@@ -148,7 +150,6 @@ jobs:
             target/**/release/bundle/**/*.AppImage
             target/**/release/bundle/**/*.msi
             target/**/release/bundle/**/*.exe
-            target/**/release/bundle/**/*.dmg
           if-no-files-found: error
           retention-days: 14
 
@@ -181,7 +182,8 @@ jobs:
             artifacts/**/*.AppImage
             artifacts/**/*.msi
             artifacts/**/*.exe
-            artifacts/**/*.dmg
           # A missing pattern means a platform silently produced nothing, which
-          # is exactly the release worth stopping.
+          # is exactly the release worth stopping. This is also why `.dmg` is not
+          # listed: with macOS out of the matrix, a pattern that can never match
+          # would fail every release rather than catching a real gap.
           fail_on_unmatched_files: true
