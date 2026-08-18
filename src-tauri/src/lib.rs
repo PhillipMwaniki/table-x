@@ -62,6 +62,8 @@ pub fn run() {
             ipc::execute,
             ipc::browse,
             ipc::table_detail,
+            ipc::preview_table_changes,
+            ipc::apply_table_changes,
             ipc::explain,
             ipc::schema_diagram,
             ipc::compare_schemas,

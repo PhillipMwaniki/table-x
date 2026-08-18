@@ -1428,3 +1428,161 @@ pub async fn completion_scope(
     );
     Ok(scope)
 }
+
+// ---------------------------------------------------------------------------
+// Editing a table's structure
+// ---------------------------------------------------------------------------
+
+/// A set of structure edits, as the editor collected them.
+#[derive(Debug, serde::Deserialize)]
+pub struct TableChanges {
+    pub connection_id: String,
+    pub changes: Vec<tablex_core::diff::Change>,
+}
+
+/// What running the edits would do, before any of it happens.
+#[derive(Debug, serde::Serialize)]
+pub struct DdlPlan {
+    pub statements: Vec<tablex_core::diff::Statement>,
+    /// Changes this engine will not be asked to make, each with its reason.
+    /// Non-empty means [`apply_table_changes`] will refuse.
+    pub refusals: Vec<String>,
+    /// Whether a failure partway through leaves the earlier statements applied.
+    pub transactional: bool,
+}
+
+/// Build the statements for a set of edits without running any of them.
+///
+/// Separate from applying them on purpose. The editor shows this, the user reads
+/// it, and only then is there anything to run — which is the same bargain the
+/// schema diff makes, and the reason the structure view was read-only until now.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn preview_table_changes(
+    state: tauri::State<'_, AppState>,
+    request: TableChanges,
+) -> IpcResult<DdlPlan> {
+    Ok(plan_changes(&state, &request).await?)
+}
+
+async fn plan_changes(
+    state: &AppState,
+    request: &TableChanges,
+) -> Result<DdlPlan, tablex_core::Error> {
+    let config = state.config_for(&request.connection_id).await?;
+    let capabilities = state.drivers.get(&config.driver)?.info().capabilities;
+
+    let refusals = request
+        .changes
+        .iter()
+        .filter_map(|c| tablex_core::diff::refusal(c, capabilities.ddl))
+        .collect();
+
+    let statements = tablex_core::diff::migration(
+        &request.changes,
+        tablex_core::diff::Dialect::for_driver(&config.driver),
+    );
+
+    Ok(DdlPlan {
+        statements,
+        refusals,
+        transactional: capabilities.ddl.transactional_ddl && capabilities.transactions,
+    })
+}
+
+/// How far an apply got.
+#[derive(Debug, serde::Serialize)]
+pub struct DdlOutcome {
+    pub applied: usize,
+    pub elapsed_ms: u64,
+}
+
+/// Run the statements a preview produced.
+///
+/// Refuses rather than half-tries: a read-only connection, a change this engine
+/// cannot make, or a statement the dialect could only render as a comment all
+/// stop the whole set before the first one runs. Getting halfway through a
+/// migration is worse than not starting, and the checks that can be made without
+/// touching the database are made first.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn apply_table_changes(
+    state: tauri::State<'_, AppState>,
+    request: TableChanges,
+) -> IpcResult<DdlOutcome> {
+    let config = state.config_for(&request.connection_id).await?;
+
+    // The same guard `execute` applies, for the same reason: this is protection
+    // against running the wrong thing against production, not a security
+    // boundary the database is unaware of.
+    if config.read_only {
+        return Err(
+            tablex_core::Error::Unsupported("this connection is marked read-only".into()).into(),
+        );
+    }
+
+    let plan = plan_changes(&state, &request).await?;
+
+    if let Some(reason) = plan.refusals.first() {
+        return Err(tablex_core::Error::Unsupported(reason.clone()).into());
+    }
+    if let Some(blocked) = plan.statements.iter().find(|s| s.unsupported) {
+        return Err(tablex_core::Error::Unsupported(
+            blocked
+                .note
+                .clone()
+                .unwrap_or_else(|| "this engine has no statement for that change".into()),
+        )
+        .into());
+    }
+    if plan.statements.is_empty() {
+        return Err(tablex_core::Error::query("there is nothing to apply").into());
+    }
+
+    let started = std::time::Instant::now();
+    let session = state.sessions.get(&request.connection_id).await?;
+    let opts = FetchOptions::default();
+
+    let mut guard = session.connection.lock().await;
+    let tx = plan
+        .transactional
+        .then(|| guard.transaction_statements())
+        .flatten();
+
+    if let Some(tx) = tx {
+        guard.execute(tx.begin, &opts).await?;
+    }
+
+    let mut applied = 0usize;
+    for statement in &plan.statements {
+        match guard.execute(&statement.sql, &opts).await {
+            Ok(_) => applied += 1,
+            Err(e) => {
+                if let Some(tx) = tx {
+                    // Best effort: the rollback failing must not replace the
+                    // error that explains why we are rolling back.
+                    let _ = guard.execute(tx.rollback, &opts).await;
+                    return Err(e.into());
+                }
+                // Nothing to undo with, so the honest thing is to say how far it
+                // got. "Statement 3 failed" is useless without knowing that 1 and
+                // 2 are still in place.
+                return Err(tablex_core::Error::query(format!(
+                    "statement {} of {} failed and this engine does not roll DDL back, \
+                     so the {} before it are already applied: {e}",
+                    applied + 1,
+                    plan.statements.len(),
+                    applied,
+                ))
+                .into());
+            }
+        }
+    }
+
+    if let Some(tx) = tx {
+        guard.execute(tx.commit, &opts).await?;
+    }
+
+    Ok(DdlOutcome {
+        applied,
+        elapsed_ms: started.elapsed().as_millis() as u64,
+    })
+}

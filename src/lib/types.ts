@@ -78,7 +78,20 @@ export interface ErrorPayload {
 
 export type PlaceholderStyle = "question" | "dollar" | "at_p";
 
+/** Which parts of an existing table this engine can be asked to change. */
+export interface DdlSupport {
+  add_column: boolean;
+  drop_column: boolean;
+  /** Changing a type, nullability or default in place. SQLite cannot. */
+  alter_column: boolean;
+  indexes: boolean;
+  foreign_keys: boolean;
+  /** Whether a failed apply leaves the statements before it in place. */
+  transactional_ddl: boolean;
+}
+
 export interface Capabilities {
+  ddl: DdlSupport;
   transactions: boolean;
   cancel: boolean;
   multi_statement: boolean;
@@ -353,6 +366,22 @@ export interface MigrationStatement {
   /** Whether running it loses data that cannot be recovered. */
   destructive: boolean;
   note: string | null;
+  /** The engine has no statement for this, so `sql` is an explanatory comment. */
+  unsupported?: boolean;
+}
+
+/** What a set of structure edits would run, before any of it does. */
+export interface DdlPlan {
+  statements: MigrationStatement[];
+  /** Changes this engine will not be asked to make. Non-empty blocks Apply. */
+  refusals: string[];
+  /** Whether a failure partway through undoes what came before it. */
+  transactional: boolean;
+}
+
+export interface DdlOutcome {
+  applied: number;
+  elapsed_ms: number;
 }
 
 /** What a comparison found. The script turns `from` into `to`. */

@@ -22,6 +22,14 @@ use serde::{Deserialize, Serialize};
 /// offering buttons that fail — no "Begin transaction" on a driver without one.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Capabilities {
+    /// Which parts of a table this engine can change after it exists.
+    ///
+    /// Split rather than a single flag because engines differ inside the
+    /// feature, not just about it: SQLite adds and drops columns happily and has
+    /// no `ALTER COLUMN` or `ADD CONSTRAINT` at all, so one flag would either
+    /// hide what works or offer what fails.
+    #[serde(default)]
+    pub ddl: DdlSupport,
     pub transactions: bool,
     /// Server-side cancellation of a running statement.
     pub cancel: bool,
@@ -73,10 +81,51 @@ pub struct Capabilities {
     pub identifier_quote: char,
 }
 
+/// What a structure editor may offer for one engine.
+///
+/// Every field defaults to false, for the same reason [`Capabilities`] does: a
+/// driver that forgets one ends up with a control the user cannot see, which is
+/// a nuisance. The inverse default is a control that generates a statement the
+/// engine rejects, which is a bug report.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct DdlSupport {
+    pub add_column: bool,
+    pub drop_column: bool,
+    /// Changing a column's type, nullability or default in place.
+    pub alter_column: bool,
+    /// Creating and dropping ordinary indexes.
+    ///
+    /// Deliberately not true for engines whose "index" is a different concept —
+    /// ClickHouse's data-skipping indexes share the word and nothing else.
+    pub indexes: bool,
+    /// `ADD CONSTRAINT … FOREIGN KEY` and dropping one again.
+    pub foreign_keys: bool,
+    /// Whether DDL honours a transaction, so a failed apply leaves nothing
+    /// behind.
+    ///
+    /// MySQL is the one that does not: it commits implicitly before and after
+    /// every DDL statement, so a set that fails halfway stays half applied. That
+    /// is not a reason to refuse the edit, but it is a reason to say so before
+    /// running it rather than after.
+    pub transactional_ddl: bool,
+}
+
+impl DdlSupport {
+    /// Whether anything at all can be edited, for hiding the whole affordance.
+    pub fn any(&self) -> bool {
+        self.add_column
+            || self.drop_column
+            || self.alter_column
+            || self.indexes
+            || self.foreign_keys
+    }
+}
+
 impl Default for Capabilities {
     /// Conservative defaults: a new driver advertises nothing until it proves it.
     fn default() -> Self {
         Capabilities {
+            ddl: DdlSupport::default(),
             transactions: false,
             cancel: false,
             multi_statement: false,

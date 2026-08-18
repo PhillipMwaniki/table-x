@@ -1162,7 +1162,12 @@ export function Workspace({
                 onOpenQuery={(sql) => openScriptTab(connection.id, { title: "Statement", sql })}
               />
             ) : tab.kind === "table" && tab.view === "structure" ? (
-              <StructureView connectionId={connection.id} table={tab.title} schema={tab.schema} />
+              <StructureView
+                key={`${connection.id}:${tab.schema ?? ""}:${tab.title}`}
+                connectionId={connection.id}
+                table={tab.title}
+                schema={tab.schema}
+              />
             ) : (
               <div ref={splitRef} className="flex min-h-0 flex-1 flex-col">
                 {tab.kind === "query" && (

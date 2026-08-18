@@ -29,8 +29,8 @@ use tablex_core::{
     activity::ServerActivity,
     config::{ConnectionConfig, TlsMode},
     driver::{
-        CancelHandle, Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
-        PlaceholderStyle, RowEdit, RowSink, STREAM_BATCH,
+        CancelHandle, Capabilities, CompletionScope, Connection, DdlSupport, Driver, DriverInfo,
+        FetchOptions, PlaceholderStyle, RowEdit, RowSink, STREAM_BATCH,
     },
     error::{Error, Result},
     plan::Plan,
@@ -108,6 +108,13 @@ impl Driver for ClickhouseDriver {
             default_port: Some(8123),
             file_based: false,
             capabilities: Capabilities {
+                // None of it, and not for lack of an ALTER statement.
+                // ClickHouse has no foreign keys at all, and its indexes are
+                // data-skipping indexes -- the same word for a different
+                // thing, built with ADD INDEX ... TYPE ... GRANULARITY. A
+                // column editor here would be a different editor, not this
+                // one with a flag flipped.
+                ddl: DdlSupport::default(),
                 // ClickHouse transactions are experimental and limited to a
                 // single partition, so they are not advertised.
                 transactions: false,

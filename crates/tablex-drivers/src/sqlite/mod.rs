@@ -13,8 +13,9 @@ use tablex_core::{
     config::ConnectionConfig,
     diagram::{GraphTable, SchemaGraph},
     driver::{
-        CancelHandle, Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
-        PlaceholderStyle, RowDelete, RowEdit, RowInsert, RowSink, TxStatements, STREAM_BATCH,
+        CancelHandle, Capabilities, CompletionScope, Connection, DdlSupport, Driver, DriverInfo,
+        FetchOptions, PlaceholderStyle, RowDelete, RowEdit, RowInsert, RowSink, TxStatements,
+        STREAM_BATCH,
     },
     error::{Error, Result},
     plan::{Plan, PlanRow},
@@ -57,6 +58,19 @@ impl Driver for SqliteDriver {
             default_port: None,
             file_based: true,
             capabilities: Capabilities {
+                // Add, drop and index only. SQLite has no ALTER COLUMN and no
+                // ADD CONSTRAINT: changing a type or attaching a foreign key
+                // means building a new table, copying the rows across and
+                // renaming, which is a procedure rather than a statement and
+                // is not something to do behind a checkbox.
+                ddl: DdlSupport {
+                    add_column: true,
+                    drop_column: true,
+                    alter_column: false,
+                    indexes: true,
+                    foreign_keys: false,
+                    transactional_ddl: true,
+                },
                 transactions: true,
                 multi_statement: true,
                 explain: true,

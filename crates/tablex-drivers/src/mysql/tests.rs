@@ -19,6 +19,7 @@
 
 use super::*;
 use indexmap::IndexMap;
+use tablex_core::diff::Change;
 use tablex_core::{config::TlsConfig, Value};
 
 fn test_config() -> Option<(ConnectionConfig, String)> {
@@ -539,4 +540,162 @@ fn cancellation_is_advertised_because_kill_query_is_wired_up() {
     // The UI draws the stop button from this flag, so advertising it without an
     // implementation would be a button that fails.
     assert!(MysqlDriver::new().info().capabilities.cancel);
+}
+
+#[tokio::test]
+async fn generated_structure_ddl_is_accepted_by_the_server() {
+    // The claim the structure editor rests on: the statements `migration()`
+    // writes for this dialect are ones the engine actually runs. Asserting the
+    // SQL string in a unit test proves it was spelled as intended; only a server
+    // proves it was spelled correctly.
+    requires_server!(conn);
+    exec(&mut conn, "DROP TABLE IF EXISTS tx_ddl_child, tx_ddl").await;
+    exec(
+        &mut conn,
+        "CREATE TABLE tx_ddl (id INT PRIMARY KEY, label VARCHAR(64) NOT NULL)",
+    )
+    .await;
+    exec(
+        &mut conn,
+        "CREATE TABLE tx_ddl_child (id INT PRIMARY KEY, parent_id INT NOT NULL)",
+    )
+    .await;
+
+    let changes = vec![
+        Change::ColumnAdded {
+            table: "tx_ddl".into(),
+            column: ColumnDef {
+                name: "note".into(),
+                type_name: "VARCHAR(128)".into(),
+                nullable: true,
+                default: None,
+                auto_increment: false,
+                ordinal: 3,
+                comment: None,
+            },
+        },
+        Change::ColumnChanged {
+            table: "tx_ddl".into(),
+            column: "label".into(),
+            to: ColumnDef {
+                name: "label".into(),
+                type_name: "VARCHAR(200)".into(),
+                nullable: true,
+                default: None,
+                auto_increment: false,
+                ordinal: 2,
+                comment: None,
+            },
+            differences: vec![tablex_core::diff::FieldChange {
+                field: "type".into(),
+                from: "VARCHAR(64)".into(),
+                to: "VARCHAR(200)".into(),
+            }],
+        },
+        Change::IndexAdded {
+            table: "tx_ddl".into(),
+            index: IndexDef {
+                name: "tx_ddl_note_idx".into(),
+                columns: vec!["note".into()],
+                unique: false,
+                primary: false,
+                method: None,
+            },
+        },
+        Change::ForeignKeyAdded {
+            table: "tx_ddl_child".into(),
+            key: ForeignKeyDef {
+                name: "tx_ddl_child_parent_fk".into(),
+                columns: vec!["parent_id".into()],
+                referenced_schema: None,
+                referenced_table: "tx_ddl".into(),
+                referenced_columns: vec!["id".into()],
+                on_delete: None,
+                on_update: None,
+            },
+        },
+    ];
+
+    let statements =
+        tablex_core::diff::migration(&changes, tablex_core::diff::Dialect::for_driver("mysql"));
+    assert!(
+        statements.iter().all(|s| !s.unsupported),
+        "MySQL should be able to express all of these: {statements:?}"
+    );
+
+    for statement in &statements {
+        conn.execute(&statement.sql, &FetchOptions::default())
+            .await
+            .unwrap_or_else(|e| {
+                panic!("the server rejected generated DDL:\n{}\n{e}", statement.sql)
+            });
+    }
+
+    // Read back through the same catalog queries the structure view uses, so
+    // this asserts what the user would see rather than what we just sent.
+    let detail = conn
+        .table_detail(None, "tx_ddl")
+        .await
+        .expect("table detail");
+    let note = detail
+        .columns
+        .iter()
+        .find(|c| c.name == "note")
+        .expect("the added column");
+    assert!(note.type_name.to_lowercase().contains("varchar"));
+    let label = detail
+        .columns
+        .iter()
+        .find(|c| c.name == "label")
+        .expect("the altered column");
+    assert!(
+        label.type_name.contains("200"),
+        "the widened type should be reported back: {}",
+        label.type_name
+    );
+    assert!(detail.indexes.iter().any(|i| i.name == "tx_ddl_note_idx"));
+
+    let child = conn
+        .table_detail(None, "tx_ddl_child")
+        .await
+        .expect("child detail");
+    assert!(
+        child
+            .foreign_keys
+            .iter()
+            .any(|k| k.referenced_table == "tx_ddl"),
+        "the foreign key should come back from the catalog: {:?}",
+        child.foreign_keys
+    );
+
+    // Dropping is the other half, and the phase order matters: the key has to go
+    // before the table it points at.
+    let cleanup = vec![
+        Change::ForeignKeyRemoved {
+            table: "tx_ddl_child".into(),
+            key: "tx_ddl_child_parent_fk".into(),
+        },
+        Change::IndexRemoved {
+            table: "tx_ddl".into(),
+            index: "tx_ddl_note_idx".into(),
+        },
+        Change::ColumnRemoved {
+            table: "tx_ddl".into(),
+            column: "note".into(),
+        },
+    ];
+    for statement in
+        tablex_core::diff::migration(&cleanup, tablex_core::diff::Dialect::for_driver("mysql"))
+    {
+        conn.execute(&statement.sql, &FetchOptions::default())
+            .await
+            .unwrap_or_else(|e| {
+                panic!("the server rejected generated DDL:\n{}\n{e}", statement.sql)
+            });
+    }
+
+    let detail = conn.table_detail(None, "tx_ddl").await.expect("detail");
+    assert!(!detail.columns.iter().any(|c| c.name == "note"));
+
+    exec(&mut conn, "DROP TABLE tx_ddl_child, tx_ddl").await;
 }

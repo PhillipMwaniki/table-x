@@ -46,7 +46,7 @@ use tablex_core::{
     config::{ConnectionConfig, TlsMode},
     diagram::{GraphTable, SchemaGraph},
     driver::{
-        Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
+        Capabilities, CompletionScope, Connection, DdlSupport, Driver, DriverInfo, FetchOptions,
         PlaceholderStyle, RowDelete, RowEdit, RowInsert, RowSink, TxStatements, STREAM_BATCH,
     },
     error::{Error, Result},
@@ -163,6 +163,14 @@ impl Driver for MssqlDriver {
             default_port: Some(1433),
             file_based: false,
             capabilities: Capabilities {
+                ddl: DdlSupport {
+                    add_column: true,
+                    drop_column: true,
+                    alter_column: true,
+                    indexes: true,
+                    foreign_keys: true,
+                    transactional_ddl: true,
+                },
                 transactions: true,
                 multi_statement: true,
                 explain: true,

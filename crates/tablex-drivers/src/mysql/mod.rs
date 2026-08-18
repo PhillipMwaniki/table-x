@@ -19,8 +19,9 @@ use tablex_core::{
     config::{ConnectionConfig, TlsMode},
     diagram::{GraphTable, SchemaGraph},
     driver::{
-        CancelHandle, Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
-        PlaceholderStyle, RowDelete, RowEdit, RowInsert, RowSink, TxStatements, STREAM_BATCH,
+        CancelHandle, Capabilities, CompletionScope, Connection, DdlSupport, Driver, DriverInfo,
+        FetchOptions, PlaceholderStyle, RowDelete, RowEdit, RowInsert, RowSink, TxStatements,
+        STREAM_BATCH,
     },
     error::{is_connection_refused, root_cause, Error, Result},
     plan::Plan,
@@ -146,6 +147,19 @@ impl Driver for MysqlDriver {
             default_port: Some(3306),
             file_based: false,
             capabilities: Capabilities {
+                // All of it. Note that DDL here is not transactional -- MySQL
+                // commits implicitly around it -- which is why a failed apply
+                // reports how far it got rather than claiming nothing happened.
+                ddl: DdlSupport {
+                    add_column: true,
+                    drop_column: true,
+                    alter_column: true,
+                    indexes: true,
+                    foreign_keys: true,
+                    // MySQL commits implicitly around DDL, so a set that
+                    // fails halfway stays half applied.
+                    transactional_ddl: false,
+                },
                 transactions: true,
                 multi_statement: true,
                 explain: true,

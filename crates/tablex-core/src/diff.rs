@@ -19,6 +19,7 @@
 //! question worth asking about generated DDL is not "are you sure" but "does
 //! this say what you meant", and only the statements themselves can answer it.
 
+use crate::driver::DdlSupport;
 use crate::schema::{ColumnDef, ForeignKeyDef, IndexDef, TableDetail};
 use crate::sql::quote_ident;
 use serde::{Deserialize, Serialize};
@@ -356,6 +357,12 @@ fn same_key(a: &ForeignKeyDef, b: &ForeignKeyDef) -> bool {
 pub struct Dialect {
     pub quote: char,
     pub alter_column: AlterColumnStyle,
+    /// Whether `ALTER TABLE … ADD CONSTRAINT` exists at all.
+    ///
+    /// Separate from [`AlterColumnStyle`] because the two are independent: an
+    /// engine can rewrite a column and still have no way to attach a foreign key
+    /// to a table that already exists.
+    pub constraints: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -366,6 +373,14 @@ pub enum AlterColumnStyle {
     MySql,
     /// `ALTER COLUMN x t NOT NULL` — like MySQL, different keyword.
     TSql,
+    /// The engine cannot change a column in place at all.
+    ///
+    /// SQLite is the case in point: it can add and drop a column, and nothing
+    /// else. Changing a type, a default or nullability means building a new
+    /// table, copying the rows across, dropping the old one and renaming — which
+    /// is a procedure, not a statement, and not something to emit as though it
+    /// were one.
+    Unsupported,
 }
 
 impl Dialect {
@@ -374,16 +389,35 @@ impl Dialect {
             "mysql" | "mariadb" => Dialect {
                 quote: '`',
                 alter_column: AlterColumnStyle::MySql,
+                constraints: true,
             },
             "mssql" => Dialect {
                 quote: '[',
                 alter_column: AlterColumnStyle::TSql,
+                constraints: true,
             },
-            // SQLite's ALTER is very limited, but what it does support it
-            // spells like PostgreSQL.
+            // Spelled like MySQL, but with no constraints of any kind — and its
+            // indexes are data-skipping indexes, which are a different concept
+            // wearing the same word.
+            "clickhouse" => Dialect {
+                quote: '`',
+                alter_column: AlterColumnStyle::MySql,
+                constraints: false,
+            },
+            // Named rather than left to the default, because what SQLite cannot
+            // do is the whole point. It was previously treated as PostgreSQL,
+            // which produced `ALTER COLUMN … TYPE` and `ADD CONSTRAINT`
+            // statements it cannot run: harmless while a migration was only ever
+            // read, wrong the moment one is applied.
+            "sqlite" => Dialect {
+                quote: '"',
+                alter_column: AlterColumnStyle::Unsupported,
+                constraints: false,
+            },
             _ => Dialect {
                 quote: '"',
                 alter_column: AlterColumnStyle::Postgres,
+                constraints: true,
             },
         }
     }
@@ -397,6 +431,35 @@ pub struct Statement {
     pub destructive: bool,
     /// Anything the reader needs to know that the statement does not say.
     pub note: Option<String>,
+    /// The engine has no statement for this change, so `sql` is a comment
+    /// describing what would have to happen instead.
+    ///
+    /// Kept in the list rather than dropped: a migration that silently omits a
+    /// difference it found reads as complete when it is not. Anything that
+    /// *applies* a migration has to refuse while this is set.
+    #[serde(default)]
+    pub unsupported: bool,
+}
+
+impl Statement {
+    fn runnable(sql: String) -> Statement {
+        Statement {
+            sql,
+            destructive: false,
+            note: None,
+            unsupported: false,
+        }
+    }
+
+    /// A change this engine cannot express, rendered as a comment.
+    fn cannot(sql: String, why: String) -> Option<Statement> {
+        Some(Statement {
+            sql,
+            destructive: false,
+            note: Some(why),
+            unsupported: true,
+        })
+    }
 }
 
 /// Order matters, and this is the order.
@@ -421,6 +484,45 @@ fn phase(change: &Change) -> u8 {
 }
 
 /// Turn a set of changes into statements that apply them.
+/// Why this engine will not be asked to make this change, or `None` if it will.
+///
+/// The structure editor hides the controls this refuses, and the apply path
+/// checks it again before running anything. Both sides consulting one function
+/// is the point: a capability is a claim about the engine, the statement that
+/// would run is built from the same claim, and a UI that offers what the
+/// executor refuses is the failure this exists to prevent.
+///
+/// Changes that alter a whole table rather than part of one are refused
+/// outright. Creating and dropping tables is a bigger gesture than editing the
+/// shape of one you are looking at, and a structure view is not where it
+/// belongs.
+pub fn refusal(change: &Change, support: DdlSupport) -> Option<String> {
+    let no = |what: &str| Some(format!("This engine cannot {what}."));
+
+    match change {
+        Change::ColumnAdded { .. } if !support.add_column => no("add a column"),
+        Change::ColumnRemoved { .. } if !support.drop_column => no("drop a column"),
+        Change::ColumnChanged { column, .. } if !support.alter_column => Some(format!(
+            "This engine cannot change {column} in place; it needs the table rebuilt."
+        )),
+        Change::IndexAdded { .. } | Change::IndexRemoved { .. } if !support.indexes => {
+            no("add or drop an index")
+        }
+        Change::ForeignKeyAdded { .. } | Change::ForeignKeyRemoved { .. }
+            if !support.foreign_keys =>
+        {
+            no("add or drop a foreign key")
+        }
+        Change::PrimaryKeyChanged { .. } => {
+            Some("Changing a primary key rewrites the table, so it is not offered here.".into())
+        }
+        Change::TableAdded { .. } | Change::TableRemoved { .. } => {
+            Some("Creating and dropping tables is not part of editing one.".into())
+        }
+        _ => None,
+    }
+}
+
 pub fn migration(changes: &[Change], dialect: Dialect) -> Vec<Statement> {
     let mut ordered: Vec<&Change> = changes.iter().collect();
     // Stable, so within a phase the changes keep the order `diff` produced —
@@ -437,13 +539,7 @@ pub fn migration(changes: &[Change], dialect: Dialect) -> Vec<Statement> {
 fn statement_for(change: &Change, dialect: Dialect) -> Option<Statement> {
     let q = |name: &str| quote_ident(name, dialect.quote);
 
-    let plain = |sql: String| {
-        Some(Statement {
-            sql,
-            destructive: false,
-            note: None,
-        })
-    };
+    let plain = |sql: String| Some(Statement::runnable(sql));
 
     match change {
         Change::TableAdded {
@@ -470,6 +566,7 @@ fn statement_for(change: &Change, dialect: Dialect) -> Option<Statement> {
             sql: format!("DROP TABLE {};", q(table)),
             destructive: true,
             note: Some(format!("Every row in {table} is lost.")),
+            unsupported: false,
         }),
 
         Change::ColumnAdded { table, column } => {
@@ -490,6 +587,7 @@ fn statement_for(change: &Change, dialect: Dialect) -> Option<Statement> {
                 ),
                 destructive: false,
                 note,
+                unsupported: false,
             })
         }
 
@@ -497,6 +595,7 @@ fn statement_for(change: &Change, dialect: Dialect) -> Option<Statement> {
             sql: format!("ALTER TABLE {} DROP COLUMN {};", q(table), q(column)),
             destructive: true,
             note: Some(format!("Every value in {table}.{column} is lost.")),
+            unsupported: false,
         }),
 
         Change::ColumnChanged {
@@ -561,6 +660,20 @@ fn statement_for(change: &Change, dialect: Dialect) -> Option<Statement> {
                     q(table),
                     column_definition(to, dialect)
                 ),
+                AlterColumnStyle::Unsupported => {
+                    return Statement::cannot(
+                        format!(
+                            "-- {}.{} cannot be changed in place on this engine ({note}).\n\
+                             -- It needs a new table of the wanted shape, the rows copied over,\n\
+                             -- the old one dropped and the new one renamed.",
+                            table, column,
+                        ),
+                        format!(
+                            "This engine has no ALTER COLUMN, so changing {column} means \
+                             rebuilding {table}."
+                        ),
+                    )
+                }
             };
 
             Some(Statement {
@@ -572,6 +685,7 @@ fn statement_for(change: &Change, dialect: Dialect) -> Option<Statement> {
                 note: Some(format!(
                     "{note}. Check the existing values fit before running this."
                 )),
+                unsupported: false,
             })
         }
 
@@ -596,10 +710,39 @@ fn statement_for(change: &Change, dialect: Dialect) -> Option<Statement> {
                     format!("DROP INDEX {} ON {};", q(index), q(table))
                 }
                 AlterColumnStyle::TSql => format!("DROP INDEX {} ON {};", q(index), q(table)),
-                AlterColumnStyle::Postgres => format!("DROP INDEX {};", q(index)),
+                // SQLite groups here: its indexes are schema-wide objects
+                // dropped by name, exactly as PostgreSQL's are.
+                AlterColumnStyle::Postgres | AlterColumnStyle::Unsupported => {
+                    format!("DROP INDEX {};", q(index))
+                }
             };
             plain(sql)
         }
+
+        Change::ForeignKeyAdded { table, key } if !dialect.constraints => Statement::cannot(
+            format!(
+                "-- {} cannot gain a foreign key after the fact on this engine.\n\
+                 -- {} references {}({}), and would have to be declared when the\n\
+                 -- table is created.",
+                q(table),
+                key.columns.join(", "),
+                key.referenced_table,
+                key.referenced_columns.join(", ")
+            ),
+            format!(
+                "This engine has no ADD CONSTRAINT, so {} can only be declared when {table} \
+                 is created.",
+                key.name
+            ),
+        ),
+
+        Change::ForeignKeyRemoved { table, key } if !dialect.constraints => Statement::cannot(
+            format!(
+                "-- {} has no DROP CONSTRAINT to remove {key} from.",
+                q(table)
+            ),
+            format!("This engine cannot drop {key} from {table} without rebuilding the table."),
+        ),
 
         Change::ForeignKeyAdded { table, key } => plain(format!(
             "ALTER TABLE {} ADD CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({});",
@@ -650,6 +793,7 @@ fn statement_for(change: &Change, dialect: Dialect) -> Option<Statement> {
                 sql: lines.join("\n"),
                 destructive: false,
                 note: Some("Changing a primary key rewrites the table on most engines.".into()),
+                unsupported: false,
             })
         }
     }
@@ -710,6 +854,7 @@ mod tests {
     const PG: Dialect = Dialect {
         quote: '"',
         alter_column: AlterColumnStyle::Postgres,
+        constraints: true,
     };
 
     #[test]
@@ -1005,5 +1150,183 @@ mod tests {
             .map(|c| c.table().to_string())
             .collect();
         assert_eq!(names, vec!["apple", "zebra"]);
+    }
+
+    // -----------------------------------------------------------------------
+    // What an engine will and will not be asked to do
+    // -----------------------------------------------------------------------
+
+    const SQLITE: Dialect = Dialect {
+        quote: '"',
+        alter_column: AlterColumnStyle::Unsupported,
+        constraints: false,
+    };
+
+    /// Everything on, for testing the refusals rather than the capabilities.
+    const ALL: DdlSupport = DdlSupport {
+        add_column: true,
+        drop_column: true,
+        alter_column: true,
+        indexes: true,
+        foreign_keys: true,
+        transactional_ddl: true,
+    };
+
+    #[test]
+    fn sqlite_is_not_handed_an_alter_column_it_cannot_run() {
+        // The bug this pins: SQLite had no arm in `for_driver`, so it fell
+        // through to PostgreSQL and was handed `ALTER COLUMN ... TYPE`. Harmless
+        // while a migration was only ever read; a failing statement the moment
+        // the structure editor applies one.
+        let change = Change::ColumnChanged {
+            table: "orders".into(),
+            column: "total".into(),
+            to: column("total", "TEXT"),
+            differences: vec![FieldChange {
+                field: "type".into(),
+                from: "INTEGER".into(),
+                to: "TEXT".into(),
+            }],
+        };
+        let out = migration(std::slice::from_ref(&change), SQLITE);
+        assert_eq!(out.len(), 1, "the change must be reported, not dropped");
+        assert!(out[0].unsupported, "{}", out[0].sql);
+        assert!(
+            !out[0].sql.to_uppercase().contains("ALTER COLUMN"),
+            "must not emit a statement SQLite rejects: {}",
+            out[0].sql
+        );
+        // And it says what to do instead, since the reader still has to get there.
+        assert!(out[0].note.as_deref().unwrap().contains("rebuild"));
+    }
+
+    #[test]
+    fn sqlite_is_not_handed_an_add_constraint_either() {
+        let change = Change::ForeignKeyAdded {
+            table: "orders".into(),
+            key: ForeignKeyDef {
+                name: "orders_user_fk".into(),
+                columns: vec!["user_id".into()],
+                referenced_schema: None,
+                referenced_table: "users".into(),
+                referenced_columns: vec!["id".into()],
+                on_delete: None,
+                on_update: None,
+            },
+        };
+        let out = migration(std::slice::from_ref(&change), SQLITE);
+        assert!(out[0].unsupported, "{}", out[0].sql);
+        assert!(!out[0].sql.to_uppercase().contains("ADD CONSTRAINT"));
+    }
+
+    #[test]
+    fn what_sqlite_can_do_is_still_offered() {
+        // The point of naming the dialect is precision, not blanket refusal:
+        // adding a column and creating an index are ordinary statements there.
+        let add = Change::ColumnAdded {
+            table: "orders".into(),
+            column: column("note", "TEXT"),
+        };
+        let index = Change::IndexAdded {
+            table: "orders".into(),
+            index: IndexDef {
+                name: "orders_note_idx".into(),
+                columns: vec!["note".into()],
+                unique: false,
+                primary: false,
+                method: None,
+            },
+        };
+        let out = migration(&[add, index], SQLITE);
+        assert!(out.iter().all(|s| !s.unsupported), "{out:?}");
+        assert!(out[0].sql.starts_with("ALTER TABLE \"orders\" ADD COLUMN"));
+        assert!(out[1].sql.starts_with("CREATE INDEX"));
+    }
+
+    #[test]
+    fn dropping_an_index_needs_the_table_only_where_the_engine_wants_it() {
+        let change = Change::IndexRemoved {
+            table: "orders".into(),
+            index: "orders_note_idx".into(),
+        };
+        // SQLite drops by name alone, as PostgreSQL does -- passing the table
+        // would be a syntax error rather than a harmless extra.
+        let out = migration(std::slice::from_ref(&change), SQLITE);
+        assert_eq!(out[0].sql, "DROP INDEX \"orders_note_idx\";");
+        assert!(!out[0].unsupported);
+    }
+
+    #[test]
+    fn a_whole_table_is_not_editable_from_a_structure_view() {
+        // Creating and dropping tables is a bigger gesture than editing the one
+        // on screen, and DROP TABLE behind a column editor is how people lose
+        // things. Refused regardless of what the engine could do.
+        let dropped = Change::TableRemoved {
+            table: "orders".into(),
+        };
+        assert!(refusal(&dropped, ALL).is_some());
+        let added = Change::TableAdded {
+            table: "orders".into(),
+            columns: vec![],
+            primary_key: vec![],
+        };
+        assert!(refusal(&added, ALL).is_some());
+    }
+
+    #[test]
+    fn a_capability_that_is_off_refuses_with_a_reason_worth_showing() {
+        // The reason reaches the user, so it has to name the thing they clicked
+        // rather than the flag that was false.
+        let support = DdlSupport {
+            alter_column: false,
+            ..ALL
+        };
+        let change = Change::ColumnChanged {
+            table: "orders".into(),
+            column: "total".into(),
+            to: column("total", "TEXT"),
+            differences: vec![],
+        };
+        let why = refusal(&change, support).expect("refused");
+        assert!(why.contains("total"), "{why}");
+
+        // And with the capability on, the same change is allowed -- otherwise
+        // this test would pass against a function that refuses everything.
+        assert!(refusal(&change, ALL).is_none());
+    }
+
+    #[test]
+    fn every_editable_change_is_permitted_when_the_engine_supports_it() {
+        let changes = vec![
+            Change::ColumnAdded {
+                table: "t".into(),
+                column: column("c", "text"),
+            },
+            Change::ColumnRemoved {
+                table: "t".into(),
+                column: "c".into(),
+            },
+            Change::IndexAdded {
+                table: "t".into(),
+                index: IndexDef {
+                    name: "i".into(),
+                    columns: vec!["c".into()],
+                    unique: false,
+                    primary: false,
+                    method: None,
+                },
+            },
+            Change::IndexRemoved {
+                table: "t".into(),
+                index: "i".into(),
+            },
+            Change::ForeignKeyRemoved {
+                table: "t".into(),
+                key: "fk".into(),
+            },
+        ];
+        for change in &changes {
+            assert!(refusal(change, ALL).is_none(), "{change:?}");
+        }
     }
 }

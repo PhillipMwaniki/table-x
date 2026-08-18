@@ -123,6 +123,7 @@ Milestone 1 ("core + power features") is the current target.
 | ✅ | **Connection manager UI** | Per-driver forms, test-connection, colour tags, read-only flag. |
 | ✅ | **Schema browser** | Lazily expanded object tree with per-node caching, a name filter, and the database and open object marked. |
 | ✅ | **Table structure** | Columns, types, nullability, defaults, indexes and foreign keys, behind a Data/Structure toggle in the table's own tab. |
+| ✅ | **Editing a table's structure** | Add, alter and drop columns, create and drop indexes, attach and remove foreign keys. Edits stage rather than fire: Review shows the ordered DDL with destructive statements marked, and Apply runs it — in a transaction on the three engines whose DDL is transactional. What each engine is offered comes from `capabilities.ddl`, so SQLite gets add/drop and indexes but no `ALTER COLUMN` or `ADD CONSTRAINT`, and ClickHouse is not offered it at all. 17 tests, one driving real DDL against a live server. |
 | ✅ | **SQL editor** | CodeMirror 6, schema-aware autocomplete, run-selection, error positioning. |
 | ✅ | **Result grid** | Virtualized rows, inline editing, row insert and delete, sorting, filtering, undo/redo, optional row banding. |
 | ✅ | **Transactions** | Begin, commit and roll back on the four engines that have them, each in its own spelling. The indicator follows a `BEGIN` typed into the editor, not only the buttons. |

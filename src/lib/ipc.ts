@@ -12,7 +12,10 @@ import type {
   Column,
   CompletionScope,
   ConnectionConfig,
+  Change,
   CsvPreview,
+  DdlOutcome,
+  DdlPlan,
   Diagram,
   DiffReport,
   DriverInfo,
@@ -220,6 +223,14 @@ export const ipc = {
    * statement has often already finished.
    */
   cancelQuery: (connection_id: string) => call<void>("cancel_query", { connection_id }),
+
+  /** The statements a set of structure edits would run. Runs nothing itself. */
+  previewTableChanges: (connection_id: string, changes: Change[]) =>
+    call<DdlPlan>("preview_table_changes", { request: { connection_id, changes } }),
+
+  /** Run them. Refuses outright rather than getting halfway. */
+  applyTableChanges: (connection_id: string, changes: Change[]) =>
+    call<DdlOutcome>("apply_table_changes", { request: { connection_id, changes } }),
 
   transactionState: (connection_id: string) =>
     call<TransactionState>("transaction_state", { connection_id }),

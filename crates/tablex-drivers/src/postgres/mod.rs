@@ -20,8 +20,9 @@ use tablex_core::{
     config::{ConnectionConfig, TlsMode},
     diagram::SchemaGraph,
     driver::{
-        CancelHandle, Capabilities, CompletionScope, Connection, Driver, DriverInfo, FetchOptions,
-        PlaceholderStyle, RowDelete, RowEdit, RowInsert, RowSink, TxStatements, STREAM_BATCH,
+        CancelHandle, Capabilities, CompletionScope, Connection, DdlSupport, Driver, DriverInfo,
+        FetchOptions, PlaceholderStyle, RowDelete, RowEdit, RowInsert, RowSink, TxStatements,
+        STREAM_BATCH,
     },
     error::{Error, Result},
     plan::Plan,
@@ -65,6 +66,16 @@ impl Driver for PostgresDriver {
             default_port: Some(5432),
             file_based: false,
             capabilities: Capabilities {
+                // Everything, and the reference implementation for the rest:
+                // real ALTER COLUMN, real constraints, transactional DDL.
+                ddl: DdlSupport {
+                    add_column: true,
+                    drop_column: true,
+                    alter_column: true,
+                    indexes: true,
+                    foreign_keys: true,
+                    transactional_ddl: true,
+                },
                 transactions: true,
                 multi_statement: true,
                 explain: true,
