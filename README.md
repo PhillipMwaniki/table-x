@@ -10,6 +10,8 @@ Windows · Linux · macOS · iOS · Android
 [![Rust](https://img.shields.io/badge/rust-1.82%2B-orange.svg)](https://www.rust-lang.org)
 [![Tauri](https://img.shields.io/badge/tauri-2.11-24C8DB.svg)](https://tauri.app)
 
+<img src="screenshots/table_view.png" alt="The Table X main window: connection sidebar, schema browser with row estimates, and a result grid with per-column filters" width="900">
+
 </div>
 
 ---
@@ -27,6 +29,8 @@ Windows · Linux · macOS · iOS · Android
 ## Table of contents
 
 - [What this is](#what-this-is)
+- [Supported databases](#supported-databases)
+- [A look around](#a-look-around)
 - [Relationship to TablePro](#relationship-to-tablepro)
 - [Why Tauri](#why-tauri)
 - [Roadmap](#roadmap)
@@ -62,6 +66,62 @@ The design goals, in priority order:
    equal support.
 4. **Honest affordances.** The UI hides what a given database cannot do rather than
    offering buttons that fail.
+
+## Supported databases
+
+Five engines, and the table below is what each one actually does rather than what the
+word "supported" usually covers. It mirrors the same `Capabilities` the app reads at
+runtime to decide which controls to draw — so where a cell says no, the button is not
+there, rather than there and failing.
+
+| | PostgreSQL | MySQL / MariaDB | SQLite | SQL Server | ClickHouse |
+|---|:---:|:---:|:---:|:---:|:---:|
+| Edit results in the grid | ✅ | ✅ | ✅ | — <sup>1</sup> | — <sup>2</sup> |
+| Edit a table's structure | ✅ | ✅ <sup>3</sup> | partial <sup>4</sup> | ✅ | — <sup>2</sup> |
+| Transactions | ✅ | ✅ | ✅ | ✅ | — |
+| Stop a running query | ✅ | ✅ | ✅ | — <sup>5</sup> | ✅ |
+| `EXPLAIN` | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Measured plan (`ANALYZE`) | ✅ <sup>6</sup> | — | — | — | — |
+| Schemas within a database | ✅ | — <sup>7</sup> | — | ✅ | — <sup>7</sup> |
+| Several databases per server | ✅ | ✅ | — | ✅ | ✅ |
+| Server activity, kill a session | ✅ | ✅ | — | ✅ | ✅ |
+| Privileges and roles | ✅ | ✅ | — | ✅ | ✅ |
+| A table's `CREATE` statement | — <sup>8</sup> | ✅ | ✅ | — <sup>8</sup> | ✅ |
+
+Not in the table because they are not per-engine: exact numerics, SSH tunnelling,
+streaming export and import, query history, the schema diff, the ER diagram, the
+`tablex` CLI and the MCP server work the same everywhere.
+
+1. `tiberius` does not surface the originating table for a result column, so an ad-hoc
+   result cannot be traced back to one row of one table. Browsing a table still knows
+   what it asked for.
+2. ClickHouse has no row-level `UPDATE` — `ALTER TABLE … UPDATE` schedules an
+   asynchronous mutation that rewrites whole data parts — and no foreign keys, and its
+   indexes are data-skipping indexes, which share the word and nothing else.
+3. MySQL commits implicitly around DDL, so a set of edits that fails partway leaves the
+   earlier statements applied. The review step says so before you apply.
+4. Add and drop columns, create and drop indexes. SQLite has no `ALTER COLUMN` and no
+   `ADD CONSTRAINT`: changing a type or attaching a foreign key means rebuilding the
+   table, which is a procedure rather than a statement, so it is not offered.
+5. TDS can cancel a statement with an attention packet, but `tiberius` never sends one
+   and exposes no way to. The substitute, `KILL <spid>`, ends the session rather than the
+   statement — see [Why SQL Server cannot cancel](#why-sql-server-cannot-cancel).
+6. Measuring a plan means running the statement, and PostgreSQL is the only one that can
+   be asked to do that and then take it back. It runs inside a rolled-back transaction.
+7. Their database *is* their only container level; there is nothing between it and the
+   tables.
+8. No catalog function renders a table as a `CREATE` statement, so the tree does not
+   offer one.
+
+Oracle and MongoDB are wanted and are not simply two more drivers — see
+[Why Oracle and MongoDB are not simply two more drivers](#why-oracle-and-mongodb-are-not-simply-two-more-drivers).
+
+## A look around
+
+| | |
+|---|---|
+| <img src="screenshots/connection_view.png" alt="The new connection dialog, with the driver set to ClickHouse" width="440"> | <img src="screenshots/settings_view.png" alt="The appearance settings, showing the eight themes and the font controls" width="440"> |
+| **Connecting.** The form follows the driver: an embedded database asks for a file, a server asks for a host. Credentials go to the OS keychain, never the config file. The colour tag and the read-only flag are what make a production connection visibly different from a scratch one. | **Appearance.** Eight themes plus follow-system, separate data and interface fonts, and an adjustable data size the grid rows grow to match. Only fonts actually installed on the machine are listed. |
 
 ## Relationship to TablePro
 
