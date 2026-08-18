@@ -18,13 +18,12 @@ Windows · Linux · macOS · iOS · Android
 
 ---
 
-> [!WARNING]
-> **Status: pre-release (v0.3.0).** Five drivers, the editor, the grid, tunnelling and
-> the power features are built and tested — see [Roadmap](#roadmap) for exactly what
-> works today. Windows and Linux installers are produced by CI but are **not code-signed
-> yet**, so the first launch warns. macOS is not built by CI — signing it needs a paid
-> Apple membership, and an unsigned `.dmg` is refused rather than warned about. Nothing
-> here has been through a release anyone else has installed.
+> [!IMPORTANT]
+> **The installers are not code-signed.** Windows SmartScreen warns on first run until a
+> signing identity is in place, and macOS is not built by CI at all — signing a `.dmg`
+> needs a paid Apple Developer membership, and an unsigned one is refused outright rather
+> than merely warned about. See [Releases and signing](#releases-and-signing) for what
+> that takes, and [Roadmap](#roadmap) for exactly what works today.
 
 ---
 
@@ -734,7 +733,7 @@ To cut a release:
 ```bash
 # The tag and the version in tauri.conf.json and Cargo.toml must agree —
 # nothing enforces that yet, so check it by eye.
-git tag v0.3.0 && git push origin v0.3.0
+git tag v0.4.0 && git push origin v0.4.0
 ```
 
 The release is left as a draft on purpose: somebody should read the generated notes and
@@ -743,8 +742,8 @@ check the artifacts before they become something people can install.
 ### Signing is not set up
 
 The installers CI produces are **unsigned**, and Windows SmartScreen warns on first run.
-Acceptable for a pre-release; not acceptable for something people are asked to trust with
-database credentials.
+That is not acceptable for something people are asked to trust with database credentials,
+and it is the one gap left in the packaging.
 
 Signing needs a paid identity, bought and held by whoever publishes. Prices and
 eligibility rules move — check the vendor before committing.
