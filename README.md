@@ -736,36 +736,9 @@ To cut a release:
 git tag v0.4.0 && git push origin v0.4.0
 ```
 
-The release is left as a draft on purpose: somebody should read the generated notes and
-check the artifacts before they become something people can install.
-
-### Signing is not set up
-
-The installers CI produces are **unsigned**, and Windows SmartScreen warns on first run.
-That is not acceptable for something people are asked to trust with database credentials,
-and it is the one gap left in the packaging.
-
-Signing needs a paid identity, bought and held by whoever publishes. Prices and
-eligibility rules move — check the vendor before committing.
-
 #### macOS — Apple Developer Program
 
-Not needed until macOS is back in the matrix, and it is out of the matrix precisely
-because this has not been bought. Kept here so the requirement is not rediscovered.
-
-There is one route and no alternative: **$99/year**, from
-[developer.apple.com/programs](https://developer.apple.com/programs/).
-
-- **Individual** enrolment needs an Apple ID and identity verification, and usually
-  completes in a day or two. The certificate is issued in your own name, which is
-  visible to anyone who inspects the app.
-- **Organization** enrolment shows a company name instead, but needs a legal entity and
-  a [D-U-N-S number](https://developer.apple.com/support/D-U-N-S/) — free, and often the
-  slowest step at one to two weeks.
-
-Then, in Certificates, Identifiers & Profiles, create a **Developer ID Application**
-certificate. Only the Account Holder can create one. Generating the signing request and
-exporting the result as a `.p12` both need a Mac.
+NB: For me when I'm able to get an apple developer license:
 
 Six repository secrets, which the workflow already reads:
 
@@ -810,16 +783,6 @@ Wiring it in means pointing `bundle.windows` in `src-tauri/tauri.conf.json` at t
 service: `signCommand` for a cloud signer, or `certificateThumbprint` for a certificate
 already in the machine store. The workflow needs no change beyond adding whatever
 secrets that command reads.
-
-#### Neither is needed to build
-
-Everything else works unsigned. The only thing signing buys is the absence of a warning —
-which is worth real money precisely because that warning is the correct response to
-software nobody has vouched for.
-
-There is no auto-updater, so no update signing key is needed. Adding one later means
-generating a keypair with `pnpm tauri signer generate` and holding the private half as a
-repository secret.
 
 ## Contributing
 
