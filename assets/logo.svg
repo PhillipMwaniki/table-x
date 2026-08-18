@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100" role="img" aria-label="Table X">
+  <title>Table X</title>
+  <rect width="100" height="100" rx="22" fill="#1A1D24"/>
+  <path d="M36 22 H22 V78 H36" stroke="#E8ECF2" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M64 22 H78 V78 H64" stroke="#E8ECF2" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <rect x="35" y="35" width="13" height="13" rx="2" fill="#4D8DF5"/>
+  <rect x="52" y="35" width="13" height="13" rx="2" fill="#6B7486" opacity="0.45"/>
+  <rect x="35" y="52" width="13" height="13" rx="2" fill="#6B7486" opacity="0.45"/>
+  <rect x="52" y="52" width="13" height="13" rx="2" fill="#4D8DF5"/>
+</svg>

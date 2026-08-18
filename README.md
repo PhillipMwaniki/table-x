@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="assets/logo.svg" alt="" width="96" height="96">
+
 # Table X
 
 **A fast, cross-platform database client for developers.**
