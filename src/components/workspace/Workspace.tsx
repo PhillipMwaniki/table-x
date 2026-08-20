@@ -1242,6 +1242,19 @@ export function Workspace({
                     </div>
                   ) : active?.type === "rows" ? (
                     <ResultGrid
+                      /* Sorting, the row filter and the per-column filters are
+                         display state, so they live in the grid rather than on
+                         the tab -- see the note on `Tab.offset`. That only holds
+                         while each result has a grid of its own: without a key,
+                         React reuses one instance across tab switches and the
+                         filter you typed follows you to the next tab.
+
+                         The column names are in the key because the filters are
+                         keyed by column index. Re-running the same query keeps
+                         your filter, which is what you want; running a different
+                         one drops it, rather than applying "> 100" to whatever
+                         now occupies column three. */
+                      key={`${tab.id}:${tab.activeStatement}:${active.columns.map((c) => c.name).join(" ")}`}
                       result={active}
                       onEdit={(row, col, next) => applyEdit(connection.id, tab.id, row, col, next)}
                       paging={{
