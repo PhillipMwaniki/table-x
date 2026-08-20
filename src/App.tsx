@@ -37,6 +37,14 @@ export default function App() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [editing, setEditing] = useState<ConnectionConfig | null>(null);
+  /**
+   * Whether the connections pane is hidden.
+   *
+   * Deliberately not persisted: collapsing is something you do to get room for
+   * one wide result, not a way you want the app to open tomorrow. A sidebar
+   * that stays gone after a restart reads as a bug.
+   */
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const initSettings = useSettings((s) => s.init);
   const settingsReady = useSettings((s) => s.ready);
@@ -124,10 +132,28 @@ export default function App() {
         <div className="flex-1" />
 
         <button
+          onClick={() => setSidebarCollapsed((was) => !was)}
+          title={sidebarCollapsed ? "Show connections" : "Hide connections"}
+          aria-label={sidebarCollapsed ? "Show connections" : "Hide connections"}
+          aria-pressed={sidebarCollapsed}
+          className="no-drag flex size-7 items-center justify-center rounded text-text-muted hover:bg-surface-2 hover:text-text"
+        >
+          {/* Drawn rather than typed: a glyph that means "panel" is not in any
+              font we can rely on, and an emoji would not follow the theme. */}
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <rect x="1.5" y="2.5" width="13" height="11" rx="2" stroke="currentColor" />
+            <line x1="6" y1="2.5" x2="6" y2="13.5" stroke="currentColor" />
+            {/* Filled while hidden, so the button shows the current state and
+                not only the action -- the two read the same at this size. */}
+            {sidebarCollapsed && <rect x="2" y="3" width="4" height="10" fill="currentColor" />}
+          </svg>
+        </button>
+
+        <button
           onClick={() => setSettingsOpen(true)}
           title={update ? `Table X ${update.latest} is available` : "Appearance (Ctrl+,)"}
           aria-label="Appearance settings"
-          className="no-drag relative flex size-6 items-center justify-center rounded text-[13px] text-text-muted hover:bg-surface-2 hover:text-text"
+          className="no-drag relative flex size-7 items-center justify-center rounded text-[19px] leading-none text-text-muted hover:bg-surface-2 hover:text-text"
         >
           ⚙
           {/* A dot, not a banner: a new version is worth knowing and never worth
@@ -146,24 +172,29 @@ export default function App() {
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-surface-1">
-          {loading ? (
-            <div className="flex flex-1 items-center justify-center">
-              <Spinner className="text-text-muted" />
-            </div>
-          ) : (
-            <ConnectionList
-              onNew={() => {
-                setEditing(null);
-                setDialogOpen(true);
-              }}
-              onEdit={(config) => {
-                setEditing(config);
-                setDialogOpen(true);
-              }}
-            />
-          )}
-        </aside>
+        {/* Unmounted rather than hidden: the `hidden` attribute is a user-agent
+            rule, and the `flex` class here is an author rule that beats it, so
+            the pane would stay on screen. */}
+        {!sidebarCollapsed && (
+          <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-surface-1">
+            {loading ? (
+              <div className="flex flex-1 items-center justify-center">
+                <Spinner className="text-text-muted" />
+              </div>
+            ) : (
+              <ConnectionList
+                onNew={() => {
+                  setEditing(null);
+                  setDialogOpen(true);
+                }}
+                onEdit={(config) => {
+                  setEditing(config);
+                  setDialogOpen(true);
+                }}
+              />
+            )}
+          </aside>
+        )}
 
         <main className="flex min-w-0 flex-1 flex-col">
           {error && (
