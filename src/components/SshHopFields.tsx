@@ -9,6 +9,7 @@
  */
 
 import { useState } from "react";
+import { open as openFile } from "@tauri-apps/plugin-dialog";
 import { Banner, Button, Field, Input, Select, cx } from "./ui/primitives";
 import { ipc } from "@/lib/ipc";
 import type { SshAuth, SshConfig } from "@/lib/types";
@@ -39,6 +40,26 @@ export function SshHopFields({
   const [error, setError] = useState<string | null>(null);
 
   const patch = (changes: Partial<SshConfig>) => onChange({ ...hop, ...changes });
+
+  /**
+   * Pick the private key from disk.
+   *
+   * No `defaultPath`, though ~/.ssh is where the answer usually is: resolving it
+   * would mean granting the frontend a path permission the capability allowlist
+   * deliberately withholds, and the OS dialog reopens where it left off anyway.
+   * No extension filter either — private keys mostly have no extension, and a
+   * filter would hide exactly the files being looked for.
+   *
+   * Cancelling returns null, which leaves whatever was typed alone.
+   */
+  const browseForKey = async () => {
+    const picked = await openFile({
+      title: "Select a private key",
+      multiple: false,
+      directory: false,
+    });
+    if (typeof picked === "string") patch({ key_path: picked });
+  };
 
   const unreachable = via.some((h) => !h.host_key_fingerprint);
 
@@ -100,12 +121,21 @@ export function SshHopFields({
 
       {hop.auth === "public_key" && (
         <Field label="Private key" hint="The passphrase, if any, goes in the field below.">
-          <Input
-            value={hop.key_path ?? ""}
-            onChange={(e) => patch({ key_path: e.target.value || undefined })}
-            placeholder="C:\Users\you\.ssh\id_ed25519"
-            spellCheck={false}
-          />
+          {/* Typed or picked. The field stays editable rather than becoming a
+              button: a key path is often pasted from somewhere else, and a
+              picker that is the only way in would make that a chore. */}
+          <div className="flex gap-1.5">
+            <Input
+              value={hop.key_path ?? ""}
+              onChange={(e) => patch({ key_path: e.target.value || undefined })}
+              placeholder="C:\Users\you\.ssh\id_ed25519"
+              spellCheck={false}
+              className="min-w-0 flex-1"
+            />
+            <Button variant="ghost" onClick={() => void browseForKey()} className="shrink-0">
+              Browse
+            </Button>
+          </div>
         </Field>
       )}
 
