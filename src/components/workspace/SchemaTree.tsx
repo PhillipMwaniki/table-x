@@ -504,12 +504,12 @@ function TreeNode({
               e.stopPropagation();
               onToggle(node);
             }}
-            className="-my-1 w-2.5 shrink-0 py-1 text-[8px] text-text-muted hover:text-text"
+            className="-my-1 w-4 shrink-0 py-1 text-[16px] leading-none text-text-muted hover:text-text"
           >
             {expanded ? "▾" : "▸"}
           </button>
         ) : (
-          <span className="w-2.5 shrink-0 text-[8px] text-text-muted">
+          <span className="w-4 shrink-0 text-[16px] leading-none text-text-muted">
             {node.expandable ? (expanded ? "▾" : "▸") : ""}
           </span>
         )}
