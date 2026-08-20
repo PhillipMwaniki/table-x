@@ -27,6 +27,7 @@ import type { CompletionContext, CompletionResult } from "@codemirror/autocomple
 import { sql, PostgreSQL, MySQL, SQLite, StandardSQL } from "@codemirror/lang-sql";
 import type { SQLDialect } from "@codemirror/lang-sql";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { sqlHover } from "./sqlHover";
 import { tags } from "@lezer/highlight";
 import type { CompletionScope } from "@/lib/types";
 
@@ -191,6 +192,9 @@ export function SqlEditor({
   const view = useRef<EditorView | null>(null);
   const langCompartment = useRef(new Compartment());
   const completionCompartment = useRef(new Compartment());
+  // Its own compartment because the wording is per engine: the same keyword
+  // gets a different explanation on MySQL than on PostgreSQL.
+  const hoverCompartment = useRef(new Compartment());
 
   // Callbacks live in a ref so the keymap closure always sees the current ones
   // without needing to rebuild the editor when a prop changes identity.
@@ -239,6 +243,7 @@ export function SqlEditor({
           indentWithTab,
         ]),
         langCompartment.current.of(sql({ dialect: dialectFor(driver), upperCaseKeywords: true })),
+        hoverCompartment.current.of(sqlHover(driver)),
         syntaxHighlighting(highlighting),
         completionCompartment.current.of([]),
         theme,
@@ -272,9 +277,12 @@ export function SqlEditor({
 
   useEffect(() => {
     view.current?.dispatch({
-      effects: langCompartment.current.reconfigure(
-        sql({ dialect: dialectFor(driver), upperCaseKeywords: true }),
-      ),
+      effects: [
+        langCompartment.current.reconfigure(
+          sql({ dialect: dialectFor(driver), upperCaseKeywords: true }),
+        ),
+        hoverCompartment.current.reconfigure(sqlHover(driver)),
+      ],
     });
   }, [driver]);
 
