@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ipc } from "@/lib/ipc";
 import { Spinner, cx } from "../ui/primitives";
 import { matchesName, splitHighlight } from "@/lib/tree";
+import { useWorkspace } from "@/store/workspace";
 import type { NodeKind, SchemaNode } from "@/lib/types";
 
 /** Glyph per node kind. Text rather than icons keeps the tree dense and crisp. */
@@ -97,6 +98,10 @@ export function SchemaTree({
    * the work behind it waits.
    */
   const [applied, setApplied] = useState("");
+  // Rebuilds the tree when a statement changes the catalogue. Read here rather
+  // than pushed from the store, so the browser stays the only thing that knows
+  // how a tree is built.
+  const schemaVersion = useWorkspace((s) => s.schemaVersion[connectionId] ?? 0);
   const [roots, setRoots] = useState<SchemaNode[] | null>(null);
   const [rootError, setRootError] = useState<string | null>(null);
   const [tree, setTree] = useState<TreeState>({
@@ -125,7 +130,11 @@ export function SchemaTree({
     return () => {
       cancelled = true;
     };
-  }, [connectionId]);
+    // `schemaVersion` bumps when a statement that changes the catalogue
+    // succeeds, which rebuilds the tree the same way switching connection does.
+    // That does cost the expansion state -- a create or drop collapses what you
+    // had open — but a tree showing a database that no longer exists is worse.
+  }, [connectionId, schemaVersion]);
 
   useEffect(() => {
     // Clearing is instant — there is no work to defer, and a box that empties

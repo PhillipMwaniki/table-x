@@ -17,6 +17,7 @@ import { useSettings } from "@/store/settings";
 import { load as loadStore } from "@tauri-apps/plugin-store";
 import type { Store } from "@tauri-apps/plugin-store";
 import { parseSaved, shouldAutoRun, toSaved } from "@/lib/session";
+import { changesCatalog } from "@/lib/statements";
 import type {
   CompletionScope,
   DiffReport,
@@ -247,6 +248,14 @@ interface WorkspaceState {
   setTabError: (connectionId: string, tabId: string, message: string) => void;
   /** Report something that worked, in the same place failures are reported. */
   setTabNotice: (connectionId: string, tabId: string, message: string) => void;
+  /**
+   * Bumped when a statement that changes the object tree succeeds.
+   *
+   * A counter rather than the tree itself: the store has no business knowing
+   * how the tree is built, and the browser already knows how to rebuild itself.
+   * This only says that what it is showing is now out of date.
+   */
+  schemaVersion: Record<string, number>;
   setActiveStatement: (connectionId: string, tabId: string, index: number) => void;
   run: (connectionId: string, tabId: string, sqlOverride?: string) => Promise<void>;
   /** Stop whatever this connection is running. */
@@ -308,6 +317,7 @@ function activeRows(tab: Tab): (StatementResult & { type: "rows" }) | null {
 
 export const useWorkspace = create<WorkspaceState>((set, get) => ({
   tabs: {},
+  schemaVersion: {},
   active: {},
   completion: {},
   database: {},
@@ -726,6 +736,14 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         max_rows: limit,
         offset,
       });
+      // Only after it succeeded, and only for statements that could have moved
+      // something: a CREATE DATABASE that failed leaves the tree correct, and
+      // refetching after every SELECT would query the catalogue constantly.
+      if (changesCatalog(sql)) {
+        set((s) => ({
+          schemaVersion: { ...s.schemaVersion, [id]: (s.schemaVersion[id] ?? 0) + 1 },
+        }));
+      }
       set((s) => ({
         tabs: patchTab(s.tabs, id, tabId, {
           outcome,

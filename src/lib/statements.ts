@@ -52,3 +52,27 @@ export function insertInto(qualified: string, columns: string[], quote: string):
   const values = columns.map((c) => `:${c}`).join(", ");
   return `INSERT INTO ${qualified} (${names})\nVALUES (${values});`;
 }
+
+/**
+ * Whether running this would change what the object tree shows.
+ *
+ * Used only to decide whether to refetch the tree, which makes the stakes
+ * pleasantly low: a false positive costs one wasted catalog query, and a false
+ * negative leaves the tree as stale as it was before anything refreshed
+ * automatically. That is why this is a keyword match rather than a parse — the
+ * backend has a real statement splitter, but reaching for it here would mean an
+ * IPC round trip to decide whether to make an IPC round trip.
+ *
+ * Comments are stripped first so a commented-out `DROP TABLE` does not trigger
+ * a refresh, which would be a confusing thing to watch happen.
+ */
+export function changesCatalog(sql: string): boolean {
+  const bare = sql.replace(/--[^\n]*/g, " ").replace(/\/\*[\s\S]*?\*\//g, " ");
+  // The gap allows the words that sit between the verb and the noun -- OR
+  // REPLACE, TEMPORARY, UNIQUE, MATERIALIZED, IF NOT EXISTS -- without trying
+  // to enumerate them per dialect. Bounded, so a DROP in one statement and a
+  // TABLE far away in the next cannot combine into a match.
+  return /\b(?:create|drop|alter|rename)\b[\s\S]{0,40}?\b(?:database|schema|table|view|index)\b/i.test(
+    bare,
+  );
+}
