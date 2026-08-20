@@ -24,6 +24,16 @@ tablex-drivers.workspace = true
 tablex-tunnel.workspace = true
 
 tauri = { version = "2.11", features = [] }
+# Update check only: one GET at startup, to the endpoint in `update.rs`.
+reqwest = { version = "0.13", default-features = false, features = [
+    "rustls-no-provider",
+    "json",
+] }
+# Comparing versions field by field, because "0.10.0" < "0.9.0" as strings.
+semver = "1"
+# The provider `rustls-no-provider` leaves for the caller to install. Matched to
+# the drivers' choice of ring, so one process never installs two.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-os = "2"
 tauri-plugin-store = "2"

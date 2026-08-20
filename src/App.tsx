@@ -11,9 +11,10 @@ import { ConnectionDialog } from "./components/ConnectionDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { CommandPalette } from "./components/ui/CommandPalette";
 import { Workspace } from "./components/workspace/Workspace";
-import { Banner, Button, Spinner } from "./components/ui/primitives";
+import { Banner, Button, Spinner, cx } from "./components/ui/primitives";
 import { useConnections } from "./store/connections";
 import { useSettings } from "./store/settings";
+import { useUpdates } from "./store/updates";
 import { useCommands } from "./store/commands";
 import type { ConnectionConfig } from "./lib/types";
 
@@ -38,6 +39,10 @@ export default function App() {
   const [editing, setEditing] = useState<ConnectionConfig | null>(null);
 
   const initSettings = useSettings((s) => s.init);
+  const settingsReady = useSettings((s) => s.ready);
+  const checkForUpdates = useSettings((s) => s.checkForUpdates);
+  const checkUpdate = useUpdates((s) => s.check);
+  const update = useUpdates((s) => s.available);
   const setPaletteOpen = useCommands((s) => s.setOpen);
   const registerCommands = useCommands((s) => s.register);
 
@@ -47,6 +52,14 @@ export default function App() {
     // it decides what the first paint looks like.
     void initSettings();
   }, [init, initSettings]);
+
+  // After the settings have loaded, so a user who turned this off is not asked
+  // once more on every launch before the file is read. The store itself decides
+  // whether enough time has passed; failures are silent by design.
+  useEffect(() => {
+    if (!settingsReady) return;
+    void checkUpdate(checkForUpdates);
+  }, [settingsReady, checkForUpdates, checkUpdate]);
 
   // Ctrl+, is the settings shortcut everywhere else; there is no reason for
   // this app to be the exception. Ctrl+K opens the palette, which is where
@@ -112,11 +125,23 @@ export default function App() {
 
         <button
           onClick={() => setSettingsOpen(true)}
-          title="Appearance (Ctrl+,)"
+          title={update ? `Table X ${update.latest} is available` : "Appearance (Ctrl+,)"}
           aria-label="Appearance settings"
-          className="no-drag flex size-6 items-center justify-center rounded text-[13px] text-text-muted hover:bg-surface-2 hover:text-text"
+          className="no-drag relative flex size-6 items-center justify-center rounded text-[13px] text-text-muted hover:bg-surface-2 hover:text-text"
         >
           ⚙
+          {/* A dot, not a banner: a new version is worth knowing and never worth
+              interrupting a query for. The colour follows the notice, so an
+              advisory reads differently from a routine release. */}
+          {update && (
+            <span
+              aria-hidden="true"
+              className={cx(
+                "absolute top-0.5 right-0.5 size-1.5 rounded-full",
+                update.notice?.severity === "critical" ? "bg-danger" : "bg-accent",
+              )}
+            />
+          )}
         </button>
       </header>
 

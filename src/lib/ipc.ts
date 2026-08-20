@@ -38,6 +38,7 @@ import type {
   Snippet,
   SshConfig,
   TableDetail,
+  UpdateInfo,
   Value,
   TransactionState,
 } from "./types";
@@ -223,6 +224,12 @@ export const ipc = {
    * statement has often already finished.
    */
   cancelQuery: (connection_id: string) => call<void>("cancel_query", { connection_id }),
+
+  /**
+   * Whether a newer release exists. `null` is no news, for any reason at all —
+   * including a failed request, which must never read as "you are up to date".
+   */
+  checkForUpdate: () => call<UpdateInfo | null>("check_for_update", {}),
 
   /** The statements a set of structure edits would run. Runs nothing itself. */
   previewTableChanges: (connection_id: string, changes: Change[]) =>

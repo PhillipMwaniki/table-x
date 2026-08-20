@@ -370,6 +370,23 @@ export interface MigrationStatement {
   unsupported?: boolean;
 }
 
+/** A message from the release channel, shown beside a new version. */
+export interface UpdateNotice {
+  /** "info" or "critical". Anything else is treated as "info". */
+  severity: string;
+  text: string;
+}
+
+/** A newer release. Absent means no news — never "you are up to date". */
+export interface UpdateInfo {
+  current: string;
+  latest: string;
+  /** Built by the backend from a compiled-in constant, never by the endpoint. */
+  url: string;
+  notice: UpdateNotice | null;
+  check_again_in: number;
+}
+
 /** What a set of structure edits would run, before any of it does. */
 export interface DdlPlan {
   statements: MigrationStatement[];

@@ -405,6 +405,7 @@ exhaust the client's memory.
 | **SSH key material** | With agent authentication, no private key is ever loaded into this process — signing is delegated to the OS agent over a Unix socket or the Windows OpenSSH named pipe. |
 | **Accidental writes** | Connections carry a `read_only` flag enforced client-side regardless of database permissions, plus a color tag so production connections are visibly distinct. |
 | **Inline edits** | Built as parameterized `UPDATE`s keyed on the row's original values, and rolled back unless exactly one row is affected. |
+| **Update check** | One `GET` a day to the release channel, carrying no version, platform, identifier or cookie — there is nothing at the other end to correlate. Off with a single setting. The endpoint returns a version string and never a download URL: the link is built in the client from a compiled-in repository constant, so the service is not in the trust path for anything anybody installs. A failed check shows nothing rather than reporting that you are up to date. |
 | **Query history** | Plain text in the config directory, so it stays inspectable and greppable. Statements that assign a credential (`... PASSWORD 'x'`, `IDENTIFIED BY 'x'`) are dropped rather than redacted — a redaction that misses one vendor's syntax leaks the secret anyway — and the UI says so, so their absence is not a mystery. |
 
 ## Getting started

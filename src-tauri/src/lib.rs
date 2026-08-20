@@ -15,6 +15,7 @@ mod snapshot;
 mod snippets;
 mod state;
 mod store;
+mod update;
 
 use state::AppState;
 use tauri::Manager;
@@ -61,6 +62,7 @@ pub fn run() {
             ipc::disconnect,
             ipc::execute,
             ipc::browse,
+            update::check_for_update,
             ipc::table_detail,
             ipc::preview_table_changes,
             ipc::apply_table_changes,

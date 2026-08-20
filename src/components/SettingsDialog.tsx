@@ -37,6 +37,8 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
     dataFontSize,
     stripedRows,
     setStripedRows,
+    checkForUpdates,
+    setCheckForUpdates,
     setTheme,
     setUiFont,
     setDataFont,
@@ -184,6 +186,13 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
           hint="Banding stops the eye sliding a line up or down on a wide result."
           checked={stripedRows}
           onChange={setStripedRows}
+        />
+
+        <Checkbox
+          label="Check for updates"
+          hint="Asks the release channel once a day whether a newer version exists, and sends nothing. The only request this app makes that you did not ask for."
+          checked={checkForUpdates}
+          onChange={setCheckForUpdates}
         />
 
         {/* Four rows of nothing in particular, banded the way the grid bands

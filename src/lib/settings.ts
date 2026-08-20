@@ -110,6 +110,14 @@ export interface Settings {
    * people turn off. Neither camp is wrong, so neither is overruled.
    */
   stripedRows: boolean;
+  /**
+   * Ask the release channel, once a day, whether a newer version exists.
+   *
+   * A setting rather than simply on, because it is the only request this app
+   * makes that the user did not ask for. On by default: unsigned installers
+   * mean nothing else will tell somebody a security fix shipped.
+   */
+  checkForUpdates: boolean;
 }
 
 /** Page sizes offered in the grid. */
@@ -133,6 +141,7 @@ export const DEFAULT_SETTINGS: Settings = {
   editorRatio: 0.38,
   pageSize: 1000,
   stripedRows: true,
+  checkForUpdates: true,
 };
 
 /**
@@ -234,5 +243,9 @@ export function normalize(stored: unknown): Settings {
     // rather than turning banding on because "false" is truthy.
     stripedRows:
       typeof raw.stripedRows === "boolean" ? raw.stripedRows : DEFAULT_SETTINGS.stripedRows,
+    checkForUpdates:
+      typeof raw.checkForUpdates === "boolean"
+        ? raw.checkForUpdates
+        : DEFAULT_SETTINGS.checkForUpdates,
   };
 }
