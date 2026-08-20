@@ -5524,7 +5524,7 @@ dependencies = [
 
 [[package]]
 name = "table-x"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5552,7 +5552,7 @@ dependencies = [
 
 [[package]]
 name = "tablex-cli"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -5566,7 +5566,7 @@ dependencies = [
 
 [[package]]
 name = "tablex-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5583,7 +5583,7 @@ dependencies = [
 
 [[package]]
 name = "tablex-drivers"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5609,7 +5609,7 @@ dependencies = [
 
 [[package]]
 name = "tablex-tunnel"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "rand 0.10.2",
  "russh",
