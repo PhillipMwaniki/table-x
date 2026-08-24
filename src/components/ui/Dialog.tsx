@@ -72,10 +72,16 @@ export function Dialog({
         onClose();
       }}
       onClose={onClose}
-      // Clicking the backdrop hits the dialog element itself, not its contents.
-      onClick={(e) => {
-        if (e.target === ref.current) onClose();
-      }}
+      // No dismissal on a backdrop click, which is the native element's own
+      // behaviour and was worth going back to. Every dialog here has an explicit
+      // Cancel, Close or Done, and Escape still works, so the cost of dropping it
+      // is one deliberate click. The cost of keeping it was the connection form,
+      // which resets each time it opens: a click that lands an inch wide of a
+      // wide dialog threw away everything typed into it, password included.
+      //
+      // Uniformly rather than only on the forms. A rule that holds for some
+      // dialogs and not others teaches the habit on the ones with nothing to
+      // lose, and that habit is then spent on the one that had something.
       aria-labelledby="dialog-title"
       className={cx(
         "m-auto rounded-lg border border-border bg-surface-1 p-0 text-text shadow-2xl",
