@@ -58,6 +58,7 @@ pub fn run() {
             ipc::save_connection,
             ipc::delete_connection,
             ipc::connect,
+            ipc::reconnect,
             ipc::test_connection,
             ipc::disconnect,
             ipc::execute,

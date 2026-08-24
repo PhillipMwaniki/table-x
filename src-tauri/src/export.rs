@@ -565,6 +565,7 @@ mod tests {
                     statements: statements.clone(),
                 }),
                 None,
+                None,
             )
             .await;
 

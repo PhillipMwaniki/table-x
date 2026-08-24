@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tablex_core::{
     driver::CancelHandle,
     error::{Error, Result},
@@ -40,10 +41,21 @@ pub struct LiveSession {
     /// can be read while a statement is running — which is exactly when somebody
     /// looks at it.
     in_transaction: AtomicBool,
+    /// The database this session is pointed at, as far as this process knows.
+    ///
+    /// Remembered rather than asked of the server, because the moment it is
+    /// needed most is the moment the server cannot be asked: rebuilding a
+    /// broken link has to come back on the database the user was working in,
+    /// and the socket that knew which one that was is gone.
+    database: Mutex<Option<String>>,
 }
 
 impl LiveSession {
-    pub fn new(connection: Box<dyn Connection>, tunnel: Option<Tunnel>) -> Self {
+    pub fn new(
+        connection: Box<dyn Connection>,
+        tunnel: Option<Tunnel>,
+        database: Option<String>,
+    ) -> Self {
         // Taken before the connection is locked away — that is the whole point
         // of the handle.
         let cancel = connection.cancel_handle();
@@ -52,7 +64,18 @@ impl LiveSession {
             tunnel,
             cancel: Mutex::new(cancel),
             in_transaction: AtomicBool::new(false),
+            database: Mutex::new(database),
         }
+    }
+
+    /// The database this session is pointed at, for a reconnect to aim at.
+    pub async fn database(&self) -> Option<String> {
+        self.database.lock().await.clone()
+    }
+
+    /// Record where the session now points, after a switch that succeeded.
+    pub async fn note_database(&self, database: Option<String>) {
+        *self.database.lock().await = database;
     }
 
     /// Whether a transaction is open on this session.
@@ -132,8 +155,10 @@ impl LiveSession {
     ///
     /// The tunnel and the session's identity survive, so everything holding this
     /// `Arc` keeps working — the connection underneath simply points somewhere
-    /// else now.
-    pub async fn replace(&self, connection: Box<dyn Connection>) {
+    /// else now. `database` says where that is, and is not optional to work out
+    /// from the outside: a session whose remembered database disagrees with the
+    /// socket underneath it sends the next statement to the wrong place.
+    pub async fn replace(&self, connection: Box<dyn Connection>, database: Option<String>) {
         // The handle belongs to the socket, not to the session, so it has to
         // travel with the swap — otherwise cancel would keep aiming at a
         // connection that is already closed.
@@ -141,11 +166,38 @@ impl LiveSession {
         // A new socket is not inside anything. Whatever was open went away with
         // the old one, rolled back by the server.
         self.in_transaction.store(false, Ordering::SeqCst);
-        let mut guard = self.connection.lock().await;
-        let mut previous = std::mem::replace(&mut *guard, connection);
-        // Best effort: a socket that will not close cleanly must not stop the
-        // user from working in the database they just switched to.
-        let _ = previous.close().await;
+        self.note_database(database).await;
+        let mut previous = {
+            let mut guard = self.connection.lock().await;
+            std::mem::replace(&mut *guard, connection)
+        };
+        close_politely(previous.close()).await;
+    }
+
+    /// Close this session's connection, on the way out of the registry.
+    ///
+    /// Best effort by design — see [`close_politely`].
+    pub async fn close(&self) {
+        close_politely(async { self.connection.lock().await.close().await }).await;
+    }
+}
+
+/// How long a discarded connection gets to close before it is simply dropped.
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Close a connection that is on its way out, without letting it hang.
+///
+/// Every caller is replacing or removing the session anyway, so there is nothing
+/// to report and nothing to retry. The clock matters because the usual reason
+/// for closing is a link that has already failed, and a socket in that state can
+/// take the operating system's full TCP timeout to admit it — waiting that out
+/// would make recovering from a break slower than the break. Dropping the
+/// connection instead closes its file descriptor regardless.
+async fn close_politely(closing: impl std::future::Future<Output = Result<()>>) {
+    match tokio::time::timeout(CLOSE_TIMEOUT, closing).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::debug!("a discarded session did not close cleanly: {e}"),
+        Err(_) => tracing::warn!("a discarded session did not close within {CLOSE_TIMEOUT:?}"),
     }
 }
 
@@ -166,18 +218,27 @@ impl SessionRegistry {
 
     /// Register a freshly opened session, replacing and closing any previous one
     /// for the same connection id.
-    pub async fn insert(&self, id: &str, connection: Box<dyn Connection>, tunnel: Option<Tunnel>) {
+    ///
+    /// `database` is where the new session points, so a later reconnect can aim
+    /// at the same place rather than at the config's default.
+    pub async fn insert(
+        &self,
+        id: &str,
+        connection: Box<dyn Connection>,
+        tunnel: Option<Tunnel>,
+        database: Option<String>,
+    ) {
         let previous = {
             let mut map = self.sessions.lock().await;
             map.insert(
                 id.to_string(),
-                Arc::new(LiveSession::new(connection, tunnel)),
+                Arc::new(LiveSession::new(connection, tunnel, database)),
             )
         };
         if let Some(old) = previous {
             // Reconnecting must not leak the old socket, or the old tunnel —
             // which is torn down when the replaced session is dropped.
-            let _ = old.connection.lock().await.close().await;
+            old.close().await;
         }
     }
 
@@ -191,14 +252,18 @@ impl SessionRegistry {
             .ok_or_else(|| Error::UnknownConnection(id.to_string()))
     }
 
-    /// Close and forget a session. Closing something already closed succeeds, so
-    /// disconnect is idempotent.
-    pub async fn remove(&self, id: &str) -> Result<()> {
+    /// Close and forget a session. Removing something that is not there succeeds,
+    /// so disconnect is idempotent.
+    ///
+    /// The close itself cannot fail the call: the session is out of the map
+    /// either way, and the one time closing goes wrong is the one time the user
+    /// most needs the disconnect to land — a link that has already broken. An
+    /// error there would leave the UI showing a connection that no longer exists.
+    pub async fn remove(&self, id: &str) {
         let session = self.sessions.lock().await.remove(id);
         if let Some(session) = session {
-            session.connection.lock().await.close().await?;
+            session.close().await;
         }
-        Ok(())
     }
 
     /// Ids of every open session, for the UI's connection indicators.
@@ -215,7 +280,7 @@ impl SessionRegistry {
             map.drain().map(|(_, s)| s).collect()
         };
         for session in drained {
-            let _ = session.connection.lock().await.close().await;
+            session.close().await;
         }
     }
 }
@@ -278,7 +343,7 @@ mod tests {
         // editor is just as inside a transaction, and an indicator that missed
         // it would be believed anyway.
         let closes = Arc::new(AtomicUsize::new(0));
-        let session = LiveSession::new(fake(&closes), None);
+        let session = LiveSession::new(fake(&closes), None, None);
         assert!(!session.in_transaction());
 
         session.note_effect(Some(TxEffect::Opened));
@@ -299,17 +364,53 @@ mod tests {
         // The transaction went away with the old socket. Reporting one on the
         // new one would offer a commit that cannot land.
         let closes = Arc::new(AtomicUsize::new(0));
-        let session = LiveSession::new(fake(&closes), None);
+        let session = LiveSession::new(fake(&closes), None, None);
         session.note_effect(Some(TxEffect::Opened));
 
-        session.replace(fake(&closes)).await;
+        session.replace(fake(&closes), Some("other".into())).await;
         assert!(!session.in_transaction());
+    }
+
+    #[tokio::test]
+    async fn a_session_remembers_where_it_points() {
+        // This is what a reconnect aims at. Coming back on the config's default
+        // after a link broke would run the next statement against the wrong
+        // database while the tab still says otherwise.
+        let closes = Arc::new(AtomicUsize::new(0));
+        let session = LiveSession::new(fake(&closes), None, Some("app".into()));
+        assert_eq!(session.database().await.as_deref(), Some("app"));
+
+        session.note_database(Some("app_staging".into())).await;
+        assert_eq!(session.database().await.as_deref(), Some("app_staging"));
+
+        // A swap carries the new socket's database with it, rather than leaving
+        // the old answer behind for a reconnect to trust.
+        session
+            .replace(fake(&closes), Some("reporting".into()))
+            .await;
+        assert_eq!(session.database().await.as_deref(), Some("reporting"));
+    }
+
+    #[tokio::test]
+    async fn a_reconnect_starts_from_where_the_old_session_pointed() {
+        let closes = Arc::new(AtomicUsize::new(0));
+        let reg = SessionRegistry::new();
+        reg.insert("a", fake(&closes), None, Some("app".into()))
+            .await;
+
+        let was = reg.get("a").await.expect("session").database().await;
+        reg.insert("a", fake(&closes), None, was.clone()).await;
+
+        assert_eq!(
+            reg.get("a").await.expect("session").database().await,
+            Some("app".to_string())
+        );
     }
 
     #[tokio::test]
     async fn a_driver_without_transactions_says_so() {
         let closes = Arc::new(AtomicUsize::new(0));
-        let session = LiveSession::new(fake(&closes), None);
+        let session = LiveSession::new(fake(&closes), None, None);
         match session.begin().await {
             Err(Error::Unsupported(_)) => {}
             other => panic!("expected Unsupported, got {other:?}"),
@@ -332,7 +433,7 @@ mod tests {
     async fn sessions_are_retrievable_after_insert() {
         let closes = Arc::new(AtomicUsize::new(0));
         let reg = SessionRegistry::new();
-        reg.insert("a", fake(&closes), None).await;
+        reg.insert("a", fake(&closes), None, None).await;
 
         assert!(reg.get("a").await.is_ok());
         assert_eq!(reg.open_ids().await, vec!["a".to_string()]);
@@ -342,8 +443,8 @@ mod tests {
     async fn reconnecting_closes_the_replaced_session() {
         let closes = Arc::new(AtomicUsize::new(0));
         let reg = SessionRegistry::new();
-        reg.insert("a", fake(&closes), None).await;
-        reg.insert("a", fake(&closes), None).await;
+        reg.insert("a", fake(&closes), None, None).await;
+        reg.insert("a", fake(&closes), None, None).await;
 
         // Without this, reconnecting would leak a socket every time.
         assert_eq!(closes.load(Ordering::SeqCst), 1);
@@ -354,14 +455,15 @@ mod tests {
     async fn removing_closes_the_session_and_is_idempotent() {
         let closes = Arc::new(AtomicUsize::new(0));
         let reg = SessionRegistry::new();
-        reg.insert("a", fake(&closes), None).await;
+        reg.insert("a", fake(&closes), None, None).await;
 
-        reg.remove("a").await.expect("first remove");
+        reg.remove("a").await;
         assert_eq!(closes.load(Ordering::SeqCst), 1);
         assert!(reg.open_ids().await.is_empty());
 
-        // Disconnecting twice must not error — the UI can fire it on a stale view.
-        reg.remove("a").await.expect("second remove must succeed");
+        // Disconnecting twice must be harmless — the UI can fire it on a stale
+        // view, and on a link that broke before anyone pressed anything.
+        reg.remove("a").await;
         assert_eq!(closes.load(Ordering::SeqCst), 1);
     }
 
@@ -369,8 +471,8 @@ mod tests {
     async fn close_all_closes_every_session() {
         let closes = Arc::new(AtomicUsize::new(0));
         let reg = SessionRegistry::new();
-        reg.insert("a", fake(&closes), None).await;
-        reg.insert("b", fake(&closes), None).await;
+        reg.insert("a", fake(&closes), None, None).await;
+        reg.insert("b", fake(&closes), None, None).await;
 
         reg.close_all().await;
         assert_eq!(closes.load(Ordering::SeqCst), 2);
@@ -381,8 +483,8 @@ mod tests {
     async fn a_busy_session_does_not_block_a_different_one() {
         let closes = Arc::new(AtomicUsize::new(0));
         let reg = SessionRegistry::new();
-        reg.insert("slow", fake(&closes), None).await;
-        reg.insert("fast", fake(&closes), None).await;
+        reg.insert("slow", fake(&closes), None, None).await;
+        reg.insert("fast", fake(&closes), None, None).await;
 
         // Hold "slow" the way a long-running query would.
         let slow = reg.get("slow").await.expect("slow session");
