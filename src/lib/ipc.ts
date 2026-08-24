@@ -117,6 +117,17 @@ export const ipc = {
   connect: (id: string) => call<void>("connect", { id }),
   disconnect: (id: string) => call<void>("disconnect", { id }),
 
+  /**
+   * Replace a broken link with a fresh one, keeping the session's identity.
+   *
+   * Not the same as disconnect-then-connect: the backend opens the new socket
+   * before it discards the old session, comes back on the database the session
+   * was pointed at, and never leaves the connection closed if the server is
+   * still unreachable. Tabs and results, which are keyed by connection id, stay
+   * exactly where they are.
+   */
+  reconnect: (id: string) => call<void>("reconnect", { id }),
+
   /** Validate a config that may not be saved yet, tunnel included. */
   testConnection: (config: ConnectionConfig, secret?: string, sshSecrets?: (string | null)[]) =>
     call<void>("test_connection", {

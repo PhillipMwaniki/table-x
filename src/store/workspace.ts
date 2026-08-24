@@ -14,6 +14,7 @@
 import { create } from "zustand";
 import { ipc, IpcError } from "@/lib/ipc";
 import { useSettings } from "@/store/settings";
+import { noteLinkFailure, useConnections } from "@/store/connections";
 import { load as loadStore } from "@tauri-apps/plugin-store";
 import type { Store } from "@tauri-apps/plugin-store";
 import { parseSaved, shouldAutoRun, toSaved } from "@/lib/session";
@@ -21,6 +22,7 @@ import { changesCatalog } from "@/lib/statements";
 import type {
   CompletionScope,
   DiffReport,
+  ErrorCategory,
   Notebook,
   NotebookCell,
   Plan,
@@ -46,6 +48,14 @@ export interface QueryError {
   /** 1-based character offset, used to underline the offending token. */
   position?: number | undefined;
   code?: string | undefined;
+  /**
+   * What kind of failure this was.
+   *
+   * Carried so the banner can offer the recovery that fits. A dropped link and
+   * a typo in a WHERE clause both arrive here as red text, but only one of them
+   * is fixed by rebuilding the connection rather than by editing the statement.
+   */
+  category?: ErrorCategory | undefined;
 }
 
 /**
@@ -270,6 +280,16 @@ interface WorkspaceState {
   goToPage: (connectionId: string, tabId: string, offset: number) => Promise<void>;
 
   loadSession: (connectionId: string) => Promise<void>;
+  /**
+   * Rebuild a link that has broken, and put the workspace back on its feet.
+   *
+   * The tabs, their statements, and their last results stay exactly as they
+   * are — losing an afternoon's work to a dropped Wi-Fi connection is the thing
+   * this exists to prevent. Everything that described the *session* rather than
+   * the work is asked again, because it belongs to a socket that no longer
+   * exists.
+   */
+  reconnect: (connectionId: string) => Promise<void>;
   /** Bring back the tabs this connection had when the app last closed. */
   restore: (connectionId: string) => Promise<void>;
   /**
@@ -293,6 +313,26 @@ interface WorkspaceState {
   undo: (connectionId: string, tabId: string) => Promise<void>;
   redo: (connectionId: string, tabId: string) => Promise<void>;
   reset: (connectionId: string) => void;
+}
+
+/**
+ * Turn a failed call into what the banner will show, noting a broken link.
+ *
+ * A connection-category failure means the socket is gone rather than that the
+ * statement was wrong, and every later call on that session fails the same way
+ * until the link is rebuilt. Recording it here, where every failure already
+ * passes, is what puts a Reconnect button in front of the user instead of
+ * leaving them to work out which of these red messages is worth retrying.
+ */
+function failure(connectionId: string, e: unknown): QueryError {
+  const err = e as IpcError;
+  noteLinkFailure(connectionId, e);
+  return {
+    message: err.message,
+    position: err.position,
+    code: err.code,
+    category: err.category,
+  };
 }
 
 /** Read-modify-write one tab without disturbing the others. */
@@ -569,6 +609,37 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (tabsOf(get(), id).length === 0) get().openQuery(id);
   },
 
+  reconnect: async (id) => {
+    // The connection store owns the link itself, including whether this one is
+    // still marked broken afterwards. Nothing below is true if it failed.
+    if (!(await useConnections.getState().reconnect(id))) return;
+
+    // Errors about the old link describe something that no longer exists. The
+    // statements that produced them are left untouched: they are still what the
+    // user typed, and still what they will want to run.
+    set((s) => ({
+      tabs: {
+        ...s.tabs,
+        [id]: tabsOf(s, id).map((t) =>
+          t.error?.category === "connection" ? { ...t, error: null } : t,
+        ),
+      },
+    }));
+
+    // Whatever described the session — which database it is on, whether a
+    // transaction is open, what names autocomplete knows — belonged to the
+    // socket that died and is asked again rather than assumed.
+    await get().loadSession(id);
+    await get().loadCompletionFor(id);
+
+    const tab = get().activeTab(id);
+    // Deliberately not re-running the statement that failed. A link that dropped
+    // mid-statement leaves no way to tell whether the server applied it, and
+    // silently sending an INSERT a second time is a far worse outcome than
+    // asking somebody to press Run.
+    if (tab) get().setTabNotice(id, tab.id, "Reconnected. Run the statement again when ready.");
+  },
+
   restore: async (id) => {
     let saved;
     try {
@@ -623,13 +694,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       // rather than left describing the previous one.
       void get().loadCompletionFor(id);
     } catch (e) {
-      const err = e as IpcError;
+      const error = failure(id, e);
       const tab = get().activeTab(id);
-      if (tab) {
-        set((s) => ({
-          tabs: patchTab(s.tabs, id, tab.id, { error: { message: err.message } }),
-        }));
-      }
+      if (tab) set((s) => ({ tabs: patchTab(s.tabs, id, tab.id, { error }) }));
     } finally {
       set((s) => ({ switching: { ...s.switching, [id]: false } }));
     }
@@ -646,12 +713,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       const plan = await ipc.explain(id, sql, analyze);
       set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { plan, running: false }) }));
     } catch (e) {
-      const error = e as IpcError;
       set((s) => ({
-        tabs: patchTab(s.tabs, id, tabId, {
-          running: false,
-          error: { message: error.message, code: error.code, position: error.position },
-        }),
+        tabs: patchTab(s.tabs, id, tabId, { running: false, error: failure(id, e) }),
       }));
     }
   },
@@ -770,9 +833,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       set((s) => ({
         tabs: patchTab(s.tabs, id, tabId, {
           running: false,
-          error: cancelled
-            ? null
-            : { message: err.message, position: err.position, code: err.code },
+          error: cancelled ? null : failure(id, e),
           ...(cancelled ? { notice: "Cancelled." } : {}),
           // Keep the previous outcome visible. Blanking the grid on a typo
           // loses results the user may still be reading.
