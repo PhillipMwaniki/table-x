@@ -16,6 +16,7 @@ import { useConnections } from "./store/connections";
 import { useSettings } from "./store/settings";
 import { useUpdates } from "./store/updates";
 import { useCommands } from "./store/commands";
+import { useWorkspace } from "./store/workspace";
 import type { ConnectionConfig } from "./lib/types";
 
 export default function App() {
@@ -53,6 +54,7 @@ export default function App() {
   const update = useUpdates((s) => s.available);
   const setPaletteOpen = useCommands((s) => s.setOpen);
   const registerCommands = useCommands((s) => s.register);
+  const reconnect = useWorkspace((s) => s.reconnect);
 
   useEffect(() => {
     void init();
@@ -116,8 +118,21 @@ export default function App() {
           if (!open.has(c.id)) void connect(c.id);
         },
       })),
+      // Only where there is a session to rebuild. On a connection that was
+      // never opened this would be a second, worse-named Connect.
+      ...connections
+        .filter((c) => open.has(c.id))
+        .map((c) => ({
+          id: `app.reconnect.${c.id}`,
+          title: `Reconnect to ${c.name}`,
+          group: "Connection",
+          run: () => {
+            select(c.id);
+            void reconnect(c.id);
+          },
+        })),
     ]);
-  }, [registerCommands, connections, open, select, connect]);
+  }, [registerCommands, connections, open, select, connect, reconnect]);
 
   const selected = connections.find((c) => c.id === selectedId) ?? null;
 

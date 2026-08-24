@@ -100,6 +100,7 @@ export function Workspace({
     setTabError,
     setTabNotice,
     switchDatabase,
+    reconnect,
     applyEdit,
     goToPage,
     cancelQuery,
@@ -155,6 +156,9 @@ export function Workspace({
   // identity — which is how this component learned to tear itself down.
   const connections = useConnections((s) => s.connections);
   const openConnections = useConnections((s) => s.open);
+  /** Whether this connection's link has failed, and whether it is being rebuilt. */
+  const linkLost = useConnections((s) => s.broken.has(connection.id));
+  const reconnecting = useConnections((s) => s.busy.has(connection.id));
 
   const [compare, setCompare] = useState<{
     connectionId: string;
@@ -953,6 +957,35 @@ export function Workspace({
       <div className="flex min-w-0 flex-1 flex-col">
         <TabBar connectionId={connection.id} />
         <ExportProgress />
+
+        {/* A broken link is a fact about the connection, not about whichever tab
+            happens to be in front, so it is reported once here rather than in
+            every tab's error banner — and it stays put while the user moves
+            between tabs looking for what survived.
+
+            Warn rather than danger: nothing has been lost yet. The tabs, the
+            statements, and the last results are all still here, and saying so
+            is most of the reason this strip exists. */}
+        {linkLost && (
+          <div
+            role="alert"
+            className="flex shrink-0 items-center gap-2 border-b border-warn/30 bg-warn/10 px-2 py-1"
+          >
+            <span className="min-w-0 flex-1 text-[11px] text-warn" data-selectable>
+              The link to this server is gone. Your tabs and results are kept — reconnect to run
+              anything.
+            </span>
+            <Button
+              variant="secondary"
+              className="h-6 shrink-0"
+              busy={reconnecting}
+              onClick={() => void reconnect(connection.id)}
+              title="Open a new link to the server, keeping these tabs and results"
+            >
+              Reconnect
+            </Button>
+          </div>
+        )}
 
         {tab ? (
           <>
