@@ -1375,18 +1375,13 @@ pub async fn delete_design(state: tauri::State<'_, AppState>, id: String) -> Ipc
 /// Laid out in Rust for the same reason a live schema is — it has to come out
 /// the same every time — and by the same code, so a design and the database it
 /// came from are not drawn by two implementations that disagree.
+///
+/// Takes the design rather than its id, so the canvas draws what is in front of
+/// the user rather than what was last written to disk. An edit that only became
+/// visible after a save would make adding a table feel like it had failed.
 #[tauri::command(rename_all = "snake_case")]
-pub async fn design_diagram(
-    state: tauri::State<'_, AppState>,
-    id: String,
-) -> IpcResult<tablex_core::diagram::Diagram> {
-    let design = state
-        .designs
-        .lock()
-        .await
-        .get(&id)
-        .ok_or_else(|| tablex_core::Error::Config(format!("no such design: {id}")))?;
-    Ok(design.diagram())
+pub fn design_diagram(design: Design) -> tablex_core::diagram::Diagram {
+    design.diagram()
 }
 
 /// Read a live schema into a new design.

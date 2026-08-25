@@ -419,6 +419,10 @@ export interface DiffReport {
 /** A key column shown inside a diagram box. */
 export interface BoxColumn {
   name: string;
+  /** The declared type, when the diagram is showing every column. */
+  type_name?: string | undefined;
+  /** Part of the primary key. */
+  primary?: boolean | undefined;
   /** This column points at another table. */
   outgoing: boolean;
   /** Another table points at this column. */

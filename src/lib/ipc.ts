@@ -212,8 +212,13 @@ export const ipc = {
   saveDesign: (design: Design) => call<Design>("save_design", { design }),
   deleteDesign: (id: string) => call<void>("delete_design", { id }),
 
-  /** The design laid out for the canvas, saved positions applied. */
-  designDiagram: (id: string) => call<Diagram>("design_diagram", { id }),
+  /**
+   * The design laid out for the canvas, saved positions applied.
+   *
+   * Takes the design rather than its id: the canvas has to draw what is in
+   * front of the user, including edits that have not been written yet.
+   */
+  designDiagram: (design: Design) => call<Diagram>("design_diagram", { design }),
 
   /** Reverse engineer: read a live schema into a new design. */
   designFromSchema: (connection_id: string, schema: string | undefined, name: string) =>
