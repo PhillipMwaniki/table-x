@@ -5,10 +5,12 @@
  * editor, and result grid land.
  */
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { ConnectionList } from "./components/ConnectionList";
 import { ConnectionDialog } from "./components/ConnectionDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
+import { Dialog } from "./components/ui/Dialog";
 import { CommandPalette } from "./components/ui/CommandPalette";
 import { Workspace } from "./components/workspace/Workspace";
 import { Banner, Button, Spinner, cx } from "./components/ui/primitives";
@@ -17,7 +19,18 @@ import { useSettings } from "./store/settings";
 import { useUpdates } from "./store/updates";
 import { useCommands } from "./store/commands";
 import { useWorkspace } from "./store/workspace";
-import type { ConnectionConfig } from "./lib/types";
+import { DesignView } from "./components/workspace/DesignView";
+import { ipc, IpcError } from "./lib/ipc";
+import type { ConnectionConfig, Design } from "./lib/types";
+
+/**
+ * The event a `.erd` file arrives on when the app is already running.
+ *
+ * Matches `OPEN_DESIGN_EVENT` in the Rust shell. A double-click on a design
+ * while Table X is open is forwarded to this window rather than starting a
+ * second copy of the application.
+ */
+const OPEN_DESIGN_EVENT = "open-design-file";
 
 export default function App() {
   const {
@@ -46,6 +59,24 @@ export default function App() {
    * that stays gone after a restart reads as a bug.
    */
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  /**
+   * A design opened from a file with no connection to put it in front of.
+   *
+   * Tabs belong to a connection, and a design does not need one — so a `.erd`
+   * double-clicked before connecting to anything is shown here instead of being
+   * refused until the user picks a database it has nothing to do with.
+   */
+  const [designFile, setDesignFile] = useState<Design | null>(null);
+  const [designError, setDesignError] = useState<string | null>(null);
+  /**
+   * A design's SQL script, when there is no query tab to put it in.
+   *
+   * With a connection open the script opens as an editor tab, where it can be
+   * run. With none there is nowhere to run it, so it is shown to be read and
+   * copied — which is what a script for a database you have not connected to
+   * is for anyway.
+   */
+  const [designScript, setDesignScript] = useState<string | null>(null);
 
   const initSettings = useSettings((s) => s.init);
   const settingsReady = useSettings((s) => s.ready);
@@ -57,6 +88,50 @@ export default function App() {
   const setPaletteOpen = useCommands((s) => s.setOpen);
   const registerCommands = useCommands((s) => s.register);
   const reconnect = useWorkspace((s) => s.reconnect);
+
+  /**
+   * Open a design file, wherever there is room for it.
+   *
+   * The stores are read through `getState` rather than through this component's
+   * own values: this runs from an event listener that outlives the render it
+   * was set up in, and a captured connection id would be the one that was
+   * selected when the app started.
+   */
+  const openDesignFile = useCallback(async (path: string) => {
+    try {
+      const design = await ipc.readDesignFile(path);
+      const connections = useConnections.getState();
+      const target =
+        connections.selectedId && connections.open.has(connections.selectedId)
+          ? connections.selectedId
+          : null;
+      if (target) {
+        useWorkspace.getState().openDesign(target, design);
+        setDesignFile(null);
+      } else {
+        setDesignFile(design);
+      }
+      setDesignError(null);
+    } catch (e) {
+      setDesignError((e as IpcError).message);
+    }
+  }, []);
+
+  // Two ways in, because a file can be double-clicked before the app is running
+  // or while it already is. The first arrives as a launch argument the frontend
+  // asks for once it exists; the second as an event from the single-instance
+  // handler.
+  useEffect(() => {
+    void ipc.startupDesigns().then((paths) => {
+      for (const path of paths) void openDesignFile(path);
+    });
+    const stop = listen<string[]>(OPEN_DESIGN_EVENT, (event) => {
+      for (const path of event.payload) void openDesignFile(path);
+    });
+    return () => {
+      void stop.then((off) => off());
+    };
+  }, [openDesignFile]);
 
   useEffect(() => {
     void init();
@@ -230,7 +305,37 @@ export default function App() {
             </div>
           )}
 
-          {selected && open.has(selected.id) ? (
+          {designError && (
+            <div className="shrink-0 p-2">
+              <Banner tone="error" onDismiss={() => setDesignError(null)}>
+                {designError}
+              </Banner>
+            </div>
+          )}
+
+          {/* A design file takes the pane when there is no connected workspace
+              to put it in a tab of. It is the whole reason the app was started
+              in that case, and a design needs no database to be worked on. */}
+          {designFile && !(selected && open.has(selected.id)) ? (
+            <div className="flex min-h-0 flex-1 flex-col">
+              <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border bg-surface-1 px-2">
+                <span className="text-[11px] text-text-muted">
+                  Design file · not tied to a connection
+                </span>
+                <div className="flex-1" />
+                <Button variant="ghost" className="h-6" onClick={() => setDesignFile(null)}>
+                  Close
+                </Button>
+              </div>
+              <DesignView
+                design={designFile}
+                onChange={setDesignFile}
+                onScript={(report) =>
+                  setDesignScript(report.statements.map((s) => s.sql).join("\n\n"))
+                }
+              />
+            </div>
+          ) : selected && open.has(selected.id) ? (
             // Keyed by connection so switching rebuilds the schema tree rather
             // than showing the previous connection's objects against the new one.
             <Workspace
@@ -276,6 +381,34 @@ export default function App() {
           )}
         </main>
       </div>
+
+      <Dialog
+        open={designScript !== null}
+        onClose={() => setDesignScript(null)}
+        title="Create script"
+        description="The statements that would build this design. Nothing here runs — there is no connection open."
+        width="wide"
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button
+              onClick={() => void navigator.clipboard?.writeText(designScript ?? "")}
+              title="Copy the whole script"
+            >
+              Copy
+            </Button>
+            <Button variant="primary" onClick={() => setDesignScript(null)}>
+              Done
+            </Button>
+          </div>
+        }
+      >
+        <pre
+          data-selectable
+          className="max-h-[26rem] overflow-auto rounded border border-border bg-surface-0 p-2 font-mono text-[length:var(--text-data)] whitespace-pre-wrap"
+        >
+          {designScript}
+        </pre>
+      </Dialog>
 
       <ConnectionDialog
         open={dialogOpen}

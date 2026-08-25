@@ -11,6 +11,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { Button, Spinner } from "../ui/primitives";
 import { ipc, IpcError } from "@/lib/ipc";
 import type { Design } from "@/lib/types";
@@ -83,6 +84,23 @@ export function DesignList({
     }
   };
 
+  /** Open a `.erd` file, which also keeps it among this machine's designs. */
+  const fromFile = async () => {
+    const path = await open({
+      multiple: false,
+      filters: [{ name: "Table X design", extensions: ["erd"] }],
+    });
+    if (typeof path !== "string") return;
+    setError(null);
+    try {
+      const design = await ipc.readDesignFile(path);
+      await refresh();
+      onOpen(design);
+    } catch (e) {
+      setError((e as IpcError).message);
+    }
+  };
+
   const needle = filter.trim().toLowerCase();
   const visible = designs.filter(
     (d) => !needle || d.name.toLowerCase().includes(needle) || d.driver.includes(needle),
@@ -106,6 +124,14 @@ export function DesignList({
         >
           From schema
         </Button>
+        <Button
+          variant="ghost"
+          className="h-5"
+          onClick={() => void fromFile()}
+          title="Open a .erd design file"
+        >
+          Open file…
+        </Button>
       </div>
 
       {error && (
@@ -122,7 +148,7 @@ export function DesignList({
         ) : visible.length === 0 ? (
           <p className="p-4 text-center text-[11px] text-text-muted">
             {designs.length === 0
-              ? "No designs yet. “From schema” reads the schema you are connected to into one."
+              ? "No designs yet. “From schema” reads the schema you are connected to into one, or open a .erd file."
               : "Nothing matches that."}
           </p>
         ) : (

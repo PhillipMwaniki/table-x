@@ -37,6 +37,15 @@
       "icons/icon.ico"
     ],
     "category": "DeveloperTool",
+    "fileAssociations": [
+      {
+        "ext": ["erd"],
+        "name": "Table X design",
+        "description": "Table X schema design",
+        "mimeType": "application/x-tablex-design",
+        "role": "Editor"
+      }
+    ],
     "shortDescription": "A fast, cross-platform database client",
     "longDescription": "Table X is a fast, open-source database client for developers, with a SQL editor, schema browser, and editable result grid across PostgreSQL, MySQL, SQLite, and more.",
     "linux": {

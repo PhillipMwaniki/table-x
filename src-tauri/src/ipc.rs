@@ -1431,6 +1431,8 @@ pub async fn design_from_schema(
         // Empty: nothing has been moved yet, so every table is wherever the
         // layout puts it, which is what a freshly read schema should look like.
         layout: Vec::new(),
+        // Not on disk anywhere yet. It becomes a file when somebody says so.
+        path: None,
         created_at: String::new(),
         updated_at: String::new(),
     };
@@ -1529,6 +1531,62 @@ pub async fn design_sync(
         changes,
         statements,
     })
+}
+
+/// Write a design to a `.erd` file.
+///
+/// The file is a copy that can be moved, mailed, or committed; the store keeps
+/// its own. What the two share is the design's id, so opening the file again --
+/// here or on another machine -- continues the same design rather than starting
+/// a second one that slowly diverges from it.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn write_design_file(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    path: String,
+) -> IpcResult<Design> {
+    let mut design = state
+        .designs
+        .lock()
+        .await
+        .get(&id)
+        .ok_or_else(|| tablex_core::Error::Config(format!("no such design: {id}")))?;
+
+    std::fs::write(&path, design.to_file()?)
+        .map_err(|e| tablex_core::Error::Io(format!("could not write {path}: {e}")))?;
+
+    // Remembered so that saving again knows where again is.
+    design.path = Some(path);
+    Ok(state.designs.lock().await.save(design)?)
+}
+
+/// Open a `.erd` file, and keep it.
+///
+/// Reading one adds it to the designs this machine knows about, so a file that
+/// arrived from somewhere else behaves from then on like any other design —
+/// including being listed, compared against a database, and saved back to the
+/// file it came from.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn read_design_file(
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> IpcResult<Design> {
+    let bytes = std::fs::read(&path)
+        .map_err(|e| tablex_core::Error::Io(format!("could not read {path}: {e}")))?;
+    let design = Design::from_file(&bytes, &path)?;
+    Ok(state.designs.lock().await.save(design)?)
+}
+
+/// Design files this launch was asked to open.
+///
+/// Double-clicking a `.erd` file starts the app with the path as an argument,
+/// so the frontend asks for them once it is ready rather than the backend
+/// pushing them at a window that may not exist yet. A second double-click while
+/// the app is running arrives as an event instead — see the single-instance
+/// handler.
+#[tauri::command(rename_all = "snake_case")]
+pub fn startup_designs() -> Vec<String> {
+    crate::design_arguments(std::env::args())
 }
 
 /// The schema as a diagram, already laid out.

@@ -588,6 +588,8 @@ export interface Design {
   tables: TableDetail[];
   /** Only the tables that have been moved; the rest are laid out. */
   layout: Placement[];
+  /** The .erd file this was last read from or written to, if any. */
+  path?: string | undefined;
   created_at: string;
   updated_at: string;
 }

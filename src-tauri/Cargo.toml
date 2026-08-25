@@ -52,6 +52,11 @@ chrono.workspace = true
 # The default `v1` feature already selects the native store for all three.
 keyring = "4"
 
+# One running copy of the app. Two would share the JSON stores and each save the
+# list it happened to load, so the later write would drop the other's work — and
+# it is what lets a double-clicked design open in the window already on screen.
+tauri-plugin-single-instance = "2"
+
 [dev-dependencies]
 # Only for building ConnectionConfig fixtures in tests.
 indexmap.workspace = true

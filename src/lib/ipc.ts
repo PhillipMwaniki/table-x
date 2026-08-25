@@ -222,6 +222,22 @@ export const ipc = {
   /** Forward engineer: the script that would build this design from nothing. */
   designScript: (id: string) => call<DiffReport>("design_script", { id }),
 
+  /**
+   * Write a design to a `.erd` file, and remember where it went.
+   *
+   * The file is a copy that can be moved or shared; the store keeps its own.
+   * They share the design's id, so opening the file again continues the same
+   * design rather than starting a second one beside it.
+   */
+  writeDesignFile: (id: string, path: string) =>
+    call<Design>("write_design_file", { id, path }),
+
+  /** Open a `.erd` file, keeping it among this machine's designs. */
+  readDesignFile: (path: string) => call<Design>("read_design_file", { path }),
+
+  /** Design files this launch was asked to open, from a double-click. */
+  startupDesigns: () => call<string[]>("startup_designs"),
+
   /** What it would take to make a database match this design. */
   designSync: (id: string, connection_id: string, schema?: string) =>
     call<DiffReport>("design_sync", { id, connection_id, schema: schema ?? null }),

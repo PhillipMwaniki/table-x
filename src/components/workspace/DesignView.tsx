@@ -14,6 +14,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { save } from "@tauri-apps/plugin-dialog";
 import { Banner, Button, Spinner } from "../ui/primitives";
 import { ipc, IpcError } from "@/lib/ipc";
 import { HEADER, ROW, canvasPoint, clampScale, linkPath, loopPath } from "@/lib/erd";
@@ -39,12 +40,20 @@ export function DesignView({
   onChange: (design: Design) => void;
   /** Show the script that would build this design from nothing. */
   onScript: (report: DiffReport) => void;
-  /** Show what it would take to bring a database up to this design. */
-  onSync: () => void;
+  /**
+   * Show what it would take to bring a database up to this design.
+   *
+   * Absent when there is no database in front of the user — a design opened
+   * from a file before connecting to anything. Everything else here works
+   * without a server, which is the point of a design being a document.
+   */
+  onSync?: (() => void) | undefined;
 }) {
   const [diagram, setDiagram] = useState<Diagram | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** The name while it is being typed, so a half-typed one is not saved. */
+  const [renaming, setRenaming] = useState<string | null>(null);
   const [view, setView] = useState({ scale: 1, x: 0, y: 0 });
   /** The table under the pointer, so its own relations stand out. */
   const [focus, setFocus] = useState<number | null>(null);
@@ -88,8 +97,8 @@ export function DesignView({
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
 
-  /** Write the design, a beat after it stops changing. */
-  const save = useCallback(
+  /** Write the design to the store, a beat after it stops changing. */
+  const persist = useCallback(
     (next: Design) => {
       onChange(next);
       if (pending.current) clearTimeout(pending.current);
@@ -118,7 +127,34 @@ export function DesignView({
   const place = (table: string, x: number, y: number) => {
     const layout = design.layout.filter((p) => p.table !== table);
     layout.push({ table, x, y });
-    save({ ...design, layout });
+    persist({ ...design, layout });
+  };
+
+  const rename = () => {
+    const name = renaming?.trim();
+    setRenaming(null);
+    // An empty name is refused by the store; treating it as "no change" here
+    // means the box simply springs back rather than showing an error about
+    // something the user was in the middle of doing.
+    if (!name || name === design.name) return;
+    persist({ ...design, name });
+  };
+
+  /** Write the design where the user chooses, and remember where that was. */
+  const toFile = async () => {
+    const path = await save({
+      defaultPath: design.path ?? `${design.name}.erd`,
+      filters: [{ name: "Table X design", extensions: ["erd"] }],
+    });
+    if (!path) return;
+    setBusy(true);
+    try {
+      onChange(await ipc.writeDesignFile(design.id, path));
+    } catch (e) {
+      setError((e as IpcError).message);
+    } finally {
+      setBusy(false);
+    }
   };
 
   const script = async () => {
@@ -156,6 +192,32 @@ export function DesignView({
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 items-center gap-2 border-b border-border bg-surface-1 px-2 py-1">
+        {/* The name is edited in place. A design is a document and its name is
+            the first thing about it somebody wants to change; a dialog for one
+            field would be a dialog nobody opens. */}
+        {renaming === null ? (
+          <button
+            onClick={() => setRenaming(design.name)}
+            title={design.path ?? "Not saved to a file yet"}
+            className="max-w-64 truncate rounded px-1 text-[12px] font-medium text-text hover:bg-surface-2"
+          >
+            {design.name}
+          </button>
+        ) : (
+          <input
+            autoFocus
+            value={renaming}
+            onChange={(e) => setRenaming(e.target.value)}
+            onBlur={rename}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") rename();
+              if (e.key === "Escape") setRenaming(null);
+            }}
+            aria-label="Design name"
+            className="h-5 w-64 rounded border border-accent bg-surface-0 px-1 text-[12px] outline-none"
+          />
+        )}
+
         <span className="text-[11px] text-text-muted">
           {diagram.boxes.length} table{diagram.boxes.length === 1 ? "" : "s"} ·{" "}
           {diagram.edges.length} relation{diagram.edges.length === 1 ? "" : "s"} ·{" "}
@@ -164,12 +226,25 @@ export function DesignView({
 
         <div className="flex-1" />
 
+        <Button
+          variant="ghost"
+          className="h-5"
+          busy={busy}
+          onClick={() => void toFile()}
+          title={design.path ? `Last saved to ${design.path}` : "Save this design as a .erd file"}
+        >
+          {design.path ? "Save to file" : "Save to file…"}
+        </Button>
         <Button variant="ghost" className="h-5" busy={busy} onClick={() => void script()}>
           SQL script
         </Button>
-        <Button variant="ghost" className="h-5" onClick={onSync}>
-          Compare with database…
-        </Button>
+        {/* Only where there is a database to compare with. A design opened from
+            a file before connecting to anything has nothing to answer this. */}
+        {onSync && (
+          <Button variant="ghost" className="h-5" onClick={onSync}>
+            Compare with database…
+          </Button>
+        )}
         {/* Clearing the saved positions rather than computing new ones: the
             automatic layout is what a design with nothing moved already looks
             like, so this is exactly "forget where I put things". */}
@@ -177,7 +252,7 @@ export function DesignView({
           variant="ghost"
           className="h-5"
           disabled={design.layout.length === 0}
-          onClick={() => save({ ...design, layout: [] })}
+          onClick={() => persist({ ...design, layout: [] })}
           title="Put every table back where the automatic layout would place it"
         >
           Auto-arrange
@@ -214,9 +289,7 @@ export function DesignView({
                   ? {
                       ...was,
                       boxes: was.boxes.map((b) =>
-                        b.table === held.table
-                          ? { ...b, x: at.x - held.dx, y: at.y - held.dy }
-                          : b,
+                        b.table === held.table ? { ...b, x: at.x - held.dx, y: at.y - held.dy } : b,
                       ),
                     }
                   : was,

@@ -63,9 +63,79 @@ pub struct Design {
     /// the layout puts it", which is what a table nobody has dragged should do.
     #[serde(default)]
     pub layout: Vec<Placement>,
+    /// The file this design was last read from or written to, if any.
+    ///
+    /// Not part of the file itself — where a file is is not something the file
+    /// can know, and a copy moved to another machine would otherwise carry a
+    /// path that means nothing there. Kept in the store so that saving again
+    /// knows where "again" is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
     /// RFC 3339, UTC. Set once and preserved across edits.
     pub created_at: String,
     pub updated_at: String,
+}
+
+/// What a `.erd` file holds.
+///
+/// A marker and a version around the design, so that opening something that is
+/// not one says so rather than failing with whatever serde makes of it, and so
+/// that a file written by a later version can be recognised as such instead of
+/// being silently half-read.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesignFile {
+    pub format: String,
+    pub version: u32,
+    pub design: Design,
+}
+
+/// The marker every `.erd` file carries.
+pub const FILE_FORMAT: &str = "tablex.erd";
+/// The version this build writes, and the highest it can read.
+pub const FILE_VERSION: u32 = 1;
+
+/// The extension these files carry, without the dot.
+pub const FILE_EXTENSION: &str = "erd";
+
+impl Design {
+    /// The design as the bytes of a `.erd` file.
+    pub fn to_file(&self) -> Result<Vec<u8>> {
+        let mut design = self.clone();
+        // Where the file is is not the file's business, and a path from
+        // somebody else's machine is worse than no path at all.
+        design.path = None;
+        Ok(serde_json::to_vec_pretty(&DesignFile {
+            format: FILE_FORMAT.into(),
+            version: FILE_VERSION,
+            design,
+        })?)
+    }
+
+    /// Read a `.erd` file, saying plainly when it is not one.
+    pub fn from_file(bytes: &[u8], path: &str) -> Result<Design> {
+        let file: DesignFile = serde_json::from_slice(bytes).map_err(|e| {
+            Error::Config(format!(
+                "{path} is not a Table X design file, or it is damaged: {e}"
+            ))
+        })?;
+
+        if file.format != FILE_FORMAT {
+            return Err(Error::Config(format!(
+                "{path} says it is a {} file, not a Table X design",
+                file.format
+            )));
+        }
+        if file.version > FILE_VERSION {
+            return Err(Error::Config(format!(
+                "{path} was written by a newer version of Table X (format {} against {FILE_VERSION}). Opening it here could lose part of the design.",
+                file.version
+            )));
+        }
+
+        let mut design = file.design;
+        design.path = Some(path.to_string());
+        Ok(design)
+    }
 }
 
 impl Design {
@@ -280,6 +350,7 @@ mod tests {
             schema: None,
             tables,
             layout: vec![],
+            path: None,
             created_at: String::new(),
             updated_at: String::new(),
         }
@@ -396,5 +467,71 @@ mod tests {
         let back = store.get("a").expect("still there");
         assert_eq!(back.tables.len(), 1);
         assert_eq!(back.driver, "mysql");
+    }
+
+    #[test]
+    fn a_design_survives_the_round_trip_through_a_file() {
+        let mut d = design(
+            "a",
+            vec![table("users", None), table("orders", Some("users"))],
+        );
+        d.layout = vec![Placement {
+            table: "users".into(),
+            x: 120.0,
+            y: 40.0,
+        }];
+
+        let bytes = d.to_file().expect("write");
+        let back = Design::from_file(&bytes, "/tmp/shop.erd").expect("read");
+
+        // The same design, not a copy of it: the id is what makes opening the
+        // file again continue this design rather than start a second one.
+        assert_eq!(back.id, d.id);
+        assert_eq!(back.name, d.name);
+        assert_eq!(back.driver, d.driver);
+        assert_eq!(back.tables.len(), 2);
+        // Where the boxes were put is the point of saving a drawing.
+        assert_eq!(back.layout.len(), 1);
+        assert_eq!(back.layout[0].x, 120.0);
+    }
+
+    #[test]
+    fn a_file_does_not_carry_the_path_it_was_written_to() {
+        // A path from somebody else's machine is worse than no path: it names a
+        // place that does not exist, and saving would write there.
+        let mut d = design("a", vec![]);
+        d.path = Some("C:/somebody/else/shop.erd".into());
+
+        let bytes = d.to_file().expect("write");
+        let text = String::from_utf8(bytes.clone()).expect("utf8");
+        assert!(!text.contains("somebody"), "{text}");
+
+        // Reading one sets it to where it actually was.
+        let back = Design::from_file(&bytes, "/here/shop.erd").expect("read");
+        assert_eq!(back.path.as_deref(), Some("/here/shop.erd"));
+    }
+
+    #[test]
+    fn opening_something_that_is_not_a_design_says_so() {
+        let err = Design::from_file(b"{\"hello\": 1}", "notes.erd").expect_err("should refuse");
+        assert!(
+            err.to_string().contains("not a Table X design file"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_file_from_a_newer_version_is_refused_rather_than_half_read() {
+        // Reading part of a design and calling it the design is how somebody
+        // loses the half this build did not understand.
+        let d = design("a", vec![]);
+        let file = DesignFile {
+            format: FILE_FORMAT.into(),
+            version: FILE_VERSION + 1,
+            design: d,
+        };
+        let bytes = serde_json::to_vec(&file).expect("write");
+        let err = Design::from_file(&bytes, "future.erd").expect_err("should refuse");
+        assert!(err.to_string().contains("newer version"), "{err}");
     }
 }
