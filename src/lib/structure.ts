@@ -61,6 +61,8 @@ export function describeChange(change: Change): string {
       return `add trigger ${change.trigger.name}`;
     case "trigger_removed":
       return `drop trigger ${change.trigger}`;
+    case "trigger_changed":
+      return `alter trigger ${change.trigger.name}`;
     default:
       // The remaining variants are refused by the backend before they can be
       // staged, so this is a label for something that should not arrive.
@@ -131,6 +133,14 @@ export function withPending(
       case "trigger_removed":
         state.set(`trigger:${change.trigger}`, "removed");
         break;
+      case "trigger_changed":
+        triggers = triggers.map((t) => (t.name === change.trigger.name ? change.trigger : t));
+        // An added trigger edited again stays "added", for the same reason a
+        // column does: it does not exist yet, so there is nothing to change.
+        if (state.get(`trigger:${change.trigger.name}`) !== "added") {
+          state.set(`trigger:${change.trigger.name}`, "changed");
+        }
+        break;
       default:
         break;
     }
@@ -140,6 +150,45 @@ export function withPending(
     detail: { ...detail, columns, indexes, foreign_keys: foreignKeys, triggers },
     state,
   };
+}
+
+/**
+ * Add a change to the staged list, taking out anything it makes meaningless.
+ *
+ * Appending would be enough for most of them, and is what this does. Triggers
+ * are the exception, because two staged changes to one trigger cannot both
+ * stand: the migration runs drops before redefinitions, so an edit left beside
+ * a drop would alter something the script has already removed. Editing one
+ * twice is the same problem with a duller shape — the second edit is the whole
+ * answer, and the first is a statement nobody asked to run.
+ *
+ * Editing a trigger that is itself only staged rewrites the staged create. The
+ * server has never seen it, so there is nothing there to alter, and a CREATE
+ * followed by an ALTER of the same trigger is two statements doing one thing.
+ */
+export function stageChange(pending: Change[], change: Change): Change[] {
+  if (change.kind === "trigger_changed") {
+    const added = pending.findIndex(
+      (c) => c.kind === "trigger_added" && c.trigger.name === change.trigger.name,
+    );
+    if (added >= 0) {
+      return pending.map((c, i) =>
+        i === added && c.kind === "trigger_added" ? { ...c, trigger: change.trigger } : c,
+      );
+    }
+  }
+
+  const name =
+    change.kind === "trigger_changed"
+      ? change.trigger.name
+      : change.kind === "trigger_removed"
+        ? change.trigger
+        : null;
+
+  const superseded = (c: Change) =>
+    name != null && c.kind === "trigger_changed" && c.trigger.name === name;
+
+  return [...pending.filter((c) => !superseded(c)), change];
 }
 
 /**

@@ -382,6 +382,8 @@ export type Change =
   | { kind: "foreign_key_removed"; table: string; key: string }
   | { kind: "trigger_added"; table: string; trigger: TriggerDef }
   | { kind: "trigger_removed"; table: string; trigger: string }
+  /** The trigger as it must end up. Its name identifies it and does not change. */
+  | { kind: "trigger_changed"; table: string; trigger: TriggerDef }
   | { kind: "primary_key_changed"; table: string; from: string[]; to: string[] };
 
 /** One statement of a generated migration. */

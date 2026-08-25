@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { blankColumn, columnDifferences, discard, withPending } from "./structure";
-import type { Change, ColumnDef, TableDetail } from "./types";
+import { blankColumn, columnDifferences, discard, stageChange, withPending } from "./structure";
+import type { Change, ColumnDef, TableDetail, TriggerDef } from "./types";
+
+function trigger(name: string, extra: Partial<TriggerDef> = {}): TriggerDef {
+  return {
+    name,
+    timing: "before",
+    events: ["update"],
+    for_each_row: true,
+    body: "SET NEW.updated_at = NOW();",
+    ...extra,
+  };
+}
 
 function column(name: string, type_name: string, extra: Partial<ColumnDef> = {}): ColumnDef {
   return { ...blankColumn(1), name, type_name, ...extra };
@@ -114,12 +125,98 @@ describe("withPending", () => {
     expect(state.get("trigger:orders_audit")).toBe("removed");
   });
 
+  it("shows an edited trigger as it will read, marked changed", () => {
+    const { detail, state } = withPending({ ...TABLE, triggers: [trigger("orders_touch")] }, [
+      {
+        kind: "trigger_changed",
+        table: "orders",
+        trigger: trigger("orders_touch", { body: "SET NEW.updated_at = NOW(); -- and audit" }),
+      },
+    ]);
+    expect(detail.triggers?.[0]?.body).toContain("and audit");
+    expect(state.get("trigger:orders_touch")).toBe("changed");
+  });
+
   it("leaves the original untouched", () => {
     // The staged view is derived every render; mutating the fetched detail would
     // make a discarded edit unrecoverable without refetching.
     const before = JSON.stringify(TABLE);
     withPending(TABLE, [{ kind: "column_removed", table: "orders", column: "total" }]);
     expect(JSON.stringify(TABLE)).toBe(before);
+  });
+});
+
+describe("stageChange", () => {
+  it("keeps only the last edit to a trigger", () => {
+    // Two ALTERs of one trigger is the second one and a statement nobody asked
+    // to run. The migration would apply both, in order, to the same object.
+    const once = stageChange([], {
+      kind: "trigger_changed",
+      table: "orders",
+      trigger: trigger("orders_touch", { body: "first" }),
+    });
+    const twice = stageChange(once, {
+      kind: "trigger_changed",
+      table: "orders",
+      trigger: trigger("orders_touch", { body: "second" }),
+    });
+    expect(twice).toHaveLength(1);
+    expect(twice[0]).toMatchObject({ trigger: { body: "second" } });
+  });
+
+  it("takes the edit out when the trigger is dropped instead", () => {
+    // This one is not tidiness. The migration runs drops before redefinitions,
+    // so an edit left beside a drop is an ALTER against something the script
+    // has already removed -- and it fails partway through a migration.
+    const edited = stageChange([], {
+      kind: "trigger_changed",
+      table: "orders",
+      trigger: trigger("orders_touch"),
+    });
+    const dropped = stageChange(edited, {
+      kind: "trigger_removed",
+      table: "orders",
+      trigger: "orders_touch",
+    });
+    expect(dropped).toEqual([
+      { kind: "trigger_removed", table: "orders", trigger: "orders_touch" },
+    ]);
+  });
+
+  it("edits a staged trigger in place rather than staging an alter", () => {
+    // The server has never seen it, so there is nothing to alter: a CREATE and
+    // then an ALTER of the same trigger is two statements doing one thing.
+    const added = stageChange([], {
+      kind: "trigger_added",
+      table: "orders",
+      trigger: trigger("orders_touch", { body: "first" }),
+    });
+    const edited = stageChange(added, {
+      kind: "trigger_changed",
+      table: "orders",
+      trigger: trigger("orders_touch", { body: "second" }),
+    });
+    expect(edited).toHaveLength(1);
+    expect(edited[0]).toMatchObject({ kind: "trigger_added", trigger: { body: "second" } });
+  });
+
+  it("leaves a different trigger alone", () => {
+    const other: Change = {
+      kind: "trigger_changed",
+      table: "orders",
+      trigger: trigger("orders_audit"),
+    };
+    const out = stageChange([other], {
+      kind: "trigger_removed",
+      table: "orders",
+      trigger: "orders_touch",
+    });
+    expect(out).toHaveLength(2);
+  });
+
+  it("appends anything that is not a trigger", () => {
+    const drop: Change = { kind: "column_removed", table: "orders", column: "total" };
+    expect(stageChange([], drop)).toEqual([drop]);
   });
 });
 

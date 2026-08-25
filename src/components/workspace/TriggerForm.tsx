@@ -101,6 +101,17 @@ export function TriggerForm({
   const note = noteFor(driver);
   const invalid = !draft.name.trim() || draft.events.length === 0 || !draft.body.trim();
 
+  // Saving an edit that changes nothing is not free: on MySQL and SQLite there
+  // is no statement that redefines a trigger, so the migration drops it and
+  // writes it again — a real risk taken for no difference.
+  const unchanged =
+    existing != null &&
+    existing.timing === timing &&
+    existing.for_each_row === (perRow && draft.for_each_row) &&
+    existing.body === draft.body &&
+    existing.events.length === draft.events.length &&
+    existing.events.every((e) => draft.events.includes(e));
+
   const toggleEvent = (event: TriggerEvent) =>
     patch({
       events: draft.events.includes(event)
@@ -111,11 +122,19 @@ export function TriggerForm({
   return (
     <div className="rounded border border-accent/40 bg-surface-1 p-2">
       <div className="grid grid-cols-[1fr_auto] gap-2">
+        {/* Fixed while editing. A trigger is found by name on every engine
+            that can redefine one, so a new name is not an edit at all -- it is
+            a second trigger beside the first, which the drop button and this
+            form already do in the order that works. */}
         <Field label="Name">
           <Input
-            autoFocus
+            autoFocus={!existing}
             value={draft.name}
             spellCheck={false}
+            disabled={Boolean(existing)}
+            title={
+              existing ? "A trigger is renamed by dropping it and writing another." : undefined
+            }
             onChange={(e) => patch({ name: e.target.value })}
           />
         </Field>
@@ -158,6 +177,9 @@ export function TriggerForm({
         </label>
         <textarea
           id="trigger-body"
+          // Where the cursor belongs when editing: the name is fixed, and the
+          // body is what somebody opened this to change.
+          autoFocus={Boolean(existing)}
           value={draft.body}
           spellCheck={false}
           rows={6}
@@ -179,7 +201,7 @@ export function TriggerForm({
         <Button
           variant="primary"
           className="h-6"
-          disabled={invalid}
+          disabled={invalid || unchanged}
           onClick={() =>
             onSave({
               ...draft,

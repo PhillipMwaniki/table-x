@@ -96,6 +96,16 @@ pub enum Change {
         table: String,
         trigger: String,
     },
+    /// A trigger that must end up as `trigger` describes it.
+    ///
+    /// The name is inside the definition and is not part of what changes: a
+    /// trigger is found by name on every engine that can redefine one, so a
+    /// rename is a drop and a create rather than an edit, and the two buttons
+    /// beside it already do that. `ColumnChanged` takes the same line.
+    TriggerChanged {
+        table: String,
+        trigger: TriggerDef,
+    },
 }
 
 impl Change {
@@ -126,7 +136,8 @@ impl Change {
             | Change::ForeignKeyRemoved { table, .. }
             | Change::PrimaryKeyChanged { table, .. }
             | Change::TriggerAdded { table, .. }
-            | Change::TriggerRemoved { table, .. } => table,
+            | Change::TriggerRemoved { table, .. }
+            | Change::TriggerChanged { table, .. } => table,
         }
     }
 }
@@ -382,6 +393,15 @@ pub struct Dialect {
     pub generated: GeneratedKeyStyle,
     /// How this engine writes a trigger.
     pub trigger: TriggerStyle,
+    /// Whether `CREATE OR REPLACE TRIGGER` exists here.
+    ///
+    /// Only ever asked of [`TriggerStyle::Inline`], where the three engines
+    /// that share the shape do not share this: Oracle redefines a trigger in
+    /// one statement, MySQL and SQLite have no statement for it at all. The
+    /// other two styles carry their own answer -- T-SQL has `ALTER TRIGGER`,
+    /// and a PostgreSQL body lives in a function that can be replaced -- so
+    /// this says nothing about them.
+    pub trigger_replace: bool,
 }
 
 /// How a trigger is written, which is where the engines part company entirely.
@@ -459,6 +479,10 @@ impl Dialect {
                 constraints: true,
                 generated: GeneratedKeyStyle::AutoIncrement,
                 trigger: TriggerStyle::Inline,
+                // MariaDB has `CREATE OR REPLACE TRIGGER` and MySQL does not.
+                // They share this arm, so the answer is the one that is true
+                // of both: changing a trigger here is a drop and a create.
+                trigger_replace: false,
             },
             "mssql" => Dialect {
                 quote: '[',
@@ -466,6 +490,7 @@ impl Dialect {
                 constraints: true,
                 generated: GeneratedKeyStyle::Identity,
                 trigger: TriggerStyle::TSql,
+                trigger_replace: false,
             },
             // Spelled like MySQL, but with no constraints of any kind — and its
             // indexes are data-skipping indexes, which are a different concept
@@ -479,6 +504,7 @@ impl Dialect {
                 // here.
                 generated: GeneratedKeyStyle::None,
                 trigger: TriggerStyle::None,
+                trigger_replace: false,
             },
             // Named rather than left to the default, because what SQLite cannot
             // do is the whole point. It was previously treated as PostgreSQL,
@@ -497,6 +523,8 @@ impl Dialect {
                 constraints: true,
                 generated: GeneratedKeyStyle::OracleIdentity,
                 trigger: TriggerStyle::Inline,
+                // `CREATE OR REPLACE TRIGGER`, which is the whole edit.
+                trigger_replace: true,
             },
             "sqlite" => Dialect {
                 quote: '"',
@@ -504,6 +532,7 @@ impl Dialect {
                 constraints: false,
                 generated: GeneratedKeyStyle::SqliteRowid,
                 trigger: TriggerStyle::Inline,
+                trigger_replace: false,
             },
             _ => Dialect {
                 quote: '"',
@@ -511,6 +540,7 @@ impl Dialect {
                 constraints: true,
                 generated: GeneratedKeyStyle::Serial,
                 trigger: TriggerStyle::Function,
+                trigger_replace: false,
             },
         }
     }
@@ -576,6 +606,12 @@ fn phase(change: &Change) -> u8 {
         // trigger cannot be created against a table that is not there and does
         // not need dropping separately from one that is going away.
         Change::TriggerAdded { .. } => 8,
+        // With the additions, not with the removals: a new body can refer to a
+        // column added earlier in the same script, so it has to run after the
+        // columns are there. Nothing stages a change and a drop for the same
+        // trigger -- the editor takes one out when the other goes in -- which
+        // is what keeps this from landing after the drop it contradicts.
+        Change::TriggerChanged { .. } => 8,
         Change::TriggerRemoved { .. } => 1,
         Change::TableRemoved { .. } => 9,
     }
@@ -611,8 +647,12 @@ pub fn refusal(change: &Change, support: DdlSupport) -> Option<String> {
         {
             no("add or drop a foreign key")
         }
-        Change::TriggerAdded { .. } | Change::TriggerRemoved { .. } if !support.triggers => {
-            no("add or drop a trigger")
+        Change::TriggerAdded { .. }
+        | Change::TriggerRemoved { .. }
+        | Change::TriggerChanged { .. }
+            if !support.triggers =>
+        {
+            no("add, change or drop a trigger")
         }
         Change::PrimaryKeyChanged { .. } => {
             Some("Changing a primary key rewrites the table, so it is not offered here.".into())
@@ -633,8 +673,22 @@ pub fn migration(changes: &[Change], dialect: Dialect) -> Vec<Statement> {
 
     ordered
         .into_iter()
-        .filter_map(|change| statement_for(change, dialect))
+        .flat_map(|change| statements_for(change, dialect))
         .collect()
+}
+
+/// The statements one change becomes.
+///
+/// Almost always one, and [`statement_for`] is where that one is written.
+/// Changing a trigger is the exception: where the engine has no statement that
+/// redefines one, it is a drop and a create — and they have to be two
+/// statements rather than two lines of one, because MySQL will not accept both
+/// in a single call and the apply path runs each of these on its own.
+fn statements_for(change: &Change, dialect: Dialect) -> Vec<Statement> {
+    match change {
+        Change::TriggerChanged { table, trigger } => trigger_replacement(table, trigger, dialect),
+        other => statement_for(other, dialect).into_iter().collect(),
+    }
 }
 
 fn statement_for(change: &Change, dialect: Dialect) -> Option<Statement> {
@@ -674,18 +728,15 @@ fn statement_for(change: &Change, dialect: Dialect) -> Option<Statement> {
         Change::TriggerAdded { table, trigger } => Some(trigger_statement(table, trigger, dialect)),
 
         Change::TriggerRemoved { table, trigger } => Some(Statement {
-            // MySQL and SQLite name the trigger alone; PostgreSQL, SQL Server
-            // and Oracle differ again, and only PostgreSQL needs the table.
-            sql: match dialect.trigger {
-                TriggerStyle::Function => {
-                    format!("DROP TRIGGER {} ON {};", q(trigger), q(table))
-                }
-                _ => format!("DROP TRIGGER {};", q(trigger)),
-            },
+            sql: drop_trigger_sql(table, trigger, dialect),
             destructive: true,
             note: Some(format!("{trigger} stops firing on {table}.")),
             unsupported: false,
         }),
+
+        // Not one statement on every engine, so it is written by
+        // `trigger_replacement` and reached through `statements_for`.
+        Change::TriggerChanged { .. } => None,
 
         Change::TableRemoved { table } => Some(Statement {
             sql: format!("DROP TABLE {};", q(table)),
@@ -937,7 +988,27 @@ fn statement_for(change: &Change, dialect: Dialect) -> Option<Statement> {
 /// The four shapes are genuinely different statements rather than one with
 /// options, which is why this is a match and not a format string with holes.
 fn trigger_statement(table: &str, trigger: &TriggerDef, dialect: Dialect) -> Statement {
+    trigger_definition(table, trigger, dialect, Writing::Fresh)
+}
+
+/// Whether a trigger is being made, or one that is already there redefined.
+///
+/// The difference is a keyword on the engines that have one, and the whole
+/// reason the caller has work to do on the engines that do not.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Writing {
+    Fresh,
+    Again,
+}
+
+fn trigger_definition(
+    table: &str,
+    trigger: &TriggerDef,
+    dialect: Dialect,
+    writing: Writing,
+) -> Statement {
     let q = |name: &str| quote_ident(name, dialect.quote);
+    let again = writing == Writing::Again;
     let events = trigger
         .events
         .iter()
@@ -971,8 +1042,15 @@ fn trigger_statement(table: &str, trigger: &TriggerDef, dialect: Dialect) -> Sta
             } else {
                 ""
             };
+            // Oracle redefines one in a single statement. MySQL and SQLite have
+            // nothing of the kind, and the caller drops it first instead.
+            let verb = if again && dialect.trigger_replace {
+                "CREATE OR REPLACE TRIGGER"
+            } else {
+                "CREATE TRIGGER"
+            };
             Statement::runnable(format!(
-                "CREATE TRIGGER {name}\n{timing} {events} ON {on}\n{each}{when}BEGIN\n{body}\nEND;"
+                "{verb} {name}\n{timing} {events} ON {on}\n{each}{when}BEGIN\n{body}\nEND;"
             ))
         }
 
@@ -980,9 +1058,18 @@ fn trigger_statement(table: &str, trigger: &TriggerDef, dialect: Dialect) -> Sta
         // affected rows in the `inserted` and `deleted` tables. Saying "for
         // each row" here would be describing a trigger the server will not
         // create.
-        TriggerStyle::TSql => Statement::runnable(format!(
-            "CREATE TRIGGER {name}\nON {on}\n{timing} {events}\nAS\nBEGIN\n{body}\nEND;"
-        )),
+        TriggerStyle::TSql => {
+            // `ALTER TRIGGER` takes the definition it replaces word for word,
+            // so redefining one is the create with its first word changed.
+            let verb = if again {
+                "ALTER TRIGGER"
+            } else {
+                "CREATE TRIGGER"
+            };
+            Statement::runnable(format!(
+                "{verb} {name}\nON {on}\n{timing} {events}\nAS\nBEGIN\n{body}\nEND;"
+            ))
+        }
 
         // Two objects, because a PostgreSQL trigger has nowhere to put a body.
         TriggerStyle::Function => {
@@ -992,9 +1079,17 @@ fn trigger_statement(table: &str, trigger: &TriggerDef, dialect: Dialect) -> Sta
             } else {
                 "FOR EACH STATEMENT"
             };
+            // Replacing the function is what carries a new body, and it is the
+            // whole edit unless the timing or the events moved -- which live on
+            // the trigger, so the caller drops and recreates that part.
+            let define = if again {
+                "CREATE OR REPLACE FUNCTION"
+            } else {
+                "CREATE FUNCTION"
+            };
             Statement {
                 sql: format!(
-                    "CREATE FUNCTION {function}() RETURNS trigger AS $$\n\
+                    "{define} {function}() RETURNS trigger AS $$\n\
                      BEGIN\n{body}\nEND;\n\
                      $$ LANGUAGE plpgsql;\n\n\
                      CREATE TRIGGER {name}\n{timing} {events} ON {on}\n\
@@ -1002,14 +1097,80 @@ fn trigger_statement(table: &str, trigger: &TriggerDef, dialect: Dialect) -> Sta
                 ),
                 destructive: false,
                 note: Some(format!(
-                    "PostgreSQL keeps a trigger's body in a function, so this creates two objects: \
+                    "PostgreSQL keeps a trigger's body in a function, so this {} two objects: \
                      the function {}_fn and the trigger {} that calls it.",
-                    trigger.name, trigger.name
+                    if again { "rewrites" } else { "creates" },
+                    trigger.name,
+                    trigger.name
                 )),
                 unsupported: false,
             }
         }
     }
+}
+
+/// `DROP TRIGGER`, which the engines do not spell the same way.
+///
+/// MySQL, SQLite, Oracle and SQL Server name the trigger alone; PostgreSQL
+/// needs the table as well, and naming it where it is not wanted is a syntax
+/// error rather than a harmless extra.
+fn drop_trigger_sql(table: &str, trigger: &str, dialect: Dialect) -> String {
+    let q = |name: &str| quote_ident(name, dialect.quote);
+    match dialect.trigger {
+        TriggerStyle::Function => format!("DROP TRIGGER {} ON {};", q(trigger), q(table)),
+        _ => format!("DROP TRIGGER {};", q(trigger)),
+    }
+}
+
+/// The statements that make an existing trigger read the way `trigger` says.
+///
+/// Three answers, and which one an engine gives is the difference between an
+/// edit and a gamble. Oracle and SQL Server redefine one in place, so the old
+/// body is only gone once the new one is accepted. PostgreSQL keeps the body in
+/// a function: rewriting the function is the edit, and the trigger beside it is
+/// dropped and made again only because the timing and the events live there —
+/// nothing is lost either way, because the body is in the statement above it.
+///
+/// MySQL and SQLite have no statement for this at all. Editing a trigger there
+/// is dropping it and creating it again, and between the two the old body is
+/// gone with nothing but this script holding the new one. That is worth saying
+/// on the statement rather than leaving for somebody to find out.
+fn trigger_replacement(table: &str, trigger: &TriggerDef, dialect: Dialect) -> Vec<Statement> {
+    let redefined = trigger_definition(table, trigger, dialect, Writing::Again);
+
+    let in_place = match dialect.trigger {
+        TriggerStyle::TSql => true,
+        TriggerStyle::Inline => dialect.trigger_replace,
+        // The function carries the body; the trigger still has to be remade.
+        TriggerStyle::Function => false,
+        // Already an unsupported statement saying the engine has no triggers.
+        TriggerStyle::None => true,
+    };
+    if in_place {
+        return vec![redefined];
+    }
+
+    let loses_the_body = dialect.trigger != TriggerStyle::Function;
+    let drop = Statement {
+        sql: drop_trigger_sql(table, &trigger.name, dialect),
+        destructive: loses_the_body,
+        note: Some(if loses_the_body {
+            format!(
+                "This engine has no statement that changes a trigger, so {} is dropped and \
+                 written again. Its current body is not recoverable once this runs.",
+                trigger.name
+            )
+        } else {
+            format!(
+                "{} is remade rather than altered, because its timing and events are part of \
+                 the trigger rather than of the function holding its body.",
+                trigger.name
+            )
+        }),
+        unsupported: false,
+    };
+
+    vec![drop, redefined]
 }
 
 fn column_definition(column: &ColumnDef, dialect: Dialect) -> String {
@@ -1201,6 +1362,104 @@ mod tests {
         assert!(my[0].destructive, "{:?}", my[0]);
     }
 
+    fn changed_trigger(driver: &str) -> Vec<Statement> {
+        let mut wanted = touch_trigger();
+        wanted.body = "  SET NEW.updated_at = NOW(); -- and the audit row".into();
+        migration(
+            &[Change::TriggerChanged {
+                table: "users".into(),
+                trigger: wanted,
+            }],
+            Dialect::for_driver(driver),
+        )
+    }
+
+    #[test]
+    fn an_engine_that_can_redefine_a_trigger_does_not_drop_it_first() {
+        // The reason this change exists rather than being two the editor stages
+        // itself: on these engines the old body survives until the new one is
+        // accepted, and staging a drop would throw that away for nothing.
+        let oracle = changed_trigger("oracle");
+        assert_eq!(oracle.len(), 1, "{oracle:?}");
+        assert!(
+            oracle[0].sql.starts_with("CREATE OR REPLACE TRIGGER"),
+            "{}",
+            oracle[0].sql
+        );
+        assert!(!oracle[0].destructive);
+
+        let mssql = changed_trigger("mssql");
+        assert_eq!(mssql.len(), 1, "{mssql:?}");
+        assert!(
+            mssql[0].sql.starts_with("ALTER TRIGGER"),
+            "{}",
+            mssql[0].sql
+        );
+        assert!(!mssql[0].destructive);
+    }
+
+    #[test]
+    fn an_engine_that_cannot_says_what_the_drop_costs() {
+        // MySQL and SQLite have no statement for this. The drop is real and so
+        // is the window it opens, so both are on the statement rather than left
+        // for somebody to discover from a failed create.
+        for driver in ["mysql", "sqlite"] {
+            let out = changed_trigger(driver);
+            assert_eq!(out.len(), 2, "{driver}: {out:?}");
+            assert!(out[0].sql.starts_with("DROP TRIGGER"), "{driver}: {out:?}");
+            assert!(out[0].destructive, "{driver}: {out:?}");
+            assert!(
+                out[0].note.as_deref().unwrap().contains("not recoverable"),
+                "{driver}: {:?}",
+                out[0].note
+            );
+            assert!(
+                out[1].sql.starts_with("CREATE TRIGGER"),
+                "{driver}: {out:?}"
+            );
+            assert!(out[1].sql.contains("audit row"), "{driver}: {out:?}");
+        }
+    }
+
+    #[test]
+    fn postgres_rewrites_the_function_and_loses_nothing() {
+        // The body lives in the function, so the trigger being remade costs
+        // nothing -- the new body is in the statement beside it. Marking this
+        // destructive would be borrowing a warning from a different engine.
+        let out = changed_trigger("postgres");
+        assert_eq!(out.len(), 2, "{out:?}");
+        assert!(out[0].sql.starts_with("DROP TRIGGER"), "{}", out[0].sql);
+        assert!(!out[0].destructive, "{:?}", out[0]);
+        assert!(
+            out[1].sql.starts_with("CREATE OR REPLACE FUNCTION"),
+            "{}",
+            out[1].sql
+        );
+        // The replace must not be a second CREATE FUNCTION: the function is
+        // already there, and creating it again is an error rather than an edit.
+        assert!(!out[1].sql.contains("CREATE FUNCTION"), "{}", out[1].sql);
+        assert!(out[1].sql.contains("CREATE TRIGGER"), "{}", out[1].sql);
+    }
+
+    #[test]
+    fn changing_a_trigger_runs_after_the_columns_it_may_refer_to() {
+        // A new body can name a column added in the same script, so the change
+        // has to land after the additions rather than with the drops.
+        let changes = vec![
+            Change::TriggerChanged {
+                table: "users".into(),
+                trigger: touch_trigger(),
+            },
+            Change::ColumnAdded {
+                table: "users".into(),
+                column: column("updated_at", "timestamp"),
+            },
+        ];
+        let out = migration(&changes, Dialect::for_driver("oracle"));
+        assert!(out[0].sql.contains("ADD"), "{:?}", out[0]);
+        assert!(out[1].sql.contains("TRIGGER"), "{:?}", out[1]);
+    }
+
     #[test]
     fn oracle_is_no_longer_written_as_postgresql() {
         // The bug this pins: Oracle had no arm in `for_driver`, so it fell to
@@ -1298,6 +1557,7 @@ mod tests {
         constraints: true,
         generated: GeneratedKeyStyle::Serial,
         trigger: TriggerStyle::Function,
+        trigger_replace: false,
     };
 
     #[test]
@@ -1605,6 +1865,7 @@ mod tests {
         constraints: false,
         generated: GeneratedKeyStyle::SqliteRowid,
         trigger: TriggerStyle::Inline,
+        trigger_replace: false,
     };
 
     /// Everything on, for testing the refusals rather than the capabilities.

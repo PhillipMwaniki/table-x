@@ -26,7 +26,13 @@ import { ColumnForm, ForeignKeyForm, IndexForm } from "./StructureForms";
 import { TriggerForm } from "./TriggerForm";
 import { ReviewChangesDialog } from "./ReviewChangesDialog";
 import { ipc, IpcError } from "@/lib/ipc";
-import { columnDifferences, describeChange, discard, withPending } from "@/lib/structure";
+import {
+  columnDifferences,
+  describeChange,
+  discard,
+  stageChange,
+  withPending,
+} from "@/lib/structure";
 import type { RowState } from "@/lib/structure";
 import { useConnections } from "@/store/connections";
 import type { Change, DdlSupport, TableDetail } from "@/lib/types";
@@ -61,6 +67,7 @@ export function StructureView({
   const [pending, setPending] = useState<Change[]>([]);
   const [adding, setAdding] = useState<null | "column" | "index" | "foreign_key" | "trigger">(null);
   const [editingColumn, setEditingColumn] = useState<string | null>(null);
+  const [editingTrigger, setEditingTrigger] = useState<string | null>(null);
   const [reviewing, setReviewing] = useState(false);
   const [applied, setApplied] = useState<string | null>(null);
 
@@ -108,9 +115,10 @@ export function StructureView({
   // editor with nothing staged.
 
   const stage = (change: Change) => {
-    setPending((was) => [...was, change]);
+    setPending((was) => stageChange(was, change));
     setAdding(null);
     setEditingColumn(null);
+    setEditingTrigger(null);
     setApplied(null);
   };
 
@@ -480,7 +488,7 @@ export function StructureView({
           title="Triggers"
           empty="No triggers."
           action={
-            editable && ddl.triggers && !adding ? (
+            editable && ddl.triggers && !adding && !editingTrigger ? (
               <SectionButton onClick={() => setAdding("trigger")}>Add trigger</SectionButton>
             ) : undefined
           }
@@ -505,6 +513,18 @@ export function StructureView({
                         {trigger.timing.replace("_", " ")} {trigger.events.join(", ")}
                         {trigger.for_each_row ? " for each row" : ""}
                       </span>
+                      {editable &&
+                        ddl.triggers &&
+                        mark !== "removed" &&
+                        !adding &&
+                        editingTrigger !== trigger.name && (
+                          <RowButton
+                            title={`Edit ${trigger.name}`}
+                            onClick={() => setEditingTrigger(trigger.name)}
+                          >
+                            edit
+                          </RowButton>
+                        )}
                       {editable && ddl.triggers && mark !== "removed" && (
                         <RowButton
                           tone="error"
@@ -521,17 +541,36 @@ export function StructureView({
                         </RowButton>
                       )}
                     </div>
-                    {/* The body, as it was written. Read-only: changing one
-                        means dropping and recreating it on every engine here,
-                        and an editor that looked like it edited in place would
-                        be describing something the server cannot do. */}
-                    {trigger.body && (
-                      <pre
-                        data-selectable
-                        className="mt-0.5 max-h-24 overflow-auto rounded bg-surface-0 p-1 font-mono text-[10.5px] whitespace-pre-wrap text-text-muted"
-                      >
-                        {trigger.body}
-                      </pre>
+
+                    {editingTrigger === trigger.name ? (
+                      <div className="mt-1">
+                        <TriggerForm
+                          table={staged.name}
+                          driver={connection?.driver ?? ""}
+                          existing={trigger}
+                          onCancel={() => setEditingTrigger(null)}
+                          onSave={(edited) => {
+                            stage({
+                              kind: "trigger_changed",
+                              table: staged.name,
+                              trigger: edited,
+                            });
+                            setEditingTrigger(null);
+                          }}
+                        />
+                      </div>
+                    ) : (
+                      // The body as it stands. What replacing it costs differs
+                      // by engine and is said on the statement, which is where
+                      // it can be read before it runs rather than after.
+                      trigger.body && (
+                        <pre
+                          data-selectable
+                          className="mt-0.5 max-h-24 overflow-auto rounded bg-surface-0 p-1 font-mono text-[10.5px] whitespace-pre-wrap text-text-muted"
+                        >
+                          {trigger.body}
+                        </pre>
+                      )
                     )}
                   </li>
                 );

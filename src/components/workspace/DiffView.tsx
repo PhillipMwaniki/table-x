@@ -204,6 +204,8 @@ function describe(change: Change): string {
       return `trigger ${change.trigger.name} ${change.trigger.timing.replace("_", " ")} ${change.trigger.events.join(", ")}`;
     case "trigger_removed":
       return `trigger ${change.trigger}`;
+    case "trigger_changed":
+      return `trigger ${change.trigger.name} redefined`;
     case "primary_key_changed":
       return `primary key ${change.from.join(", ") || "none"} → ${change.to.join(", ") || "none"}`;
   }
