@@ -1,8 +1,8 @@
 //! Process-wide application state.
 
 use crate::{
-    history::QueryHistory, notebooks::NotebookStore, sessions::SessionRegistry,
-    snippets::SnippetStore, store::ConnectionStore,
+    designs::DesignStore, history::QueryHistory, notebooks::NotebookStore,
+    sessions::SessionRegistry, snippets::SnippetStore, store::ConnectionStore,
 };
 use std::collections::HashMap;
 use std::path::Path;
@@ -28,6 +28,8 @@ pub struct AppState {
     /// Queries the user chose to keep, which is a different thing from a log.
     pub snippets: Mutex<SnippetStore>,
     pub notebooks: Mutex<NotebookStore>,
+    /// Schema designs, which are documents rather than pictures of a database.
+    pub designs: Mutex<DesignStore>,
     /// Cancellation flags for exports currently running, by export id.
     ///
     /// A flag rather than an abort: the export is inside a database round trip
@@ -55,6 +57,7 @@ impl AppState {
             history: Mutex::new(QueryHistory::load(config_dir)),
             snippets: Mutex::new(SnippetStore::load(config_dir)),
             notebooks: Mutex::new(NotebookStore::load(config_dir)),
+            designs: Mutex::new(DesignStore::load(config_dir)),
             exports: Mutex::new(HashMap::new()),
         }
     }

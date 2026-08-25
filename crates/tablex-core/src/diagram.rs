@@ -29,6 +29,26 @@ pub struct SchemaGraph {
     pub tables: Vec<GraphTable>,
 }
 
+/// The graph a set of table structures describes.
+///
+/// A live schema arrives as a graph already, straight from the driver. A design
+/// held as a document has the fuller structures instead — columns, indexes, the
+/// lot — and this narrows them to the part the layout cares about, so a design
+/// and a database are laid out by exactly the same code rather than by two
+/// implementations that drift.
+pub fn graph_of(tables: &[crate::schema::TableDetail]) -> SchemaGraph {
+    SchemaGraph {
+        tables: tables
+            .iter()
+            .map(|table| GraphTable {
+                schema: table.schema.clone(),
+                name: table.name.clone(),
+                foreign_keys: table.foreign_keys.clone(),
+            })
+            .collect(),
+    }
+}
+
 /// A column shown inside a box.
 ///
 /// Only key columns are drawn. A diagram of two hundred tables with every

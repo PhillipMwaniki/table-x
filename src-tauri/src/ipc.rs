@@ -16,6 +16,7 @@ use tablex_core::{
 };
 
 use crate::{
+    designs::Design,
     history::{self, HistoryEntry, HistoryQuery},
     notebooks::Notebook,
     secrets,
@@ -1347,6 +1348,187 @@ pub async fn compare_schemas(
 
     state.exports.lock().await.remove(&request.id);
     Ok(result?)
+}
+
+// ---------------------------------------------------------------------------
+// Schema designs
+// ---------------------------------------------------------------------------
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn list_designs(state: tauri::State<'_, AppState>) -> IpcResult<Vec<Design>> {
+    Ok(state.designs.lock().await.list())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn save_design(state: tauri::State<'_, AppState>, design: Design) -> IpcResult<Design> {
+    Ok(state.designs.lock().await.save(design)?)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn delete_design(state: tauri::State<'_, AppState>, id: String) -> IpcResult<()> {
+    state.designs.lock().await.delete(&id)?;
+    Ok(())
+}
+
+/// The design laid out for the canvas.
+///
+/// Laid out in Rust for the same reason a live schema is — it has to come out
+/// the same every time — and by the same code, so a design and the database it
+/// came from are not drawn by two implementations that disagree.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn design_diagram(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> IpcResult<tablex_core::diagram::Diagram> {
+    let design = state
+        .designs
+        .lock()
+        .await
+        .get(&id)
+        .ok_or_else(|| tablex_core::Error::Config(format!("no such design: {id}")))?;
+    Ok(design.diagram())
+}
+
+/// Read a live schema into a new design.
+///
+/// Reverse engineering, and the usual way a design starts: most schemas being
+/// changed already exist. The design keeps the driver it was read from, because
+/// the script it will eventually produce has to be written for one engine and
+/// this is the only moment where the right answer is known for certain.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn design_from_schema(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    connection_id: String,
+    schema: Option<String>,
+    name: String,
+) -> IpcResult<Design> {
+    let config = state.config_for(&connection_id).await?;
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let id = uuid::Uuid::new_v4().to_string();
+
+    let progress = |progress| {
+        let _ = tauri::Emitter::emit(&app, crate::export::PROGRESS_EVENT, progress);
+    };
+
+    let snapshot = crate::snapshot::capture(
+        &state,
+        &id,
+        &connection_id,
+        schema.as_deref(),
+        name.clone(),
+        &cancel,
+        &progress,
+    )
+    .await?;
+
+    let design = Design {
+        id,
+        name,
+        driver: config.driver,
+        schema,
+        tables: snapshot.tables,
+        // Empty: nothing has been moved yet, so every table is wherever the
+        // layout puts it, which is what a freshly read schema should look like.
+        layout: Vec::new(),
+        created_at: String::new(),
+        updated_at: String::new(),
+    };
+    Ok(state.designs.lock().await.save(design)?)
+}
+
+/// The script that would build this design from nothing.
+///
+/// Forward engineering, expressed as the difference between an empty schema and
+/// the design — which is what it is, and which means it goes through the same
+/// migration writer as everything else rather than a second one that would
+/// eventually disagree about how to quote a default.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn design_script(state: tauri::State<'_, AppState>, id: String) -> IpcResult<DiffReport> {
+    let design = state
+        .designs
+        .lock()
+        .await
+        .get(&id)
+        .ok_or_else(|| tablex_core::Error::Config(format!("no such design: {id}")))?;
+
+    let to = design.snapshot();
+    let changes = tablex_core::diff::diff(&tablex_core::diff::SchemaSnapshot::default(), &to);
+    let statements = tablex_core::diff::migration(
+        &changes,
+        tablex_core::diff::Dialect::for_driver(&design.driver),
+    );
+    Ok(DiffReport {
+        from: "nothing".into(),
+        to: to.label,
+        changes,
+        statements,
+    })
+}
+
+/// What it would take to make a database match this design.
+///
+/// The direction is the one that makes a design useful: the database is what
+/// the script runs against, the design is what it is being brought to. Read
+/// the other way round it would be a script that undoes the design, which is
+/// never what somebody asks for from this screen.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn design_sync(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    id: String,
+    connection_id: String,
+    schema: Option<String>,
+) -> IpcResult<DiffReport> {
+    let design = state
+        .designs
+        .lock()
+        .await
+        .get(&id)
+        .ok_or_else(|| tablex_core::Error::Config(format!("no such design: {id}")))?;
+
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let job = uuid::Uuid::new_v4().to_string();
+    state
+        .exports
+        .lock()
+        .await
+        .insert(job.clone(), cancel.clone());
+
+    let progress = |progress| {
+        let _ = tauri::Emitter::emit(&app, crate::export::PROGRESS_EVENT, progress);
+    };
+
+    let config = state.config_for(&connection_id).await?;
+    let live = crate::snapshot::capture(
+        &state,
+        &job,
+        &connection_id,
+        schema.as_deref(),
+        config.name.clone(),
+        &cancel,
+        &progress,
+    )
+    .await;
+    state.exports.lock().await.remove(&job);
+    let live = live?;
+
+    let to = design.snapshot();
+    let changes = tablex_core::diff::diff(&live, &to);
+    // The connection's engine, not the design's: the statements are going to be
+    // run against this database, and a design written for one engine can still
+    // be compared against another. Where that produces something the engine
+    // cannot do, the migration writer says so rather than emitting it.
+    let statements = tablex_core::diff::migration(
+        &changes,
+        tablex_core::diff::Dialect::for_driver(&config.driver),
+    );
+    Ok(DiffReport {
+        from: live.label,
+        to: to.label,
+        changes,
+        statements,
+    })
 }
 
 /// The schema as a diagram, already laid out.
