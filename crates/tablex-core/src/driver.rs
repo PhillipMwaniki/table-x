@@ -100,6 +100,12 @@ pub struct DdlSupport {
     pub indexes: bool,
     /// `ADD CONSTRAINT … FOREIGN KEY` and dropping one again.
     pub foreign_keys: bool,
+    /// Whether triggers can be created and dropped from here.
+    ///
+    /// False for ClickHouse, which has no triggers at all -- not a limitation
+    /// of this driver but of the engine, and a form offering one would produce
+    /// a statement it has never heard of.
+    pub triggers: bool,
     /// Whether a database can be created from here.
     ///
     /// Separate from `databases`, which says only that the engine *has* them:

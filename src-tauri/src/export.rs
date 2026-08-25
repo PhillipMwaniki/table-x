@@ -553,6 +553,7 @@ mod tests {
                 columns: vec![],
                 indexes: vec![],
                 foreign_keys: vec![],
+                triggers: vec![],
                 primary_key: vec![],
                 estimated_rows: Some(self.rows as i64),
                 comment: None,

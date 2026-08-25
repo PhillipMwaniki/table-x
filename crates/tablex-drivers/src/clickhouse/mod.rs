@@ -149,6 +149,9 @@ impl Driver for ClickhouseDriver {
                 // step before anything else can be created.
                 ddl: DdlSupport {
                     create_database: true,
+                    // No triggers in the engine at all, which is not this
+                    // driver being incomplete.
+                    triggers: false,
                     ..DdlSupport::default()
                 },
                 // ClickHouse transactions are experimental and limited to a
@@ -611,6 +614,7 @@ impl Connection for ClickhouseConnection {
             columns,
             indexes,
             foreign_keys: Vec::new(),
+            triggers: Vec::new(),
             primary_key: Vec::new(),
             estimated_rows: total.first().and_then(|s| s.parse().ok()),
             comment: None,

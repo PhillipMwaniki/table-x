@@ -162,6 +162,7 @@ impl Driver for OracleDriver {
                     // connection reached, and a schema is a user --
                     // `CREATE USER` needs a password and quotas, which
                     // is not a name in a box.
+                    triggers: true,
                     create_database: false,
                     create_schema: false,
                     transactional_ddl: false,
@@ -602,6 +603,7 @@ impl Connection for OracleConnection {
             columns,
             indexes,
             foreign_keys,
+            triggers: Vec::new(),
             primary_key,
             estimated_rows: estimated,
             comment: None,

@@ -201,6 +201,7 @@ impl Driver for MysqlDriver {
                     // fails halfway stays half applied.
                     // `CREATE DATABASE`. A schema here *is* a database,
                     // so there is no second level to create.
+                    triggers: true,
                     create_database: true,
                     create_schema: false,
                     transactional_ddl: false,
@@ -635,6 +636,7 @@ impl Connection for MysqlConnection {
             columns,
             indexes,
             foreign_keys: self.foreign_keys(&db, table).await?,
+            triggers: Vec::new(),
             primary_key,
             // TABLE_ROWS is a storage-engine estimate on InnoDB, not a count.
             estimated_rows: estimated.flatten(),

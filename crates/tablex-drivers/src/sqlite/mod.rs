@@ -86,6 +86,7 @@ impl Driver for SqliteDriver {
                     foreign_keys: false,
                     // A database here is a file, and making one is the file
                     // dialog's job rather than a statement's.
+                    triggers: true,
                     create_database: false,
                     create_schema: false,
                     transactional_ddl: true,
@@ -465,6 +466,7 @@ impl Connection for SqliteConnection {
                 columns,
                 indexes: table_indexes(conn, &table)?,
                 foreign_keys: table_foreign_keys(conn, &table)?,
+                triggers: Vec::new(),
                 primary_key,
                 estimated_rows: None,
                 comment: None,

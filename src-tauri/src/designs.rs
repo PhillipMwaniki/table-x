@@ -336,6 +336,7 @@ mod tests {
                 })
                 .into_iter()
                 .collect(),
+            triggers: Vec::new(),
             primary_key: vec!["id".into()],
             estimated_rows: None,
             comment: None,

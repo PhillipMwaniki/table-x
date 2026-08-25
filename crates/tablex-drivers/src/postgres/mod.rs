@@ -112,6 +112,7 @@ impl Driver for PostgresDriver {
                     alter_column: true,
                     indexes: true,
                     foreign_keys: true,
+                    triggers: true,
                     create_database: true,
                     create_schema: true,
                     transactional_ddl: true,

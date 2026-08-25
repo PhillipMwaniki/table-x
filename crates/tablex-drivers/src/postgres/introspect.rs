@@ -591,6 +591,7 @@ pub async fn table_detail(client: &Client, schema: &str, table: &str) -> Result<
         columns,
         indexes: indexes(client, schema, table).await?,
         foreign_keys: foreign_keys(client, schema, table).await?,
+        triggers: Vec::new(),
         primary_key: primary_key(client, schema, table).await?,
         estimated_rows,
         comment,

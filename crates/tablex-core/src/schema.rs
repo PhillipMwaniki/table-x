@@ -142,6 +142,12 @@ pub struct TableDetail {
     pub columns: Vec<ColumnDef>,
     pub indexes: Vec<IndexDef>,
     pub foreign_keys: Vec<ForeignKeyDef>,
+    /// Triggers on this table.
+    ///
+    /// Defaulted, so a driver that has not been taught to read them yet returns
+    /// a table with none rather than failing to deserialise.
+    #[serde(default)]
+    pub triggers: Vec<TriggerDef>,
     /// Primary key column names, in key order.
     pub primary_key: Vec<String>,
     /// Estimated row count. Explicitly an estimate — an exact `COUNT(*)` on a
@@ -175,6 +181,70 @@ pub struct IndexDef {
     pub primary: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub method: Option<String>,
+}
+
+/// When a trigger fires relative to the statement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TriggerTiming {
+    Before,
+    After,
+    /// Only on a view, and only where the engine has it.
+    InsteadOf,
+}
+
+impl TriggerTiming {
+    pub fn sql(&self) -> &'static str {
+        match self {
+            TriggerTiming::Before => "BEFORE",
+            TriggerTiming::After => "AFTER",
+            TriggerTiming::InsteadOf => "INSTEAD OF",
+        }
+    }
+}
+
+/// What a trigger fires on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TriggerEvent {
+    Insert,
+    Update,
+    Delete,
+}
+
+impl TriggerEvent {
+    pub fn sql(&self) -> &'static str {
+        match self {
+            TriggerEvent::Insert => "INSERT",
+            TriggerEvent::Update => "UPDATE",
+            TriggerEvent::Delete => "DELETE",
+        }
+    }
+}
+
+/// A trigger on a table.
+///
+/// The parts that every engine spells the same way are fields; the body is
+/// text, because it is a program in the engine's own procedural language and
+/// nothing short of that language would represent it. A form that tried to
+/// model the body would be a worse editor than a text box and would still not
+/// cover what people actually write.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TriggerDef {
+    pub name: String,
+    pub timing: TriggerTiming,
+    /// One or more. MySQL allows exactly one per trigger; PostgreSQL, SQL Server
+    /// and Oracle allow several, and saying so is the engine's business rather
+    /// than this type's.
+    pub events: Vec<TriggerEvent>,
+    /// Per row rather than per statement. Oracle and PostgreSQL distinguish
+    /// them; MySQL and SQLite have only the row form.
+    pub for_each_row: bool,
+    /// The body, in whatever language the engine uses.
+    pub body: String,
+    /// `WHEN (...)`, where the engine has it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -237,6 +307,7 @@ mod tests {
             columns,
             indexes,
             foreign_keys: vec![],
+            triggers: Vec::new(),
             primary_key: pk,
             estimated_rows: None,
             comment: None,
