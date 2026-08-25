@@ -80,6 +80,10 @@ export type PlaceholderStyle = "question" | "dollar" | "at_p" | "colon";
 
 /** Which parts of an existing table this engine can be asked to change. */
 export interface DdlSupport {
+  /** Whether a database can be created from here — see the Rust capability. */
+  create_database: boolean;
+  /** Whether a schema can be created inside a database from here. */
+  create_schema: boolean;
   add_column: boolean;
   drop_column: boolean;
   /** Changing a type, nullability or default in place. SQLite cannot. */

@@ -170,31 +170,37 @@ export function TableInspector({
                 {/* The relationship, chosen rather than drawn. Dragging a line
                     between two boxes is the gesture people know from Workbench
                     and it is coming; picking the table is the same statement in
-                    the meantime, and it is reachable from a keyboard. */}
-                <div className="mt-1 flex items-center gap-1.5">
-                  <span className="text-[10.5px] text-text-muted">→</span>
-                  <Select
-                    value={reference?.referenced_table ?? ""}
-                    aria-label={`What ${column.name} references`}
-                    onChange={(e) => {
-                      const target = tables.find((t) => t.name === e.target.value);
-                      onChange(
-                        target
-                          ? addForeignKey(table, column.name, target)
-                          : removeForeignKey(table, column.name),
-                      );
-                    }}
-                    className="h-6 min-w-0 flex-1 text-[11px]"
-                  >
-                    <option value="">references nothing</option>
-                    {tables.map((t) => (
-                      <option key={t.name} value={t.name}>
-                        {t.name}
-                        {t.primary_key[0] ? `.${t.primary_key[0]}` : ""}
-                      </option>
-                    ))}
-                  </Select>
-                </div>
+                    the meantime, and it is reachable from a keyboard.
+
+                    Hidden where there is nothing to point at -- a table being
+                    created cannot carry a constraint yet, since the table it
+                    would reference is not there either. */}
+                {tables.length > 0 && (
+                  <div className="mt-1 flex items-center gap-1.5">
+                    <span className="text-[10.5px] text-text-muted">→</span>
+                    <Select
+                      value={reference?.referenced_table ?? ""}
+                      aria-label={`What ${column.name} references`}
+                      onChange={(e) => {
+                        const target = tables.find((t) => t.name === e.target.value);
+                        onChange(
+                          target
+                            ? addForeignKey(table, column.name, target)
+                            : removeForeignKey(table, column.name),
+                        );
+                      }}
+                      className="h-6 min-w-0 flex-1 text-[11px]"
+                    >
+                      <option value="">references nothing</option>
+                      {tables.map((t) => (
+                        <option key={t.name} value={t.name}>
+                          {t.name}
+                          {t.primary_key[0] ? `.${t.primary_key[0]}` : ""}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                )}
               </li>
             );
           })}

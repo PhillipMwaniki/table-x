@@ -144,7 +144,13 @@ impl Driver for ClickhouseDriver {
                 // thing, built with ADD INDEX ... TYPE ... GRANULARITY. A
                 // column editor here would be a different editor, not this
                 // one with a flag flipped.
-                ddl: DdlSupport::default(),
+                // Nothing about a table can be altered from here -- see the
+                // module docs -- but a database is one statement and it is the
+                // step before anything else can be created.
+                ddl: DdlSupport {
+                    create_database: true,
+                    ..DdlSupport::default()
+                },
                 // ClickHouse transactions are experimental and limited to a
                 // single partition, so they are not advertised.
                 transactions: false,

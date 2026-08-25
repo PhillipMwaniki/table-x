@@ -37,6 +37,8 @@ const NO_DDL: DdlSupport = {
   alter_column: false,
   indexes: false,
   foreign_keys: false,
+  create_database: false,
+  create_schema: false,
   transactional_ddl: false,
 };
 

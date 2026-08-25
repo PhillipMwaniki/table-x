@@ -280,6 +280,14 @@ interface WorkspaceState {
    * This only says that what it is showing is now out of date.
    */
   schemaVersion: Record<string, number>;
+  /**
+   * Say that the catalogue has changed, so the tree rebuilds.
+   *
+   * Bumped automatically after a statement that changes it; this is for the
+   * changes that do not go through the editor -- a table or a database created
+   * from a form.
+   */
+  bumpSchema: (connectionId: string) => void;
   setActiveStatement: (connectionId: string, tabId: string, index: number) => void;
   run: (connectionId: string, tabId: string, sqlOverride?: string) => Promise<void>;
   /** Stop whatever this connection is running. */
@@ -615,6 +623,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
 
   setTabNotice: (id, tabId, message) =>
     set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { notice: message }) })),
+
+  bumpSchema: (id) =>
+    set((s) => ({
+      schemaVersion: { ...s.schemaVersion, [id]: (s.schemaVersion[id] ?? 0) + 1 },
+    })),
 
   setActiveStatement: (id, tabId, index) =>
     set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { activeStatement: index }) })),

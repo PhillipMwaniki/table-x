@@ -84,6 +84,10 @@ impl Driver for SqliteDriver {
                     alter_column: false,
                     indexes: true,
                     foreign_keys: false,
+                    // A database here is a file, and making one is the file
+                    // dialog's job rather than a statement's.
+                    create_database: false,
+                    create_schema: false,
                     transactional_ddl: true,
                 },
                 transactions: true,

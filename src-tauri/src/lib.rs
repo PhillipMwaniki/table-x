@@ -101,6 +101,8 @@ pub fn run() {
             ipc::browse,
             update::check_for_update,
             ipc::table_detail,
+            ipc::create_database,
+            ipc::create_schema,
             ipc::preview_table_changes,
             ipc::apply_table_changes,
             ipc::explain,

@@ -60,6 +60,7 @@ export function SchemaTree({
   onSelectDatabase,
   onOpenScript,
   onContextMenu,
+  onCreate,
 }: {
   connectionId: string;
   /** The database the session is pointed at, marked in the list. */
@@ -88,6 +89,8 @@ export function SchemaTree({
     at: { x: number; y: number },
     refresh: (() => void) | null,
   ) => void;
+  /** Open the create menu at a point on screen. */
+  onCreate?: ((at: { x: number; y: number }) => void) | undefined;
 }) {
   const [filter, setFilter] = useState("");
   /**
@@ -285,28 +288,48 @@ export function SchemaTree({
    */
   const search = (
     <div className="sticky top-0 z-10 border-b border-border bg-surface-1 p-1.5">
-      <div className="relative">
-        <input
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") setFilter("");
-          }}
-          placeholder="Filter objects…"
-          aria-label="Filter objects by name"
-          spellCheck={false}
-          className="h-6 w-full rounded border border-border bg-surface-0 pr-5 pl-1.5 text-[11px] outline-none focus:border-accent"
-        />
-        {filter && (
+      <div className="flex items-center gap-1">
+        <div className="relative flex-1">
+          <input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setFilter("");
+            }}
+            placeholder="Filter objects…"
+            aria-label="Filter objects by name"
+            spellCheck={false}
+            className="h-6 w-full rounded border border-border bg-surface-0 pr-5 pl-1.5 text-[11px] outline-none focus:border-accent"
+          />
+          {filter && (
+            <button
+              onClick={() => setFilter("")}
+              aria-label="Clear the filter"
+              className="absolute inset-y-0 right-0 w-5 text-[11px] text-text-muted hover:text-text"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+
+        {/* The one thing the tree could not do: make something. Here rather than
+          only in a right-click menu, because a database with no tables in it
+          yet has nothing to right-click. */}
+        {onCreate && (
           <button
-            onClick={() => setFilter("")}
-            aria-label="Clear the filter"
-            className="absolute inset-y-0 right-0 w-5 text-[11px] text-text-muted hover:text-text"
+            onClick={(e) => {
+              const at = e.currentTarget.getBoundingClientRect();
+              onCreate({ x: at.left, y: at.bottom + 2 });
+            }}
+            title="Create a database, schema or table"
+            aria-label="Create"
+            className="flex size-6 shrink-0 items-center justify-center rounded text-[15px] leading-none text-text-muted hover:bg-surface-2 hover:text-text"
           >
-            ✕
+            +
           </button>
         )}
       </div>
+
       {needle && (
         <p className="px-0.5 pt-1 text-[10px] text-text-muted">
           {matched === 0 ? "Nothing loaded matches" : `${matched} matching`}

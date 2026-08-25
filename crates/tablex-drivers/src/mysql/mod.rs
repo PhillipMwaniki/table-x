@@ -199,6 +199,10 @@ impl Driver for MysqlDriver {
                     foreign_keys: true,
                     // MySQL commits implicitly around DDL, so a set that
                     // fails halfway stays half applied.
+                    // `CREATE DATABASE`. A schema here *is* a database,
+                    // so there is no second level to create.
+                    create_database: true,
+                    create_schema: false,
                     transactional_ddl: false,
                 },
                 transactions: true,

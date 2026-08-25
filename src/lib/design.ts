@@ -29,6 +29,11 @@ const KEY_TYPE: Record<string, string> = {
   clickhouse: "Int32",
 };
 
+/** How an engine spells the type of a generated integer key. */
+export function keyTypeFor(driver: string): string {
+  return KEY_TYPE[driver] ?? "int";
+}
+
 /** A column with nothing decided about it yet. */
 export function blankColumn(name: string, ordinal: number): ColumnDef {
   return {
@@ -69,7 +74,7 @@ export function addTable(design: Design, name = freeTableName(design)): Design {
     columns: [
       {
         name: "id",
-        type_name: KEY_TYPE[design.driver] ?? "int",
+        type_name: keyTypeFor(design.driver),
         nullable: false,
         auto_increment: true,
         ordinal: 0,

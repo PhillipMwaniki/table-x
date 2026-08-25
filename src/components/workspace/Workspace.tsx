@@ -27,6 +27,8 @@ import { ConfirmDestructive } from "./ConfirmDestructive";
 import { NotebookView } from "./NotebookView";
 import { StructureView } from "./StructureView";
 import { InsertRowDialog } from "./InsertRowDialog";
+import { CreateTableDialog } from "./CreateTableDialog";
+import { NameDialog } from "./NameDialog";
 import { DesignView } from "./DesignView";
 import { Button, Spinner, cx } from "../ui/primitives";
 import { ContextMenu } from "../ui/ContextMenu";
@@ -36,6 +38,7 @@ import { ipc, IpcError } from "@/lib/ipc";
 import { hasOrderBy } from "@/lib/paging";
 import { readOnlyExplanation } from "@/lib/guarantees";
 import { drop, selectFrom, truncate } from "@/lib/statements";
+import { keyTypeFor } from "@/lib/design";
 import { formatValue } from "@/lib/value";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useHistory } from "@/store/history";
@@ -105,6 +108,7 @@ export function Workspace({
     setTabError,
     setTabNotice,
     switchDatabase,
+    bumpSchema,
     reconnect,
     applyEdit,
     goToPage,
@@ -160,6 +164,13 @@ export function Workspace({
   /** Rows picked in the grid, waiting for a format to be chosen. */
   const [exporting, setExporting] = useState<Value[][] | null>(null);
 
+  /** The create menu, when the tree's + has been pressed. */
+  const [creating, setCreating] = useState<{ x: number; y: number } | null>(null);
+  /** A container being named, and what kind it is. */
+  const [naming, setNaming] = useState<"database" | "schema" | null>(null);
+  /** Whether the new-table form is open. */
+  const [newTable, setNewTable] = useState(false);
+
   /** The schema a comparison is being set up for, if any. */
   // Selected straight off the store rather than derived: a selector that
   // builds an array returns a new one every call, and zustand compares by
@@ -168,6 +179,13 @@ export function Workspace({
   const openConnections = useConnections((s) => s.open);
   /** Every driver this build has, for a design that has to pick one. */
   const drivers = useConnections((s) => s.drivers);
+  /**
+   * What this engine's DDL can do, which decides what the create menu offers.
+   *
+   * A missing driver means a connection whose descriptor has not loaded, and
+   * nothing offered is the right answer for that moment.
+   */
+  const ddl = drivers.find((d) => d.id === connection.driver)?.capabilities.ddl;
   /** Whether this connection's link has failed, and whether it is being rebuilt. */
   const linkLost = useConnections((s) => s.broken.has(connection.id));
   const reconnecting = useConnections((s) => s.busy.has(connection.id));
@@ -770,6 +788,28 @@ export function Workspace({
   };
 
   /**
+   * Make a database or a schema, then show it.
+   *
+   * The tree is rebuilt rather than patched: what a server holds is the
+   * server's answer, and a name added to the list optimistically would be a
+   * claim this app is in no position to make.
+   */
+  const createContainer = async (kind: "database" | "schema", name: string) => {
+    const current = activeTab(connection.id);
+    try {
+      if (kind === "database") {
+        await ipc.createDatabase(connection.id, name);
+      } else {
+        await ipc.createSchema(connection.id, name);
+      }
+      bumpSchema(connection.id);
+      if (current) setTabNotice(connection.id, current.id, `Created ${kind} ${name}.`);
+    } catch (e) {
+      reportJobFailure(e as IpcError, current?.id, `Creating the ${kind}`);
+    }
+  };
+
+  /**
    * Compare a design against the connected database.
    *
    * The direction is the one a design is for: the database is what the script
@@ -1041,6 +1081,7 @@ export function Workspace({
           onSelectDatabase={(name) => void switchDatabase(connection.id, name)}
           onOpenScript={(node) => void openScript(node)}
           onContextMenu={(node, at, refresh) => setMenu({ node, x: at.x, y: at.y, refresh })}
+          onCreate={(at) => setCreating(at)}
         />
       </aside>
 
@@ -1583,6 +1624,73 @@ export function Workspace({
             const table = inserting.table;
             setInserting(null);
             void insertRow(table, values);
+          }}
+        />
+      )}
+
+      {creating && (
+        <ContextMenu
+          x={creating.x}
+          y={creating.y}
+          onClose={() => setCreating(null)}
+          items={[
+            {
+              label: "New table…",
+              onSelect: () => setNewTable(true),
+            },
+            {
+              label: "New schema…",
+              separated: true,
+              // Offered only where the engine has a statement for it. Oracle
+              // has schemas and no way to make one that is not `CREATE USER`.
+              disabledReason: ddl?.create_schema
+                ? undefined
+                : `${connection.driver} cannot create a schema`,
+              onSelect: ddl?.create_schema ? () => setNaming("schema") : undefined,
+            },
+            {
+              label: "New database…",
+              disabledReason: ddl?.create_database
+                ? undefined
+                : `${connection.driver} cannot create a database`,
+              onSelect: ddl?.create_database ? () => setNaming("database") : undefined,
+            },
+          ]}
+        />
+      )}
+
+      {naming && (
+        <NameDialog
+          open
+          title={naming === "database" ? "New database" : "New schema"}
+          label="Name"
+          description={
+            naming === "database"
+              ? "Created empty. Nothing is switched to it until you open it."
+              : "Created in the database this connection is on."
+          }
+          onClose={() => setNaming(null)}
+          onSubmit={(name) => {
+            const kind = naming;
+            setNaming(null);
+            void createContainer(kind, name);
+          }}
+        />
+      )}
+
+      {newTable && (
+        <CreateTableDialog
+          open
+          connectionId={connection.id}
+          schema={database ?? undefined}
+          types={drivers.find((d) => d.id === connection.driver)?.column_types ?? []}
+          keyType={keyTypeFor(connection.driver)}
+          onClose={() => setNewTable(false)}
+          onCreated={(name) => {
+            setNewTable(false);
+            bumpSchema(connection.id);
+            const current = activeTab(connection.id);
+            if (current) setTabNotice(connection.id, current.id, `Created table ${name}.`);
           }}
         />
       )}

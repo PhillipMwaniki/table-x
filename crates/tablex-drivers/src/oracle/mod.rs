@@ -158,6 +158,12 @@ impl Driver for OracleDriver {
                     // Oracle commits implicitly before and after every DDL
                     // statement, so a set that fails halfway stays half
                     // applied -- the same caveat MySQL carries.
+                    // Neither. A database here is the service the
+                    // connection reached, and a schema is a user --
+                    // `CREATE USER` needs a password and quotas, which
+                    // is not a name in a box.
+                    create_database: false,
+                    create_schema: false,
                     transactional_ddl: false,
                 },
                 transactions: true,

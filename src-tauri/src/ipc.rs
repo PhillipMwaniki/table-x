@@ -1786,6 +1786,84 @@ pub struct DdlPlan {
     pub transactional: bool,
 }
 
+/// Create a database.
+///
+/// One statement, built here rather than in the driver because the only part
+/// that differs between engines is the identifier quote, which the capability
+/// already carries. Refused where the engine has no such statement, so a UI
+/// that somehow offered the option still cannot produce one it would reject.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn create_database(
+    state: tauri::State<'_, AppState>,
+    connection_id: String,
+    name: String,
+) -> IpcResult<()> {
+    run_creation(&state, &connection_id, &name, Container::Database).await
+}
+
+/// Create a schema inside the database this session is connected to.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn create_schema(
+    state: tauri::State<'_, AppState>,
+    connection_id: String,
+    name: String,
+) -> IpcResult<()> {
+    run_creation(&state, &connection_id, &name, Container::Schema).await
+}
+
+/// Which of the two containers is being made.
+#[derive(Clone, Copy)]
+enum Container {
+    Database,
+    Schema,
+}
+
+async fn run_creation(
+    state: &AppState,
+    connection_id: &str,
+    name: &str,
+    what: Container,
+) -> IpcResult<()> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(tablex_core::Error::Config("a name is required".into()).into());
+    }
+
+    let config = state.config_for(connection_id).await?;
+    if config.read_only {
+        return Err(
+            tablex_core::Error::Unsupported("this connection is marked read-only".into()).into(),
+        );
+    }
+
+    let capabilities = state.drivers.get(&config.driver)?.info().capabilities;
+    let (allowed, keyword) = match what {
+        Container::Database => (capabilities.ddl.create_database, "DATABASE"),
+        Container::Schema => (capabilities.ddl.create_schema, "SCHEMA"),
+    };
+    if !allowed {
+        return Err(tablex_core::Error::Unsupported(format!(
+            "{} cannot create a {}",
+            config.driver,
+            keyword.to_lowercase()
+        ))
+        .into());
+    }
+
+    // Quoted, so a name with a space or a reserved word in it is a name rather
+    // than a syntax error -- and so that a name carrying the quote character
+    // cannot end the identifier early.
+    let statement = format!(
+        "CREATE {keyword} {}",
+        tablex_core::sql::quote_ident(name, capabilities.identifier_quote)
+    );
+
+    let session = state.sessions.get(connection_id).await?;
+    let mut guard = session.connection.lock().await;
+    guard.run_control(&statement).await?;
+    Ok(())
+}
+
 /// Build the statements for a set of edits without running any of them.
 ///
 /// Separate from applying them on purpose. The editor shows this, the user reads

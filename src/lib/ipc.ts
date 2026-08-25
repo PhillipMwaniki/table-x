@@ -129,6 +129,17 @@ export const ipc = {
    */
   reconnect: (id: string) => call<void>("reconnect", { id }),
 
+  /**
+   * Create a database, or a schema inside one.
+   *
+   * Refused by the backend where the engine has no such statement, so these are
+   * offered only where `capabilities.ddl` says they exist.
+   */
+  createDatabase: (connection_id: string, name: string) =>
+    call<void>("create_database", { connection_id, name }),
+  createSchema: (connection_id: string, name: string) =>
+    call<void>("create_schema", { connection_id, name }),
+
   /** Validate a config that may not be saved yet, tunnel included. */
   testConnection: (config: ConnectionConfig, secret?: string, sshSecrets?: (string | null)[]) =>
     call<void>("test_connection", {

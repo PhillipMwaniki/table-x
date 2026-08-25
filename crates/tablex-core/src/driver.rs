@@ -100,6 +100,17 @@ pub struct DdlSupport {
     pub indexes: bool,
     /// `ADD CONSTRAINT … FOREIGN KEY` and dropping one again.
     pub foreign_keys: bool,
+    /// Whether a database can be created from here.
+    ///
+    /// Separate from `databases`, which says only that the engine *has* them:
+    /// Oracle has schemas and no statement that makes one -- creating a schema
+    /// there means creating a user, with a password and quotas, which is an
+    /// administrative act rather than a name in a box. A capability that
+    /// conflated the two would put a button in front of somebody that produces
+    /// a statement their engine rejects.
+    pub create_database: bool,
+    /// Whether a schema can be created inside a database from here.
+    pub create_schema: bool,
     /// Whether DDL honours a transaction, so a failed apply leaves nothing
     /// behind.
     ///
