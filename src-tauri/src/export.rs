@@ -408,6 +408,45 @@ pub struct RowExportRequest {
     pub quote: char,
 }
 
+/// The same rows, in the same formats, as text rather than a file.
+///
+/// Written by the same [`Writer`] a file export uses, which is the whole point:
+/// an `INSERT` copied to the clipboard is a statement somebody will paste and
+/// run, and quoting rules, escaping, and NULL are exactly the things a second
+/// implementation gets subtly wrong. There is no second implementation.
+///
+/// In memory rather than streamed because the clipboard is: what comes back is
+/// held in the webview and then in the system clipboard anyway, so there is
+/// nothing to gain by writing it in batches. A selection is what a person can
+/// pick out of a page, not a whole table.
+pub fn rows_to_text(request: RowTextRequest) -> Result<String> {
+    let mut buffer: Vec<u8> = Vec::new();
+    let mut writer = Writer::new(
+        &mut buffer,
+        request.format,
+        &request.columns,
+        &request.table,
+        request.quote,
+    );
+
+    let failed = |e: std::io::Error| Error::Io(format!("could not format the rows: {e}"));
+    writer.begin().map_err(failed)?;
+    writer.write_batch(&request.rows).map_err(failed)?;
+    writer.finish().map_err(failed)?;
+
+    String::from_utf8(buffer).map_err(|e| Error::Serde(format!("formatted rows are not text: {e}")))
+}
+
+/// As [`RowExportRequest`], without a path: the result is returned instead.
+pub struct RowTextRequest {
+    pub format: Format,
+    /// Used as the table name in generated `INSERT` statements.
+    pub table: String,
+    pub columns: Vec<Column>,
+    pub rows: Vec<Vec<Value>>,
+    pub quote: char,
+}
+
 pub fn run_rows(request: RowExportRequest) -> Result<u64> {
     let file = std::fs::File::create(&request.path)
         .map_err(|e| Error::Io(format!("could not create {}: {}", request.path, e)))?;
@@ -692,5 +731,77 @@ mod tests {
             std::fs::read_to_string(dir.join("out.csv")).expect("read back"),
             "id\n"
         );
+    }
+
+    /// Columns for the clipboard tests.
+    fn text_columns() -> Vec<Column> {
+        ["id", "name"]
+            .into_iter()
+            .map(|name| Column {
+                name: name.into(),
+                type_name: "text".into(),
+                nullable: None,
+                source: None,
+            })
+            .collect()
+    }
+
+    fn text_rows() -> Vec<Vec<Value>> {
+        vec![
+            vec![Value::Int(1), Value::Text("O'Hara".into())],
+            vec![Value::Int(2), Value::Null],
+        ]
+    }
+
+    fn to_text(format: Format) -> String {
+        rows_to_text(RowTextRequest {
+            format,
+            table: "users".into(),
+            columns: text_columns(),
+            rows: text_rows(),
+            quote: '`',
+        })
+        .expect("format")
+    }
+
+    #[test]
+    fn copied_inserts_are_quoted_by_the_engines_own_rules() {
+        // The point of formatting in Rust: this is a statement somebody will
+        // paste and run. The apostrophe has to be doubled, NULL has to be a
+        // keyword rather than the string "NULL", and the identifiers have to
+        // carry the quote this engine uses.
+        let sql = to_text(Format::Sql);
+        assert_eq!(
+            sql,
+            concat!(
+                "INSERT INTO `users` (`id`, `name`) VALUES (1, 'O''Hara');
+",
+                "INSERT INTO `users` (`id`, `name`) VALUES (2, NULL);
+",
+            )
+        );
+    }
+
+    #[test]
+    fn copied_csv_carries_its_header() {
+        // Pasted into a spreadsheet, a header is what makes the columns
+        // readable; an export writes one for the same reason.
+        assert_eq!(
+            to_text(Format::Csv),
+            "id,name
+1,O'Hara
+2,
+"
+        );
+    }
+
+    #[test]
+    fn copied_json_is_a_complete_document() {
+        // Not a fragment: the brackets are what make it pasteable into
+        // anything that reads JSON.
+        let json = to_text(Format::Json);
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        assert_eq!(parsed[0]["name"], "O'Hara");
+        assert!(parsed[1]["name"].is_null());
     }
 }

@@ -1198,6 +1198,46 @@ pub async fn export_rows(
     })?)
 }
 
+/// As [`export_rows`], but returning the text instead of writing it.
+#[derive(Deserialize)]
+pub struct RowTextArgs {
+    pub connection_id: String,
+    pub format: tablex_core::export::Format,
+    pub table: String,
+    pub columns: Vec<tablex_core::result::Column>,
+    pub rows: Vec<Vec<tablex_core::Value>>,
+}
+
+/// Rows as text, for the clipboard.
+///
+/// Formatted here rather than in the webview so that a copied `INSERT` is
+/// quoted and escaped by the code that already knows how — including the
+/// identifier quote this particular engine uses, which the frontend has no
+/// business knowing.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn format_rows(
+    state: tauri::State<'_, AppState>,
+    request: RowTextArgs,
+) -> IpcResult<String> {
+    let config = state.config_for(&request.connection_id).await?;
+    let quote = state
+        .drivers
+        .get(&config.driver)?
+        .info()
+        .capabilities
+        .identifier_quote;
+
+    Ok(crate::export::rows_to_text(
+        crate::export::RowTextRequest {
+            format: request.format,
+            table: request.table,
+            columns: request.columns,
+            rows: request.rows,
+            quote,
+        },
+    )?)
+}
+
 /// Who exists on this server, and what each of them can reach.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn privileges(

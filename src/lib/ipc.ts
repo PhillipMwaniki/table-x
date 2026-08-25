@@ -206,6 +206,22 @@ export const ipc = {
   }) => call<number>("export_rows", { request: args }),
 
   /**
+   * The same rows an export would write, returned as text for the clipboard.
+   *
+   * Formatted in Rust rather than here so a copied `INSERT` is quoted and
+   * escaped by the code that already knows how, including which quote character
+   * this engine uses for identifiers.
+   */
+  formatRows: (args: {
+    connection_id: string;
+    format: ExportFormat;
+    /** Named in generated INSERT statements. */
+    table: string;
+    columns: Column[];
+    rows: Value[][];
+  }) => call<string>("format_rows", { request: args }),
+
+  /**
    * Write the query history to a file — an audit trail that can leave.
    *
    * Returns how many entries were written.

@@ -28,8 +28,11 @@ import type { Precision } from "@/lib/guarantees";
 import { GuaranteesPanel } from "./GuaranteesPanel";
 import { ChartView } from "./ChartView";
 import { RowDetails } from "./RowDetails";
+import { ContextMenu } from "../ui/ContextMenu";
+import type { MenuItem } from "../ui/ContextMenu";
+import { rowsForMenu, sourceTable } from "@/lib/rowcopy";
 import { useSettings } from "@/store/settings";
-import type { Column, ResultSet, Value } from "@/lib/types";
+import type { Column, ExportFormat, ResultSet, Value } from "@/lib/types";
 
 const MIN_COL_WIDTH = 80;
 const MAX_INITIAL_COL_WIDTH = 320;
@@ -96,6 +99,7 @@ export function ResultGrid({
   readOnlyDetail,
   onInsertRow,
   onDeleteRows,
+  onCopyRows,
 }: {
   result: ResultSet;
   onEdit: (rowIndex: number, columnIndex: number, next: Value) => Promise<void>;
@@ -109,6 +113,14 @@ export function ResultGrid({
   onInsertRow?: (() => void) | undefined;
   /** Remove these rows, given by their index in the result. */
   onDeleteRows?: ((rowIndexes: number[]) => void) | undefined;
+  /**
+   * Put rows on the clipboard in one of the export formats.
+   *
+   * The grid decides which rows and which format; turning them into text is the
+   * backend's job, because an INSERT has to be quoted for the engine it will be
+   * run against.
+   */
+  onCopyRows?: ((rows: Value[][], format: ExportFormat, table: string) => void) | undefined;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   // Row height and column widths are both measured in characters, so they have
@@ -141,6 +153,14 @@ export function ResultGrid({
   const [current, setCurrent] = useState<number | null>(null);
   /** Where the last plain click landed, so shift-click has a range to extend. */
   const anchor = useRef<number | null>(null);
+  /** Where a right-click landed, and on what. */
+  const [menu, setMenu] = useState<{
+    x: number;
+    y: number;
+    row: number;
+    /** Null when the right-click landed on the row number rather than a cell. */
+    col: number | null;
+  } | null>(null);
   const [showGuarantees, setShowGuarantees] = useState(false);
   /** Charting replaces the rows rather than sitting beside them: both want the
       whole pane, and half a grid next to half a chart serves neither. */
@@ -159,6 +179,9 @@ export function ResultGrid({
     // The first row rather than nothing: a panel that opens empty and waits to
     // be told where to look is a panel that has to be explained.
     setCurrent(result.rows.length > 0 ? 0 : null);
+    // A menu opened against row 4 of the previous result would act on row 4 of
+    // this one, which is a different row.
+    setMenu(null);
   }, [result]);
 
   // Column widths are measured from a sample of rows rather than every row:
@@ -379,6 +402,59 @@ export function ResultGrid({
   const totalWidth = widths.reduce((sum, w) => sum + w, 0);
 
   /**
+   * What a right-click on a cell offers.
+   *
+   * Two subjects in the order the pointer implies: the value under it first,
+   * then the row it sits in. The row items are the export formats, because a
+   * row copied to the clipboard is wanted for the same reasons a file is —
+   * pasted into a ticket, a script, or another database — and because they are
+   * already written and already correct.
+   */
+  const menuItems = useMemo((): MenuItem[] => {
+    if (!menu) return [];
+
+    const items: MenuItem[] = [];
+    // Absent when the click landed on the row number, which points at a row and
+    // at no value in particular.
+    const value = menu.col === null ? undefined : result.rows[menu.row]?.[menu.col];
+    if (value) {
+      items.push({
+        label: "Copy value",
+        onSelect: () => void navigator.clipboard?.writeText(formatValue(value)),
+      });
+    }
+    if (!onCopyRows) return items;
+
+    const indexes = rowsForMenu(menu.row, selected);
+    const rows = indexes.map((i) => result.rows[i]).filter((row): row is Value[] => Boolean(row));
+    const what = rows.length === 1 ? "row" : `${rows.length} rows`;
+    const table = sourceTable(result.columns);
+
+    items.push(
+      {
+        label: `Copy ${what} as JSON`,
+        separated: items.length > 0,
+        onSelect: () => onCopyRows(rows, "json", table ?? "rows"),
+      },
+      {
+        label: `Copy ${what} as CSV`,
+        onSelect: () => onCopyRows(rows, "csv", table ?? "rows"),
+      },
+      {
+        label: `Copy ${what} as SQL INSERT`,
+        // Offered greyed rather than hidden: the reason it cannot be built is
+        // worth knowing, and a menu whose items move around depending on the
+        // query is a menu you have to read every time.
+        disabledReason: table
+          ? undefined
+          : "These rows do not come from one table, so there is no table to insert them into",
+        onSelect: () => table && onCopyRows(rows, "sql", table),
+      },
+    );
+    return items;
+  }, [menu, result.rows, result.columns, selected, onCopyRows]);
+
+  /**
    * The row the panel is showing.
    *
    * Guarded rather than indexed blindly: a delete or a refetch can leave the
@@ -589,6 +665,11 @@ export function ResultGrid({
                           toggle: e.ctrlKey || e.metaKey,
                         });
                       }}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setCurrent(sourceIndex);
+                        setMenu({ x: e.clientX, y: e.clientY, row: sourceIndex, col: null });
+                      }}
                       className={cx(
                         "sticky left-0 z-10 shrink-0 cursor-pointer border-r border-border select-none",
                         "text-right font-mono text-[10px] leading-[var(--row-height)] tabular-nums",
@@ -623,6 +704,18 @@ export function ResultGrid({
                           onBegin={() => beginEdit(sourceIndex, colIndex, cell)}
                           onCommit={commit}
                           onCommitValue={(next) => void commitValue(sourceIndex, colIndex, next)}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            // The cursor follows the pointer, so the panel and
+                            // the menu are about the same row.
+                            setCurrent(sourceIndex);
+                            setMenu({
+                              x: e.clientX,
+                              y: e.clientY,
+                              row: sourceIndex,
+                              col: colIndex,
+                            });
+                          }}
                         />
                       );
                     })}
@@ -654,6 +747,10 @@ export function ResultGrid({
       </div>
 
       {paging && <PagingBar paging={paging} rows={result.rows.length} />}
+
+      {menu && menuItems.length > 0 && (
+        <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />
+      )}
 
       <GuaranteesPanel
         open={showGuarantees}
@@ -985,6 +1082,7 @@ function Cell({
   onBegin,
   onCommit,
   onCommitValue,
+  onContextMenu,
 }: {
   value: Value;
   width: number;
@@ -999,6 +1097,7 @@ function Cell({
   onCommit: () => void;
   /** Commit a value directly, for controls where choosing is the edit. */
   onCommitValue: (next: Value) => void;
+  onContextMenu: (e: React.MouseEvent) => void;
 }) {
   if (editing) {
     const kind = editorFor(value);
@@ -1043,6 +1142,7 @@ function Cell({
     <div
       style={{ width }}
       onDoubleClick={editable || value.kind === "bytes" ? onBegin : undefined}
+      onContextMenu={onContextMenu}
       className={cx(
         "shrink-0 truncate border-r border-border px-2 font-mono",
         "text-[length:var(--text-data)] leading-[var(--row-height)]",

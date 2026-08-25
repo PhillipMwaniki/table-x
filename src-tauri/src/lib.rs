@@ -77,6 +77,7 @@ pub fn run() {
             ipc::export_table,
             ipc::export_database,
             ipc::export_rows,
+            ipc::format_rows,
             ipc::cancel_query,
             ipc::transaction_state,
             ipc::begin_transaction,

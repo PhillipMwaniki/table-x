@@ -394,6 +394,42 @@ export function Workspace({
   };
 
   /**
+   * Put rows on the clipboard in one of the export formats.
+   *
+   * The text is built by the backend rather than here. An INSERT copied out of
+   * this menu is a statement somebody will paste and run, and identifier
+   * quoting, string escaping and NULL are exactly what a second implementation
+   * in the webview would get subtly wrong -- so it uses the writers a file
+   * export already uses.
+   */
+  const copyRows = async (rows: Value[][], format: ExportFormat, table: string) => {
+    const current = activeTab(connection.id);
+    const result = current?.outcome?.statements[current.activeStatement];
+    if (!current || result?.type !== "rows" || rows.length === 0) return;
+
+    try {
+      const text = await ipc.formatRows({
+        connection_id: connection.id,
+        format,
+        table,
+        columns: result.columns,
+        rows,
+      });
+      await navigator.clipboard.writeText(text);
+      // Said out loud, because a clipboard write leaves nothing on screen: the
+      // only other way to find out whether it worked is to paste somewhere and
+      // look.
+      setTabNotice(
+        connection.id,
+        current.id,
+        `Copied ${rows.length} row${rows.length === 1 ? "" : "s"} as ${format.toUpperCase()}.`,
+      );
+    } catch (e) {
+      setTabError(connection.id, current.id, `Could not copy: ${(e as Error).message}`);
+    }
+  };
+
+  /**
    * Write the rows picked out of the grid.
    *
    * The rows go to the backend rather than being re-queried: the selection was
@@ -1323,6 +1359,7 @@ export function Workspace({
                             : undefined,
                       }}
                       onExportRows={(rows) => setExporting(rows)}
+                      onCopyRows={(rows, format, table) => void copyRows(rows, format, table)}
                       readOnlyDetail={readOnlyDetail}
                       onInsertRow={active.editable ? () => void beginInsert() : undefined}
                       onDeleteRows={
