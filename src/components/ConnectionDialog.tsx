@@ -12,6 +12,7 @@ import { SshSection } from "./SshSection";
 import { Banner, Button, Checkbox, Field, Input, Select } from "./ui/primitives";
 import { ipc, IpcError } from "@/lib/ipc";
 import { folderNames, normalizeFolder } from "@/lib/folders";
+import { forDriver, retargetConfig } from "@/lib/connection";
 import { useConnections } from "@/store/connections";
 import type { ConnectionConfig, DriverInfo, TlsMode } from "@/lib/types";
 
@@ -125,22 +126,17 @@ export function ConnectionDialog({
   const patch = (changes: Partial<ConnectionConfig>) =>
     setConfig((c) => (c ? { ...c, ...changes } : c));
 
-  /** Switching driver rewrites the transport fields but keeps the name and id. */
+  /**
+   * Switching driver keeps what was typed and moves only what the engine
+   * decides — see `retargetConfig`.
+   *
+   * The driver is the first control on the form and the one people get wrong,
+   * so it is changed after the rest is filled in at least as often as before.
+   */
   const changeDriver = (id: string) => {
     const next = drivers.find((d) => d.id === id);
     if (!next) return;
-    setConfig((c) =>
-      c
-        ? {
-            ...blankConfig(next),
-            id: c.id,
-            name: c.name,
-            folder: c.folder,
-            color: c.color,
-            read_only: c.read_only,
-          }
-        : c,
-    );
+    setConfig((c) => (c ? retargetConfig(c, driver, next) : c));
   };
 
   const nameError = config.name.trim() === "" ? "A name is required" : undefined;
@@ -171,7 +167,9 @@ export function ConnectionDialog({
     setTesting(true);
     setResult(null);
     try {
-      await ipc.testConnection(config, secretArg(), sshSecretsArg());
+      // The same shape that would be saved, so a test that passes is a test of
+      // the connection that gets stored rather than of a fuller one.
+      await ipc.testConnection(forDriver(config, driver), secretArg(), sshSecretsArg());
       setResult({ tone: "success", text: "Connected successfully." });
     } catch (e) {
       const err = e as IpcError;
@@ -190,7 +188,11 @@ export function ConnectionDialog({
     setSaving(true);
     setResult(null);
     try {
-      await onSaved({ ...config, name: config.name.trim() }, secretArg(), sshSecretsArg());
+      await onSaved(
+        forDriver({ ...config, name: config.name.trim() }, driver),
+        secretArg(),
+        sshSecretsArg(),
+      );
       onClose();
     } catch (e) {
       // Stay open on failure so the user's input is not thrown away.
