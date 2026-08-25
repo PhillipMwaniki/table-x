@@ -65,16 +65,15 @@ export function CreateTableDialog({
   const [reviewing, setReviewing] = useState(false);
 
   const name = table.name.trim();
-  const problem =
-    !name
-      ? "A table needs a name."
-      : table.columns.length === 0
-        ? "A table needs at least one column."
-        : table.columns.some((c) => !c.name.trim())
-          ? "Every column needs a name."
-          : table.columns.some((c) => !c.type_name.trim())
-            ? "Every column needs a type."
-            : null;
+  const problem = !name
+    ? "A table needs a name."
+    : table.columns.length === 0
+      ? "A table needs at least one column."
+      : table.columns.some((c) => !c.name.trim())
+        ? "Every column needs a name."
+        : table.columns.some((c) => !c.type_name.trim())
+          ? "Every column needs a type."
+          : null;
 
   // The change the migration writer turns into a CREATE TABLE. Built here and
   // written there, so the statement that runs is produced by the same code that
@@ -115,8 +114,8 @@ export function CreateTableDialog({
       >
         <div className="space-y-2">
           <Banner tone="info">
-            Foreign keys are added after the table exists, from its structure view — a
-            constraint cannot be written against a table that is not there yet.
+            Foreign keys are added after the table exists, from its structure view — a constraint
+            cannot be written against a table that is not there yet.
           </Banner>
 
           {/* No relation targets: see the note above. The inspector hides that

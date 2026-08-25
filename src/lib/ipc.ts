@@ -245,8 +245,7 @@ export const ipc = {
    * They share the design's id, so opening the file again continues the same
    * design rather than starting a second one beside it.
    */
-  writeDesignFile: (id: string, path: string) =>
-    call<Design>("write_design_file", { id, path }),
+  writeDesignFile: (id: string, path: string) => call<Design>("write_design_file", { id, path }),
 
   /** Open a `.erd` file, keeping it among this machine's designs. */
   readDesignFile: (path: string) => call<Design>("read_design_file", { path }),
