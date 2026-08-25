@@ -30,8 +30,9 @@ import { ChartView } from "./ChartView";
 import { RowDetails } from "./RowDetails";
 import { ContextMenu } from "../ui/ContextMenu";
 import type { MenuItem } from "../ui/ContextMenu";
-import { rowsForMenu, sourceTable } from "@/lib/rowcopy";
+import { quickFilter, rowsForMenu, sourceTable } from "@/lib/rowcopy";
 import { useSettings } from "@/store/settings";
+import type { QuickFilter } from "@/lib/rowcopy";
 import type { Column, ExportFormat, ResultSet, Value } from "@/lib/types";
 
 const MIN_COL_WIDTH = 80;
@@ -100,6 +101,7 @@ export function ResultGrid({
   onInsertRow,
   onDeleteRows,
   onCopyRows,
+  onDuplicateRow,
 }: {
   result: ResultSet;
   onEdit: (rowIndex: number, columnIndex: number, next: Value) => Promise<void>;
@@ -120,7 +122,23 @@ export function ResultGrid({
    * backend's job, because an INSERT has to be quoted for the engine it will be
    * run against.
    */
-  onCopyRows?: ((rows: Value[][], format: ExportFormat, table: string) => void) | undefined;
+  onCopyRows?:
+    | ((request: {
+        rows: Value[][];
+        format: ExportFormat;
+        /** Named in generated INSERT statements. */
+        table: string;
+        /** Whether the delimited formats name their columns first. */
+        header: boolean;
+      }) => void)
+    | undefined;
+  /**
+   * Open an insert form filled in from this row.
+   *
+   * Absent where the result is not a single writable table — the same condition
+   * that decides whether a row can be added at all.
+   */
+  onDuplicateRow?: ((row: Value[]) => void) | undefined;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   // Row height and column widths are both measured in characters, so they have
@@ -416,43 +434,151 @@ export function ResultGrid({
     const items: MenuItem[] = [];
     // Absent when the click landed on the row number, which points at a row and
     // at no value in particular.
-    const value = menu.col === null ? undefined : result.rows[menu.row]?.[menu.col];
+    const col = menu.col;
+    const value = col === null ? undefined : result.rows[menu.row]?.[col];
     if (value) {
       items.push({
         label: "Copy value",
         onSelect: () => void navigator.clipboard?.writeText(formatValue(value)),
       });
     }
-    if (!onCopyRows) return items;
 
     const indexes = rowsForMenu(menu.row, selected);
     const rows = indexes.map((i) => result.rows[i]).filter((row): row is Value[] => Boolean(row));
     const what = rows.length === 1 ? "row" : `${rows.length} rows`;
     const table = sourceTable(result.columns);
 
-    items.push(
-      {
-        label: `Copy ${what} as JSON`,
-        separated: items.length > 0,
-        onSelect: () => onCopyRows(rows, "json", table ?? "rows"),
-      },
-      {
-        label: `Copy ${what} as CSV`,
-        onSelect: () => onCopyRows(rows, "csv", table ?? "rows"),
-      },
-      {
-        label: `Copy ${what} as SQL INSERT`,
-        // Offered greyed rather than hidden: the reason it cannot be built is
-        // worth knowing, and a menu whose items move around depending on the
-        // query is a menu you have to read every time.
-        disabledReason: table
-          ? undefined
-          : "These rows do not come from one table, so there is no table to insert them into",
-        onSelect: () => table && onCopyRows(rows, "sql", table),
-      },
-    );
+    if (onCopyRows && rows.length > 0) {
+      const copy = (format: ExportFormat, header: boolean) => () =>
+        onCopyRows({ rows, format, header, table: table ?? "rows" });
+
+      items.push({
+        label: `Copy ${what} as`,
+        items: [
+          // Plain text is tab-separated with no header, which is the same bytes
+          // a headerless TSV would be. Two items producing one result would be
+          // two items to choose between for no reason, so it is named the way
+          // people look for it and the TSV entry is the one with the header.
+          { label: "Plain text", onSelect: copy("tsv", false) },
+          { label: "TSV with header", onSelect: copy("tsv", true) },
+          { label: "CSV", onSelect: copy("csv", false) },
+          { label: "CSV with header", onSelect: copy("csv", true) },
+          // The rest carry their column names inside the format itself: a
+          // Markdown table without a header row is not a table, JSON's keys
+          // are the names, and an INSERT lists them in the statement.
+          { label: "Markdown table", separated: true, onSelect: copy("markdown", true) },
+          { label: "JSON", onSelect: copy("json", true) },
+          {
+            label: "INSERT statement",
+            // Offered greyed rather than hidden: the reason it cannot be built
+            // is worth knowing, and a menu whose items move around depending on
+            // the query is a menu you have to read every time.
+            disabledReason: table
+              ? undefined
+              : "These rows do not come from one table, so there is no table to insert them into",
+            onSelect: table ? copy("sql", true) : undefined,
+          },
+        ],
+      });
+    }
+
+    // Editing, for the cell that was actually pointed at. A menu that set forty
+    // cells because forty rows were selected would be a menu that needs an undo
+    // per cell.
+    if (value && col !== null) {
+      const column = result.columns[col];
+      const why = result.editable
+        ? undefined
+        : (readOnlyDetail?.reason ?? "This result is read-only");
+      items.push({
+        label: "Set value",
+        separated: true,
+        disabledReason: why,
+        items: [
+          {
+            label: "NULL",
+            disabledReason:
+              why ?? (column?.nullable === false ? "This column does not accept NULL" : undefined),
+            onSelect: () => void commitValue(menu.row, col, { kind: "null" }),
+          },
+          {
+            // The one edit the grid cannot express: clearing a text cell there
+            // means the empty string, and there is no way to type NULL.
+            label: "Empty text",
+            disabledReason: why,
+            onSelect: () => void commitValue(menu.row, col, { kind: "text", value: "" }),
+          },
+        ],
+      });
+    }
+
+    if (onDuplicateRow) {
+      const row = result.rows[menu.row];
+      items.push({
+        label: "Duplicate row…",
+        separated: !value,
+        disabledReason: table ? undefined : "These rows do not come from one table",
+        // A form rather than a straight insert: the copy usually collides with
+        // the original on a key, and the place to settle that is before the
+        // statement runs rather than in the error it returns.
+        onSelect: row && table ? () => onDuplicateRow(row) : undefined,
+      });
+    }
+
+    if (value && col !== null) {
+      const text = formatValue(value);
+      const brief = text.length > 24 ? `${text.slice(0, 24)}…` : text;
+      const isNull = value.kind === "null";
+      const setFilter = (kind: QuickFilter) => () =>
+        setColumnFilters((was) => ({ ...was, [col]: quickFilter(kind, text) }));
+
+      items.push({
+        label: "Quick filter",
+        separated: true,
+        items: [
+          // Against NULL, "equals" and "contains" are questions with no useful
+          // answer — every row that has a value fails both — so a NULL cell is
+          // offered the two tests that do apply.
+          ...(isNull
+            ? []
+            : [
+                { label: `Equals ${brief}`, onSelect: setFilter("equals") },
+                { label: `Not ${brief}`, onSelect: setFilter("not") },
+                { label: `Contains ${brief}`, onSelect: setFilter("contains") },
+              ]),
+          { label: "Is NULL", separated: !isNull, onSelect: setFilter("null") },
+          { label: "Is not NULL", onSelect: setFilter("notNull") },
+          ...(columnFilters[col]
+            ? [
+                {
+                  label: "Clear this column's filter",
+                  separated: true,
+                  onSelect: () =>
+                    setColumnFilters((was) => {
+                      const next = { ...was };
+                      delete next[col];
+                      return next;
+                    }),
+                },
+              ]
+            : []),
+        ],
+      });
+    }
+
     return items;
-  }, [menu, result.rows, result.columns, selected, onCopyRows]);
+  }, [
+    menu,
+    result.rows,
+    result.columns,
+    result.editable,
+    readOnlyDetail,
+    selected,
+    columnFilters,
+    commitValue,
+    onCopyRows,
+    onDuplicateRow,
+  ]);
 
   /**
    * The row the panel is showing.

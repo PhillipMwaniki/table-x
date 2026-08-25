@@ -25,6 +25,35 @@ export function rowsForMenu(clicked: number, selected: ReadonlySet<number>): num
   return [...selected].sort((a, b) => a - b);
 }
 
+/** The tests the grid's quick filter offers against the cell under the pointer. */
+export type QuickFilter = "equals" | "not" | "contains" | "null" | "notNull";
+
+/**
+ * A filter expression for one of those tests.
+ *
+ * Written as text rather than as a `Predicate` because the column filter boxes
+ * hold text: what the menu puts there is exactly what somebody could have typed,
+ * which is what makes it editable afterwards rather than a hidden state the box
+ * disagrees with.
+ *
+ * `!=` reads as "negated, equals" — the negation is stripped first and the `=`
+ * parsed from what is left. It is worth a test rather than a glance.
+ */
+export function quickFilter(kind: QuickFilter, text: string): string {
+  switch (kind) {
+    case "equals":
+      return `=${text}`;
+    case "not":
+      return `!=${text}`;
+    case "contains":
+      return text;
+    case "null":
+      return "null";
+    case "notNull":
+      return "!null";
+  }
+}
+
 /**
  * The one table a result's rows came from, if they came from exactly one.
  *

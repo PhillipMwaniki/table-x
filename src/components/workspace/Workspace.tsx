@@ -35,6 +35,7 @@ import { ipc, IpcError } from "@/lib/ipc";
 import { hasOrderBy } from "@/lib/paging";
 import { readOnlyExplanation } from "@/lib/guarantees";
 import { drop, selectFrom, truncate } from "@/lib/statements";
+import { formatValue } from "@/lib/value";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useHistory } from "@/store/history";
 import { useSnippets } from "@/store/snippets";
@@ -145,7 +146,12 @@ export function Workspace({
   } | null>(null);
 
   /** The table an insert form is open for, with its columns. */
-  const [inserting, setInserting] = useState<{ table: string; columns: ColumnDef[] } | null>(null);
+  const [inserting, setInserting] = useState<{
+    table: string;
+    columns: ColumnDef[];
+    /** Values to open the form with, by column name. Null means NULL. */
+    initial?: Record<string, string | null> | undefined;
+  } | null>(null);
 
   /** Rows picked in the grid, waiting for a format to be chosen. */
   const [exporting, setExporting] = useState<Value[][] | null>(null);
@@ -284,14 +290,27 @@ export function Workspace({
    * including the defaults and generated keys that decide which fields can be
    * left alone.
    */
-  const beginInsert = async () => {
+  const beginInsert = async (from?: Value[]) => {
     const current = activeTab(connection.id);
-    const source = sourceOf(current?.outcome?.statements[current.activeStatement]);
-    if (!current || !source) return;
+    const result = current?.outcome?.statements[current.activeStatement];
+    const source = sourceOf(result);
+    if (!current || !source || result?.type !== "rows") return;
 
     try {
       const detail = await ipc.tableDetail(connection.id, source.table, source.schema);
-      setInserting({ table: detail.name, columns: detail.columns });
+      // Duplicating fills the form in from the row that was pointed at, keyed
+      // by column *name* rather than position: the query's columns and the
+      // table's are not the same list, and a `SELECT` of three columns out of
+      // twenty must not fill in the first three fields of the form.
+      const initial = from
+        ? Object.fromEntries(
+            result.columns.map((column, i): [string, string | null] => {
+              const value = from[i];
+              return [column.name, !value || value.kind === "null" ? null : formatValue(value)];
+            }),
+          )
+        : undefined;
+      setInserting({ table: detail.name, columns: detail.columns, initial });
     } catch (e) {
       reportJobFailure(e as IpcError, current.id, "Reading the table");
     }
@@ -402,7 +421,13 @@ export function Workspace({
    * in the webview would get subtly wrong -- so it uses the writers a file
    * export already uses.
    */
-  const copyRows = async (rows: Value[][], format: ExportFormat, table: string) => {
+  const copyRows = async (request: {
+    rows: Value[][];
+    format: ExportFormat;
+    table: string;
+    header: boolean;
+  }) => {
+    const { rows, format, table, header } = request;
     const current = activeTab(connection.id);
     const result = current?.outcome?.statements[current.activeStatement];
     if (!current || result?.type !== "rows" || rows.length === 0) return;
@@ -412,6 +437,7 @@ export function Workspace({
         connection_id: connection.id,
         format,
         table,
+        header,
         columns: result.columns,
         rows,
       });
@@ -1359,7 +1385,8 @@ export function Workspace({
                             : undefined,
                       }}
                       onExportRows={(rows) => setExporting(rows)}
-                      onCopyRows={(rows, format, table) => void copyRows(rows, format, table)}
+                      onCopyRows={(request) => void copyRows(request)}
+                      onDuplicateRow={sourceOf(active) ? (row) => void beginInsert(row) : undefined}
                       readOnlyDetail={readOnlyDetail}
                       onInsertRow={active.editable ? () => void beginInsert() : undefined}
                       onDeleteRows={
@@ -1505,6 +1532,7 @@ export function Workspace({
           open
           table={inserting.table}
           columns={inserting.columns}
+          initial={inserting.initial}
           onClose={() => setInserting(null)}
           onInsert={(values) => {
             const table = inserting.table;
