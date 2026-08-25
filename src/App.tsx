@@ -16,6 +16,7 @@ import { useConnections } from "./store/connections";
 import { useSettings } from "./store/settings";
 import { useUpdates } from "./store/updates";
 import { useCommands } from "./store/commands";
+import { useWorkspace } from "./store/workspace";
 import type { ConnectionConfig } from "./lib/types";
 
 export default function App() {
@@ -51,8 +52,11 @@ export default function App() {
   const checkForUpdates = useSettings((s) => s.checkForUpdates);
   const checkUpdate = useUpdates((s) => s.check);
   const update = useUpdates((s) => s.available);
+  const rowDetails = useSettings((s) => s.rowDetails);
+  const setRowDetails = useSettings((s) => s.setRowDetails);
   const setPaletteOpen = useCommands((s) => s.setOpen);
   const registerCommands = useCommands((s) => s.register);
+  const reconnect = useWorkspace((s) => s.reconnect);
 
   useEffect(() => {
     void init();
@@ -107,6 +111,14 @@ export default function App() {
         shortcut: "Ctrl+,",
         run: () => setSettingsOpen(true),
       },
+      // The panel has a button of its own on the grid's toolbar; this is the
+      // way to it that does not involve finding a 13px icon.
+      {
+        id: "app.row-details",
+        title: rowDetails ? "Hide row details" : "Show row details",
+        group: "View",
+        run: () => setRowDetails(!rowDetails),
+      },
       ...connections.map((c) => ({
         id: `app.open.${c.id}`,
         title: open.has(c.id) ? `Go to ${c.name}` : `Connect to ${c.name}`,
@@ -116,8 +128,21 @@ export default function App() {
           if (!open.has(c.id)) void connect(c.id);
         },
       })),
+      // Only where there is a session to rebuild. On a connection that was
+      // never opened this would be a second, worse-named Connect.
+      ...connections
+        .filter((c) => open.has(c.id))
+        .map((c) => ({
+          id: `app.reconnect.${c.id}`,
+          title: `Reconnect to ${c.name}`,
+          group: "Connection",
+          run: () => {
+            select(c.id);
+            void reconnect(c.id);
+          },
+        })),
     ]);
-  }, [registerCommands, connections, open, select, connect]);
+  }, [registerCommands, connections, open, select, connect, reconnect, rowDetails, setRowDetails]);
 
   const selected = connections.find((c) => c.id === selectedId) ?? null;
 

@@ -37,6 +37,7 @@ interface SettingsState extends Settings {
   setEditorRatio: (ratio: number) => void;
   setPageSize: (rows: number) => void;
   setStripedRows: (striped: boolean) => void;
+  setRowDetails: (open: boolean) => void;
   setCheckForUpdates: (check: boolean) => void;
   reset: () => void;
 }
@@ -97,6 +98,7 @@ export const useSettings = create<SettingsState>((set, get) => {
       editorRatio,
       pageSize,
       stripedRows,
+      rowDetails,
       checkForUpdates,
     } = get();
     const next: Settings = {
@@ -107,6 +109,7 @@ export const useSettings = create<SettingsState>((set, get) => {
       editorRatio,
       pageSize,
       stripedRows,
+      rowDetails,
       checkForUpdates,
       ...changes,
     };
@@ -151,6 +154,7 @@ export const useSettings = create<SettingsState>((set, get) => {
     setEditorRatio: (editorRatio) => commit({ editorRatio: clampRatio(editorRatio) }),
     setPageSize: (pageSize) => commit({ pageSize: clampPageSize(pageSize) }),
     setStripedRows: (stripedRows) => commit({ stripedRows }),
+    setRowDetails: (rowDetails) => commit({ rowDetails }),
     setCheckForUpdates: (checkForUpdates) => commit({ checkForUpdates }),
     reset: () => commit(DEFAULT_SETTINGS),
   };

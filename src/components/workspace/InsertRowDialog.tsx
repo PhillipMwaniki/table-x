@@ -21,19 +21,43 @@ export function InsertRowDialog({
   open,
   table,
   columns,
+  initial,
   onClose,
   onInsert,
 }: {
   open: boolean;
   table: string;
   columns: ColumnDef[];
+  /**
+   * Values to open with, by column name, for duplicating an existing row.
+   *
+   * Null means that field starts explicitly NULL rather than omitted, which is
+   * the distinction the whole form is built around: a duplicate of a row whose
+   * `deleted_at` is NULL should carry that NULL rather than let a default fill
+   * it in with something else.
+   *
+   * Only mounted forms are filled in, so this is read once. The dialog is
+   * mounted when it opens and unmounted when it closes.
+   */
+  initial?: Record<string, string | null> | undefined;
   onClose: () => void;
   onInsert: (values: [string, Value][]) => void;
 }) {
-  /** Only the fields someone actually typed into. */
-  const [entered, setEntered] = useState<Record<string, string>>({});
+  /** Only the fields someone actually typed into — or arrived filled in. */
+  const [entered, setEntered] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      Object.entries(initial ?? {}).filter((pair): pair is [string, string] => pair[1] !== null),
+    ),
+  );
   /** Fields explicitly set to NULL, which is different from left blank. */
-  const [nulled, setNulled] = useState<ReadonlySet<string>>(new Set());
+  const [nulled, setNulled] = useState<ReadonlySet<string>>(
+    () =>
+      new Set(
+        Object.entries(initial ?? {})
+          .filter(([, value]) => value === null)
+          .map(([name]) => name),
+      ),
+  );
 
   const required = useMemo(
     () =>
@@ -67,8 +91,12 @@ export function InsertRowDialog({
     <Dialog
       open={open}
       onClose={onClose}
-      title={`New row in ${table}`}
-      description="Fields left blank are omitted, so the server applies its own defaults."
+      title={initial ? `Duplicate row in ${table}` : `New row in ${table}`}
+      description={
+        initial
+          ? "Filled in from the row you copied. Change whatever has to differ — a key, usually — before inserting."
+          : "Fields left blank are omitted, so the server applies its own defaults."
+      }
       width="wide"
       footer={
         <div className="flex items-center gap-2">

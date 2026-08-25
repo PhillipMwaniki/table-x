@@ -19,6 +19,17 @@ interface ConnectionState {
   open: Set<string>;
   /** Ids currently connecting or disconnecting, for per-row spinners. */
   busy: Set<string>;
+  /**
+   * Ids whose link has failed under us.
+   *
+   * A session the backend still lists as open but that the network has taken
+   * away: the socket is gone, and everything sent down it will fail until it is
+   * rebuilt. Held separately from `open` rather than folded into it, because the
+   * two mean different things to the UI — the tabs, results, and history of a
+   * broken connection are still worth showing, and closing the workspace over a
+   * dropped Wi-Fi connection would throw away work the user can still recover.
+   */
+  broken: Set<string>;
   selectedId: string | null;
   loading: boolean;
   error: string | null;
@@ -34,6 +45,15 @@ interface ConnectionState {
   remove: (id: string) => Promise<void>;
   connect: (id: string) => Promise<void>;
   disconnect: (id: string) => Promise<void>;
+  /**
+   * Rebuild the link for a connection, keeping its place.
+   *
+   * Returns whether it worked, so a caller can decide what to do next rather
+   * than having to re-read the store to find out.
+   */
+  reconnect: (id: string) => Promise<boolean>;
+  /** Record that this connection's link has failed. */
+  markBroken: (id: string) => void;
   clearError: () => void;
 }
 
@@ -54,6 +74,7 @@ export const useConnections = create<ConnectionState>((set, get) => ({
   connections: [],
   open: new Set(),
   busy: new Set(),
+  broken: new Set(),
   selectedId: null,
   loading: true,
   error: null,
@@ -101,7 +122,7 @@ export const useConnections = create<ConnectionState>((set, get) => ({
     set((s) => ({ busy: withId(s.busy, id, true), error: null }));
     try {
       await ipc.connect(id);
-      set((s) => ({ open: withId(s.open, id, true) }));
+      set((s) => ({ open: withId(s.open, id, true), broken: withId(s.broken, id, false) }));
     } catch (e) {
       set({ error: message(e) });
     } finally {
@@ -113,11 +134,51 @@ export const useConnections = create<ConnectionState>((set, get) => ({
     set((s) => ({ busy: withId(s.busy, id, true) }));
     try {
       await ipc.disconnect(id);
-      set((s) => ({ open: withId(s.open, id, false) }));
+      set((s) => ({ open: withId(s.open, id, false), broken: withId(s.broken, id, false) }));
     } catch (e) {
       set({ error: message(e) });
     } finally {
       set((s) => ({ busy: withId(s.busy, id, false) }));
     }
   },
+
+  reconnect: async (id) => {
+    set((s) => ({ busy: withId(s.busy, id, true), error: null }));
+    try {
+      await ipc.reconnect(id);
+      // `open` is set rather than left alone: reconnecting is also how a
+      // connection that was closed by a failure gets back, and the backend has
+      // a live session either way by the time this resolves.
+      set((s) => ({ open: withId(s.open, id, true), broken: withId(s.broken, id, false) }));
+      return true;
+    } catch (e) {
+      // Still broken, and still marked as such — the server has not come back
+      // yet, and the button that offers to try again must stay in front of the
+      // user rather than disappearing on the first failed attempt.
+      set((s) => ({ error: message(e), broken: withId(s.broken, id, true) }));
+      return false;
+    } finally {
+      set((s) => ({ busy: withId(s.busy, id, false) }));
+    }
+  },
+
+  markBroken: (id) => set((s) => ({ broken: withId(s.broken, id, true) })),
 }));
+
+/**
+ * Record a failed call against its connection, when the link itself was at fault.
+ *
+ * Anything that reaches the backend through a connection id can hand its error
+ * here, whichever corner of the UI caught it. A broken link is rarely noticed
+ * first in a query result — more often it is a schema tree that will not expand
+ * — and the offer to rebuild it should not depend on which call happened to be
+ * the one that hit the dead socket.
+ *
+ * Failures of any other kind are left alone: a syntax error says nothing about
+ * the connection.
+ */
+export function noteLinkFailure(connectionId: string, e: unknown): void {
+  if (e instanceof IpcError && e.category === "connection") {
+    useConnections.getState().markBroken(connectionId);
+  }
+}

@@ -111,6 +111,15 @@ export interface Settings {
    */
   stripedRows: boolean;
   /**
+   * Show the selected row's fields beside the grid.
+   *
+   * One setting for the whole app rather than one per tab: whether you read a
+   * row across or down is a habit, and a panel that had to be reopened on every
+   * tab would be a panel nobody kept open. Off by default, because the grid is
+   * what most results are for and the panel costs it width.
+   */
+  rowDetails: boolean;
+  /**
    * Ask the release channel, once a day, whether a newer version exists.
    *
    * A setting rather than simply on, because it is the only request this app
@@ -141,6 +150,7 @@ export const DEFAULT_SETTINGS: Settings = {
   editorRatio: 0.38,
   pageSize: 1000,
   stripedRows: true,
+  rowDetails: false,
   checkForUpdates: true,
 };
 
@@ -243,6 +253,7 @@ export function normalize(stored: unknown): Settings {
     // rather than turning banding on because "false" is truthy.
     stripedRows:
       typeof raw.stripedRows === "boolean" ? raw.stripedRows : DEFAULT_SETTINGS.stripedRows,
+    rowDetails: typeof raw.rowDetails === "boolean" ? raw.rowDetails : DEFAULT_SETTINGS.rowDetails,
     checkForUpdates:
       typeof raw.checkForUpdates === "boolean"
         ? raw.checkForUpdates

@@ -200,7 +200,7 @@ mod tests {
 pub async fn delete_connection(state: tauri::State<'_, AppState>, id: String) -> IpcResult<()> {
     // Drop the live session first: leaving an open socket for a connection the
     // user just deleted would keep querying a database they can no longer see.
-    state.sessions.remove(&id).await?;
+    state.sessions.remove(&id).await;
 
     let mut connections = state.connections.lock().await;
     let Some(index) = connections.iter().position(|c| c.id == id) else {
@@ -233,13 +233,58 @@ pub async fn delete_connection(state: tauri::State<'_, AppState>, id: String) ->
 /// the connection is configured to use one.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn connect(state: tauri::State<'_, AppState>, id: String) -> IpcResult<()> {
-    let config = state.config_for(&id).await?;
+    open_session(&state, &id, None).await
+}
+
+/// Rebuild a link that has broken, in place.
+///
+/// A dropped TCP connection cannot be revived: the socket is gone, and so, in
+/// most cases, is the SSH tunnel that carried it — a tunnel is itself a TCP
+/// connection to the bastion, and whatever killed one usually killed both. So
+/// this opens a genuinely new session, tunnel included, under the same
+/// connection id. Everything the user is looking at — tabs, results, history,
+/// the transaction indicator — is keyed by that id and stays where it is.
+///
+/// Two things are deliberately *not* carried over. The session comes back on
+/// the database it was pointed at rather than the config's default, because a
+/// silent move to another database is how the wrong statement gets run against
+/// the wrong data. And any transaction is gone: the server rolled it back when
+/// the socket died, and the fresh session says so rather than showing a badge
+/// over a transaction that no longer exists.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn reconnect(state: tauri::State<'_, AppState>, id: String) -> IpcResult<()> {
+    // A connection whose session is already gone — closed by an earlier
+    // disconnect, or never opened — reconnects to the config's own database.
+    // That is exactly what connecting does, so it is not an error here.
+    let database = match state.sessions.get(&id).await {
+        Ok(session) => session.database().await,
+        Err(_) => None,
+    };
+    open_session(&state, &id, database).await
+}
+
+/// Open a fresh session and register it, replacing whatever was there.
+///
+/// `database` overrides the saved config's, for a reconnect that has to come
+/// back where it was. The old session is closed by the registry as it is
+/// displaced, so a reconnect leaks neither socket nor tunnel.
+async fn open_session(state: &AppState, id: &str, database: Option<String>) -> IpcResult<()> {
+    let mut config = state.config_for(id).await?;
     let driver = state.drivers.get(&config.driver)?;
     let secret = secrets::get(&config.keychain_key())?;
+    if database.is_some() {
+        config.database = database;
+    }
 
-    let (config, tunnel) = establish_tunnel(&config).await?;
-    let connection = driver.connect(&config, secret.as_deref()).await?;
-    state.sessions.insert(&id, connection, tunnel).await;
+    let (target, tunnel) = establish_tunnel(&config).await?;
+    // Opened before the old session is displaced: if the server is still
+    // unreachable, the user keeps whatever they had rather than being left with
+    // nothing at all and a second error to read.
+    let connection = driver.connect(&target, secret.as_deref()).await?;
+    state
+        .sessions
+        .insert(id, connection, tunnel, config.database)
+        .await;
     Ok(())
 }
 
@@ -353,7 +398,7 @@ pub async fn test_connection(
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn disconnect(state: tauri::State<'_, AppState>, id: String) -> IpcResult<()> {
-    state.sessions.remove(&id).await?;
+    state.sessions.remove(&id).await;
     Ok(())
 }
 
@@ -528,7 +573,13 @@ pub async fn use_database(
     {
         let mut guard = session.connection.lock().await;
         match guard.use_database(&database).await {
-            Ok(()) => return Ok(database),
+            Ok(()) => {
+                drop(guard);
+                // So a reconnect after this comes back here rather than on the
+                // database the connection was originally saved with.
+                session.note_database(Some(database.clone())).await;
+                return Ok(database);
+            }
             // Fall through to the reconnect below. Any other failure is real —
             // a database that does not exist, or one this login cannot open —
             // and reconnecting would only produce the same error less clearly.
@@ -554,7 +605,7 @@ pub async fn use_database(
     // reached, the user keeps the session they had rather than being left with
     // none at all.
     let connection = driver.connect(&target, secret.as_deref()).await?;
-    session.replace(connection).await;
+    session.replace(connection, Some(database.clone())).await;
     Ok(database)
 }
 
@@ -1145,6 +1196,55 @@ pub async fn export_rows(
         rows: request.rows,
         quote,
     })?)
+}
+
+/// As [`export_rows`], but returning the text instead of writing it.
+#[derive(Deserialize)]
+pub struct RowTextArgs {
+    pub connection_id: String,
+    pub format: tablex_core::export::Format,
+    pub table: String,
+    pub columns: Vec<tablex_core::result::Column>,
+    pub rows: Vec<Vec<tablex_core::Value>>,
+    /// Whether CSV and TSV name their columns on the first line. Absent means
+    /// they do, which is what a file export does.
+    #[serde(default = "yes")]
+    pub header: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// Rows as text, for the clipboard.
+///
+/// Formatted here rather than in the webview so that a copied `INSERT` is
+/// quoted and escaped by the code that already knows how — including the
+/// identifier quote this particular engine uses, which the frontend has no
+/// business knowing.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn format_rows(
+    state: tauri::State<'_, AppState>,
+    request: RowTextArgs,
+) -> IpcResult<String> {
+    let config = state.config_for(&request.connection_id).await?;
+    let quote = state
+        .drivers
+        .get(&config.driver)?
+        .info()
+        .capabilities
+        .identifier_quote;
+
+    Ok(crate::export::rows_to_text(
+        crate::export::RowTextRequest {
+            format: request.format,
+            table: request.table,
+            columns: request.columns,
+            rows: request.rows,
+            quote,
+            header: request.header,
+        },
+    )?)
 }
 
 /// Who exists on this server, and what each of them can reach.

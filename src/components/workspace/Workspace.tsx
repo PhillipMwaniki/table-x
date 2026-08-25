@@ -35,6 +35,7 @@ import { ipc, IpcError } from "@/lib/ipc";
 import { hasOrderBy } from "@/lib/paging";
 import { readOnlyExplanation } from "@/lib/guarantees";
 import { drop, selectFrom, truncate } from "@/lib/statements";
+import { formatValue } from "@/lib/value";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useHistory } from "@/store/history";
 import { useSnippets } from "@/store/snippets";
@@ -100,6 +101,7 @@ export function Workspace({
     setTabError,
     setTabNotice,
     switchDatabase,
+    reconnect,
     applyEdit,
     goToPage,
     cancelQuery,
@@ -144,7 +146,12 @@ export function Workspace({
   } | null>(null);
 
   /** The table an insert form is open for, with its columns. */
-  const [inserting, setInserting] = useState<{ table: string; columns: ColumnDef[] } | null>(null);
+  const [inserting, setInserting] = useState<{
+    table: string;
+    columns: ColumnDef[];
+    /** Values to open the form with, by column name. Null means NULL. */
+    initial?: Record<string, string | null> | undefined;
+  } | null>(null);
 
   /** Rows picked in the grid, waiting for a format to be chosen. */
   const [exporting, setExporting] = useState<Value[][] | null>(null);
@@ -155,6 +162,9 @@ export function Workspace({
   // identity — which is how this component learned to tear itself down.
   const connections = useConnections((s) => s.connections);
   const openConnections = useConnections((s) => s.open);
+  /** Whether this connection's link has failed, and whether it is being rebuilt. */
+  const linkLost = useConnections((s) => s.broken.has(connection.id));
+  const reconnecting = useConnections((s) => s.busy.has(connection.id));
 
   const [compare, setCompare] = useState<{
     connectionId: string;
@@ -280,14 +290,27 @@ export function Workspace({
    * including the defaults and generated keys that decide which fields can be
    * left alone.
    */
-  const beginInsert = async () => {
+  const beginInsert = async (from?: Value[]) => {
     const current = activeTab(connection.id);
-    const source = sourceOf(current?.outcome?.statements[current.activeStatement]);
-    if (!current || !source) return;
+    const result = current?.outcome?.statements[current.activeStatement];
+    const source = sourceOf(result);
+    if (!current || !source || result?.type !== "rows") return;
 
     try {
       const detail = await ipc.tableDetail(connection.id, source.table, source.schema);
-      setInserting({ table: detail.name, columns: detail.columns });
+      // Duplicating fills the form in from the row that was pointed at, keyed
+      // by column *name* rather than position: the query's columns and the
+      // table's are not the same list, and a `SELECT` of three columns out of
+      // twenty must not fill in the first three fields of the form.
+      const initial = from
+        ? Object.fromEntries(
+            result.columns.map((column, i): [string, string | null] => {
+              const value = from[i];
+              return [column.name, !value || value.kind === "null" ? null : formatValue(value)];
+            }),
+          )
+        : undefined;
+      setInserting({ table: detail.name, columns: detail.columns, initial });
     } catch (e) {
       reportJobFailure(e as IpcError, current.id, "Reading the table");
     }
@@ -386,6 +409,49 @@ export function Workspace({
       // refreshed either way rather than left describing rows that are gone.
       await run(connection.id, current.id);
       reportJobFailure(e as IpcError, current.id, `Delete after ${removed} row(s)`);
+    }
+  };
+
+  /**
+   * Put rows on the clipboard in one of the export formats.
+   *
+   * The text is built by the backend rather than here. An INSERT copied out of
+   * this menu is a statement somebody will paste and run, and identifier
+   * quoting, string escaping and NULL are exactly what a second implementation
+   * in the webview would get subtly wrong -- so it uses the writers a file
+   * export already uses.
+   */
+  const copyRows = async (request: {
+    rows: Value[][];
+    format: ExportFormat;
+    table: string;
+    header: boolean;
+  }) => {
+    const { rows, format, table, header } = request;
+    const current = activeTab(connection.id);
+    const result = current?.outcome?.statements[current.activeStatement];
+    if (!current || result?.type !== "rows" || rows.length === 0) return;
+
+    try {
+      const text = await ipc.formatRows({
+        connection_id: connection.id,
+        format,
+        table,
+        header,
+        columns: result.columns,
+        rows,
+      });
+      await navigator.clipboard.writeText(text);
+      // Said out loud, because a clipboard write leaves nothing on screen: the
+      // only other way to find out whether it worked is to paste somewhere and
+      // look.
+      setTabNotice(
+        connection.id,
+        current.id,
+        `Copied ${rows.length} row${rows.length === 1 ? "" : "s"} as ${format.toUpperCase()}.`,
+      );
+    } catch (e) {
+      setTabError(connection.id, current.id, `Could not copy: ${(e as Error).message}`);
     }
   };
 
@@ -954,6 +1020,35 @@ export function Workspace({
         <TabBar connectionId={connection.id} />
         <ExportProgress />
 
+        {/* A broken link is a fact about the connection, not about whichever tab
+            happens to be in front, so it is reported once here rather than in
+            every tab's error banner — and it stays put while the user moves
+            between tabs looking for what survived.
+
+            Warn rather than danger: nothing has been lost yet. The tabs, the
+            statements, and the last results are all still here, and saying so
+            is most of the reason this strip exists. */}
+        {linkLost && (
+          <div
+            role="alert"
+            className="flex shrink-0 items-center gap-2 border-b border-warn/30 bg-warn/10 px-2 py-1"
+          >
+            <span className="min-w-0 flex-1 text-[11px] text-warn" data-selectable>
+              The link to this server is gone. Your tabs and results are kept — reconnect to run
+              anything.
+            </span>
+            <Button
+              variant="secondary"
+              className="h-6 shrink-0"
+              busy={reconnecting}
+              onClick={() => void reconnect(connection.id)}
+              title="Open a new link to the server, keeping these tabs and results"
+            >
+              Reconnect
+            </Button>
+          </div>
+        )}
+
         {tab ? (
           <>
             <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border bg-surface-1 px-2">
@@ -1290,6 +1385,8 @@ export function Workspace({
                             : undefined,
                       }}
                       onExportRows={(rows) => setExporting(rows)}
+                      onCopyRows={(request) => void copyRows(request)}
+                      onDuplicateRow={sourceOf(active) ? (row) => void beginInsert(row) : undefined}
                       readOnlyDetail={readOnlyDetail}
                       onInsertRow={active.editable ? () => void beginInsert() : undefined}
                       onDeleteRows={
@@ -1435,6 +1532,7 @@ export function Workspace({
           open
           table={inserting.table}
           columns={inserting.columns}
+          initial={inserting.initial}
           onClose={() => setInserting(null)}
           onInsert={(values) => {
             const table = inserting.table;

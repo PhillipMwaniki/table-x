@@ -256,8 +256,15 @@ export interface SchemaNode {
   qualified?: string | undefined;
 }
 
-/** File formats a table can be written out as. */
-export type ExportFormat = "csv" | "json" | "sql";
+/**
+ * Formats rows can be written out as.
+ *
+ * The first three are what a file export offers. `tsv` and `markdown` exist for
+ * the clipboard — one pastes into a spreadsheet, the other into a pull request —
+ * and are written by the same writers, so they would work as files too if a
+ * reason to offer them there ever turned up.
+ */
+export type ExportFormat = "csv" | "json" | "sql" | "tsv" | "markdown";
 
 /** A new row: only the columns the user filled in. */
 export interface RowInsert {

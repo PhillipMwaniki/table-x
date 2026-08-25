@@ -17,6 +17,7 @@ import {
   isInlineEditable,
   isNumeric,
   parseEdit,
+  unchanged,
 } from "@/lib/value";
 import { cx } from "../ui/primitives";
 import { FILTER_HINT, matchesFilter, parseFilter } from "@/lib/filter";
@@ -27,8 +28,13 @@ import { guaranteesFor } from "@/lib/guarantees";
 import type { Precision } from "@/lib/guarantees";
 import { GuaranteesPanel } from "./GuaranteesPanel";
 import { ChartView } from "./ChartView";
+import { RowDetails } from "./RowDetails";
+import { ContextMenu } from "../ui/ContextMenu";
+import type { MenuItem } from "../ui/ContextMenu";
+import { quickFilter, rowsForMenu, sourceTable } from "@/lib/rowcopy";
 import { useSettings } from "@/store/settings";
-import type { Column, ResultSet, Value } from "@/lib/types";
+import type { QuickFilter } from "@/lib/rowcopy";
+import type { Column, ExportFormat, ResultSet, Value } from "@/lib/types";
 
 const MIN_COL_WIDTH = 80;
 const MAX_INITIAL_COL_WIDTH = 320;
@@ -95,6 +101,8 @@ export function ResultGrid({
   readOnlyDetail,
   onInsertRow,
   onDeleteRows,
+  onCopyRows,
+  onDuplicateRow,
 }: {
   result: ResultSet;
   onEdit: (rowIndex: number, columnIndex: number, next: Value) => Promise<void>;
@@ -108,12 +116,39 @@ export function ResultGrid({
   onInsertRow?: (() => void) | undefined;
   /** Remove these rows, given by their index in the result. */
   onDeleteRows?: ((rowIndexes: number[]) => void) | undefined;
+  /**
+   * Put rows on the clipboard in one of the export formats.
+   *
+   * The grid decides which rows and which format; turning them into text is the
+   * backend's job, because an INSERT has to be quoted for the engine it will be
+   * run against.
+   */
+  onCopyRows?:
+    | ((request: {
+        rows: Value[][];
+        format: ExportFormat;
+        /** Named in generated INSERT statements. */
+        table: string;
+        /** Whether the delimited formats name their columns first. */
+        header: boolean;
+      }) => void)
+    | undefined;
+  /**
+   * Open an insert form filled in from this row.
+   *
+   * Absent where the result is not a single writable table — the same condition
+   * that decides whether a row can be added at all.
+   */
+  onDuplicateRow?: ((row: Value[]) => void) | undefined;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   // Row height and column widths are both measured in characters, so they have
   // to be recomputed when the data font size changes rather than read from CSS.
   const fontSize = useSettings((s) => s.dataFontSize);
   const striped = useSettings((s) => s.stripedRows);
+  // A preference rather than tab state: see `Settings.rowDetails`.
+  const detailsOpen = useSettings((s) => s.rowDetails);
+  const setDetailsOpen = useSettings((s) => s.setRowDetails);
   const rowHeight = rowHeightFor(fontSize);
   const [sort, setSort] = useState<Sort | null>(null);
   const [filter, setFilter] = useState("");
@@ -127,8 +162,24 @@ export function ResultGrid({
   const [cellError, setCellError] = useState<string | null>(null);
   /** Source indices of the picked rows. */
   const [selected, setSelected] = useState<ReadonlySet<number>>(EMPTY_SELECTION);
+  /**
+   * The row the details panel is showing, by source index.
+   *
+   * Separate from the selection, which is a set and answers a different
+   * question -- what to export or delete. This one is where the cursor is, and
+   * there is only ever one of it.
+   */
+  const [current, setCurrent] = useState<number | null>(null);
   /** Where the last plain click landed, so shift-click has a range to extend. */
   const anchor = useRef<number | null>(null);
+  /** Where a right-click landed, and on what. */
+  const [menu, setMenu] = useState<{
+    x: number;
+    y: number;
+    row: number;
+    /** Null when the right-click landed on the row number rather than a cell. */
+    col: number | null;
+  } | null>(null);
   const [showGuarantees, setShowGuarantees] = useState(false);
   /** Charting replaces the rows rather than sitting beside them: both want the
       whole pane, and half a grid next to half a chart serves neither. */
@@ -144,6 +195,12 @@ export function ResultGrid({
   useEffect(() => {
     setSelected(EMPTY_SELECTION);
     anchor.current = null;
+    // The first row rather than nothing: a panel that opens empty and waits to
+    // be told where to look is a panel that has to be explained.
+    setCurrent(result.rows.length > 0 ? 0 : null);
+    // A menu opened against row 4 of the previous result would act on row 4 of
+    // this one, which is a different row.
+    setMenu(null);
   }, [result]);
 
   // Column widths are measured from a sample of rows rather than every row:
@@ -237,6 +294,10 @@ export function ResultGrid({
       const entry = view[viewIndex];
       if (!entry) return;
 
+      // Picking rows and moving the cursor are the same gesture: the row you
+      // just clicked is the one you want to look at.
+      setCurrent(entry.index);
+
       setSelected((was) => {
         if (modifiers.shift && anchor.current !== null) {
           const from = view.findIndex((v) => v.index === anchor.current);
@@ -298,7 +359,7 @@ export function ResultGrid({
     if (!original) return setEditing(null);
 
     const next = parseEdit(draft, original);
-    if (formatValue(next) === formatValue(original) && next.kind === original.kind) {
+    if (unchanged(next, original)) {
       // Nothing changed — skip the round trip rather than writing an identical
       // value and pushing a no-op onto the undo stack.
       return setEditing(null);
@@ -327,7 +388,7 @@ export function ResultGrid({
     async (rowIndex: number, colIndex: number, next: Value) => {
       const original = result.rows[rowIndex]?.[colIndex];
       if (!original) return;
-      if (formatValue(next) === formatValue(original) && next.kind === original.kind) {
+      if (unchanged(next, original)) {
         setEditing(null);
         return;
       }
@@ -358,6 +419,175 @@ export function ResultGrid({
   }, [editing]);
 
   const totalWidth = widths.reduce((sum, w) => sum + w, 0);
+
+  /**
+   * What a right-click on a cell offers.
+   *
+   * Two subjects in the order the pointer implies: the value under it first,
+   * then the row it sits in. The row items are the export formats, because a
+   * row copied to the clipboard is wanted for the same reasons a file is —
+   * pasted into a ticket, a script, or another database — and because they are
+   * already written and already correct.
+   */
+  const menuItems = useMemo((): MenuItem[] => {
+    if (!menu) return [];
+
+    const items: MenuItem[] = [];
+    // Absent when the click landed on the row number, which points at a row and
+    // at no value in particular.
+    const col = menu.col;
+    const value = col === null ? undefined : result.rows[menu.row]?.[col];
+    if (value) {
+      items.push({
+        label: "Copy value",
+        onSelect: () => void navigator.clipboard?.writeText(formatValue(value)),
+      });
+    }
+
+    const indexes = rowsForMenu(menu.row, selected);
+    const rows = indexes.map((i) => result.rows[i]).filter((row): row is Value[] => Boolean(row));
+    const what = rows.length === 1 ? "row" : `${rows.length} rows`;
+    const table = sourceTable(result.columns);
+
+    if (onCopyRows && rows.length > 0) {
+      const copy = (format: ExportFormat, header: boolean) => () =>
+        onCopyRows({ rows, format, header, table: table ?? "rows" });
+
+      items.push({
+        label: `Copy ${what} as`,
+        items: [
+          // Plain text is tab-separated with no header, which is the same bytes
+          // a headerless TSV would be. Two items producing one result would be
+          // two items to choose between for no reason, so it is named the way
+          // people look for it and the TSV entry is the one with the header.
+          { label: "Plain text", onSelect: copy("tsv", false) },
+          { label: "TSV with header", onSelect: copy("tsv", true) },
+          { label: "CSV", onSelect: copy("csv", false) },
+          { label: "CSV with header", onSelect: copy("csv", true) },
+          // The rest carry their column names inside the format itself: a
+          // Markdown table without a header row is not a table, JSON's keys
+          // are the names, and an INSERT lists them in the statement.
+          { label: "Markdown table", separated: true, onSelect: copy("markdown", true) },
+          { label: "JSON", onSelect: copy("json", true) },
+          {
+            label: "INSERT statement",
+            // Offered greyed rather than hidden: the reason it cannot be built
+            // is worth knowing, and a menu whose items move around depending on
+            // the query is a menu you have to read every time.
+            disabledReason: table
+              ? undefined
+              : "These rows do not come from one table, so there is no table to insert them into",
+            onSelect: table ? copy("sql", true) : undefined,
+          },
+        ],
+      });
+    }
+
+    // Editing, for the cell that was actually pointed at. A menu that set forty
+    // cells because forty rows were selected would be a menu that needs an undo
+    // per cell.
+    if (value && col !== null) {
+      const column = result.columns[col];
+      const why = result.editable
+        ? undefined
+        : (readOnlyDetail?.reason ?? "This result is read-only");
+      items.push({
+        label: "Set value",
+        separated: true,
+        disabledReason: why,
+        items: [
+          {
+            label: "NULL",
+            disabledReason:
+              why ?? (column?.nullable === false ? "This column does not accept NULL" : undefined),
+            onSelect: () => void commitValue(menu.row, col, { kind: "null" }),
+          },
+          {
+            // The one edit the grid cannot express: clearing a text cell there
+            // means the empty string, and there is no way to type NULL.
+            label: "Empty text",
+            disabledReason: why,
+            onSelect: () => void commitValue(menu.row, col, { kind: "text", value: "" }),
+          },
+        ],
+      });
+    }
+
+    if (onDuplicateRow) {
+      const row = result.rows[menu.row];
+      items.push({
+        label: "Duplicate row…",
+        separated: !value,
+        disabledReason: table ? undefined : "These rows do not come from one table",
+        // A form rather than a straight insert: the copy usually collides with
+        // the original on a key, and the place to settle that is before the
+        // statement runs rather than in the error it returns.
+        onSelect: row && table ? () => onDuplicateRow(row) : undefined,
+      });
+    }
+
+    if (value && col !== null) {
+      const text = formatValue(value);
+      const brief = text.length > 24 ? `${text.slice(0, 24)}…` : text;
+      const isNull = value.kind === "null";
+      const setFilter = (kind: QuickFilter) => () =>
+        setColumnFilters((was) => ({ ...was, [col]: quickFilter(kind, text) }));
+
+      items.push({
+        label: "Quick filter",
+        separated: true,
+        items: [
+          // Against NULL, "equals" and "contains" are questions with no useful
+          // answer — every row that has a value fails both — so a NULL cell is
+          // offered the two tests that do apply.
+          ...(isNull
+            ? []
+            : [
+                { label: `Equals ${brief}`, onSelect: setFilter("equals") },
+                { label: `Not ${brief}`, onSelect: setFilter("not") },
+                { label: `Contains ${brief}`, onSelect: setFilter("contains") },
+              ]),
+          { label: "Is NULL", separated: !isNull, onSelect: setFilter("null") },
+          { label: "Is not NULL", onSelect: setFilter("notNull") },
+          ...(columnFilters[col]
+            ? [
+                {
+                  label: "Clear this column's filter",
+                  separated: true,
+                  onSelect: () =>
+                    setColumnFilters((was) => {
+                      const next = { ...was };
+                      delete next[col];
+                      return next;
+                    }),
+                },
+              ]
+            : []),
+        ],
+      });
+    }
+
+    return items;
+  }, [
+    menu,
+    result.rows,
+    result.columns,
+    result.editable,
+    readOnlyDetail,
+    selected,
+    columnFilters,
+    commitValue,
+    onCopyRows,
+    onDuplicateRow,
+  ]);
+
+  /**
+   * The row the panel is showing.
+   *
+   * Guarded rather than indexed blindly: a delete or a refetch can leave the
+   * cursor pointing past the end of a shorter result for one render.
+   */
+  const currentRow = current === null ? null : (result.rows[current] ?? null);
 
   // The value under an open panel or viewer, if any.
   const panelValue = editing ? result.rows[editing.row]?.[editing.col] : undefined;
@@ -402,6 +632,8 @@ export function ResultGrid({
         onExplain={() => setShowGuarantees(true)}
         onChart={() => setCharting(true)}
         onInsertRow={onInsertRow}
+        detailsOpen={detailsOpen}
+        onToggleDetails={() => setDetailsOpen(!detailsOpen)}
         onDeleteSelected={
           onDeleteRows
             ? () =>
@@ -420,180 +652,232 @@ export function ResultGrid({
         </div>
       )}
 
-      <div ref={scroller} className="min-h-0 flex-1 overflow-auto">
-        <div style={{ width: totalWidth, minWidth: "100%" }}>
-          {/* Header stays put while the body scrolls under it. */}
-          <div className="sticky top-0 z-10 flex border-b border-border bg-surface-2">
-            <div
-              style={{ width: GUTTER_WIDTH }}
-              className="sticky left-0 z-20 shrink-0 border-r border-border bg-surface-2 p-0"
-            >
-              <button
-                type="button"
-                onClick={() =>
-                  setSelected((was) =>
-                    was.size === view.length && view.length > 0
-                      ? EMPTY_SELECTION
-                      : new Set(view.map((entry) => entry.index)),
-                  )
-                }
-                // Everything *visible*, which with a filter on is not
-                // everything fetched. The count beside it says which.
-                title={
-                  selected.size === view.length && view.length > 0
-                    ? "Clear the selection"
-                    : "Select every row shown"
-                }
-                className="flex h-full w-full items-center justify-center text-[10px] text-text-muted hover:text-text"
-              >
-                {selected.size > 0 && selected.size === view.length ? "■" : "□"}
-              </button>
-            </div>
-            {result.columns.map((col, i) => (
-              <HeaderCell
-                key={`${col.name}-${i}`}
-                column={col}
-                width={widths[i] ?? MIN_COL_WIDTH}
-                sort={sort?.columnIndex === i ? sort.direction : null}
-                isKey={result.key_columns.includes(col.name)}
-                precision={guarantees.columns[i]?.precision ?? "none"}
-                onSort={() =>
-                  setSort((s) =>
-                    s?.columnIndex === i && s.direction === "asc"
-                      ? { columnIndex: i, direction: "desc" }
-                      : s?.columnIndex === i && s.direction === "desc"
-                        ? null
-                        : { columnIndex: i, direction: "asc" },
-                  )
-                }
-              />
-            ))}
-          </div>
-
-          {/* Filter row, directly under the names it filters — the association
-              is positional, so it needs no labels of its own. */}
-          <div className="sticky top-[var(--header-height,2.6rem)] z-10 flex border-b border-border bg-surface-1">
-            <div
-              style={{ width: GUTTER_WIDTH }}
-              className="sticky left-0 z-20 shrink-0 border-r border-border bg-surface-1"
-            />
-            {result.columns.map((col, i) => (
+      <div className="flex min-h-0 flex-1">
+        <div ref={scroller} className="min-h-0 flex-1 overflow-auto">
+          <div style={{ width: totalWidth, minWidth: "100%" }}>
+            {/* Header stays put while the body scrolls under it. */}
+            <div className="sticky top-0 z-10 flex border-b border-border bg-surface-2">
               <div
-                key={`filter-${col.name}-${i}`}
-                style={{ width: widths[i] ?? MIN_COL_WIDTH }}
-                className="shrink-0 border-r border-border p-0.5"
+                style={{ width: GUTTER_WIDTH }}
+                className="sticky left-0 z-20 shrink-0 border-r border-border bg-surface-2 p-0"
               >
-                <input
-                  value={columnFilters[i] ?? ""}
-                  onChange={(e) =>
-                    setColumnFilters((was) => {
-                      const next = { ...was };
-                      // Removed rather than stored empty, so the count of
-                      // active filters is simply the size of this object.
-                      if (e.target.value) next[i] = e.target.value;
-                      else delete next[i];
-                      return next;
-                    })
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSelected((was) =>
+                      was.size === view.length && view.length > 0
+                        ? EMPTY_SELECTION
+                        : new Set(view.map((entry) => entry.index)),
+                    )
                   }
-                  placeholder="filter"
-                  aria-label={`Filter ${col.name}`}
-                  title={FILTER_HINT}
-                  className={cx(
-                    "h-5 w-full rounded-sm border bg-surface-0 px-1 font-mono outline-none",
-                    "text-[length:calc(var(--text-data)*0.85)]",
-                    "placeholder:text-text-muted/40 focus:border-accent",
-                    columnFilters[i] ? "border-accent/60" : "border-transparent",
-                  )}
-                />
-              </div>
-            ))}
-          </div>
-
-          <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
-            {virtualizer.getVirtualItems().map((virtual) => {
-              const entry = view[virtual.index];
-              if (!entry) return null;
-              const { row, index: sourceIndex } = entry;
-              const isSelected = selected.has(sourceIndex);
-              // Banded on the row's position in the view, not its index in the
-              // result: under a filter or a sort those differ, and banding by
-              // the source index would put two of the same shade side by side —
-              // which is the one thing banding exists to prevent.
-              const banded = striped && virtual.index % 2 === 1;
-              return (
-                <div
-                  key={virtual.key}
-                  className={cx(
-                    "absolute flex border-b border-border/40",
-                    // Hover is a step above the band rather than equal to it, or
-                    // it would be invisible on every other row.
-                    isSelected
-                      ? "bg-accent/15"
-                      : cx(banded && "bg-surface-1", "hover:bg-surface-2"),
-                  )}
-                  style={{
-                    top: 0,
-                    left: 0,
-                    height: virtual.size,
-                    transform: `translateY(${virtual.start}px)`,
-                  }}
+                  // Everything *visible*, which with a filter on is not
+                  // everything fetched. The count beside it says which.
+                  title={
+                    selected.size === view.length && view.length > 0
+                      ? "Clear the selection"
+                      : "Select every row shown"
+                  }
+                  className="flex h-full w-full items-center justify-center text-[10px] text-text-muted hover:text-text"
                 >
-                  <div
-                    style={{ width: GUTTER_WIDTH }}
-                    onMouseDown={(e) => {
-                      // A shift-click inside a scroller selects text as well as
-                      // rows unless the default is refused.
-                      if (e.shiftKey) e.preventDefault();
-                      clickRow(virtual.index, {
-                        shift: e.shiftKey,
-                        toggle: e.ctrlKey || e.metaKey,
-                      });
-                    }}
-                    className={cx(
-                      "sticky left-0 z-10 shrink-0 cursor-pointer border-r border-border select-none",
-                      "text-right font-mono text-[10px] leading-[var(--row-height)] tabular-nums",
-                      isSelected
-                        ? "bg-accent/25 text-text"
-                        : cx(
-                            banded ? "bg-surface-2" : "bg-surface-1",
-                            "text-text-muted/60 hover:text-text",
-                          ),
-                    )}
-                    // The number is the row's place in the page, not its id —
-                    // and with an offset it continues from where the last page
-                    // ended rather than restarting at one.
-                    title={`Row ${(paging?.offset ?? 0) + sourceIndex + 1}`}
-                  >
-                    <span className="px-1">{(paging?.offset ?? 0) + sourceIndex + 1}</span>
-                  </div>
+                  {selected.size > 0 && selected.size === view.length ? "■" : "□"}
+                </button>
+              </div>
+              {result.columns.map((col, i) => (
+                <HeaderCell
+                  key={`${col.name}-${i}`}
+                  column={col}
+                  width={widths[i] ?? MIN_COL_WIDTH}
+                  sort={sort?.columnIndex === i ? sort.direction : null}
+                  isKey={result.key_columns.includes(col.name)}
+                  precision={guarantees.columns[i]?.precision ?? "none"}
+                  onSort={() =>
+                    setSort((s) =>
+                      s?.columnIndex === i && s.direction === "asc"
+                        ? { columnIndex: i, direction: "desc" }
+                        : s?.columnIndex === i && s.direction === "desc"
+                          ? null
+                          : { columnIndex: i, direction: "asc" },
+                    )
+                  }
+                />
+              ))}
+            </div>
 
-                  {row.map((cell, colIndex) => {
-                    const isEditing = editing?.row === sourceIndex && editing.col === colIndex;
-                    return (
-                      <Cell
-                        key={colIndex}
-                        value={cell}
-                        width={widths[colIndex] ?? MIN_COL_WIDTH}
-                        editable={result.editable}
-                        nullable={result.columns[colIndex]?.nullable !== false}
-                        editing={isEditing}
-                        saving={isEditing && saving}
-                        draft={draft}
-                        onDraft={setDraft}
-                        onBegin={() => beginEdit(sourceIndex, colIndex, cell)}
-                        onCommit={commit}
-                        onCommitValue={(next) => void commitValue(sourceIndex, colIndex, next)}
-                      />
-                    );
-                  })}
+            {/* Filter row, directly under the names it filters — the association
+              is positional, so it needs no labels of its own. */}
+            <div className="sticky top-[var(--header-height,2.6rem)] z-10 flex border-b border-border bg-surface-1">
+              <div
+                style={{ width: GUTTER_WIDTH }}
+                className="sticky left-0 z-20 shrink-0 border-r border-border bg-surface-1"
+              />
+              {result.columns.map((col, i) => (
+                <div
+                  key={`filter-${col.name}-${i}`}
+                  style={{ width: widths[i] ?? MIN_COL_WIDTH }}
+                  className="shrink-0 border-r border-border p-0.5"
+                >
+                  <input
+                    value={columnFilters[i] ?? ""}
+                    onChange={(e) =>
+                      setColumnFilters((was) => {
+                        const next = { ...was };
+                        // Removed rather than stored empty, so the count of
+                        // active filters is simply the size of this object.
+                        if (e.target.value) next[i] = e.target.value;
+                        else delete next[i];
+                        return next;
+                      })
+                    }
+                    placeholder="filter"
+                    aria-label={`Filter ${col.name}`}
+                    title={FILTER_HINT}
+                    className={cx(
+                      "h-5 w-full rounded-sm border bg-surface-0 px-1 font-mono outline-none",
+                      "text-[length:calc(var(--text-data)*0.85)]",
+                      "placeholder:text-text-muted/40 focus:border-accent",
+                      columnFilters[i] ? "border-accent/60" : "border-transparent",
+                    )}
+                  />
                 </div>
-              );
-            })}
+              ))}
+            </div>
+
+            <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
+              {virtualizer.getVirtualItems().map((virtual) => {
+                const entry = view[virtual.index];
+                if (!entry) return null;
+                const { row, index: sourceIndex } = entry;
+                const isSelected = selected.has(sourceIndex);
+                // Only marked while the panel is open. A cursor with nothing
+                // reading it is a highlight the user cannot account for.
+                const isCurrent = detailsOpen && sourceIndex === current;
+                // Banded on the row's position in the view, not its index in the
+                // result: under a filter or a sort those differ, and banding by
+                // the source index would put two of the same shade side by side —
+                // which is the one thing banding exists to prevent.
+                const banded = striped && virtual.index % 2 === 1;
+                return (
+                  <div
+                    key={virtual.key}
+                    // A click anywhere in the row moves the cursor, cells
+                    // included -- a cell opens for editing on the second click,
+                    // so the first is free to mean "look at this row".
+                    onMouseDown={() => setCurrent(sourceIndex)}
+                    className={cx(
+                      "absolute flex border-b border-border/40",
+                      // Hover is a step above the band rather than equal to it, or
+                      // it would be invisible on every other row.
+                      isSelected
+                        ? "bg-accent/15"
+                        : cx(banded && "bg-surface-1", "hover:bg-surface-2"),
+                      // Outlined rather than filled, so it reads as a cursor
+                      // beside a selection rather than as a paler selection.
+                      isCurrent && "ring-1 ring-accent/50 ring-inset",
+                    )}
+                    style={{
+                      top: 0,
+                      left: 0,
+                      height: virtual.size,
+                      transform: `translateY(${virtual.start}px)`,
+                    }}
+                  >
+                    <div
+                      style={{ width: GUTTER_WIDTH }}
+                      onMouseDown={(e) => {
+                        // A shift-click inside a scroller selects text as well as
+                        // rows unless the default is refused.
+                        if (e.shiftKey) e.preventDefault();
+                        clickRow(virtual.index, {
+                          shift: e.shiftKey,
+                          toggle: e.ctrlKey || e.metaKey,
+                        });
+                      }}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setCurrent(sourceIndex);
+                        setMenu({ x: e.clientX, y: e.clientY, row: sourceIndex, col: null });
+                      }}
+                      className={cx(
+                        "sticky left-0 z-10 shrink-0 cursor-pointer border-r border-border select-none",
+                        "text-right font-mono text-[10px] leading-[var(--row-height)] tabular-nums",
+                        isSelected
+                          ? "bg-accent/25 text-text"
+                          : cx(
+                              banded ? "bg-surface-2" : "bg-surface-1",
+                              "text-text-muted/60 hover:text-text",
+                            ),
+                      )}
+                      // The number is the row's place in the page, not its id —
+                      // and with an offset it continues from where the last page
+                      // ended rather than restarting at one.
+                      title={`Row ${(paging?.offset ?? 0) + sourceIndex + 1}`}
+                    >
+                      <span className="px-1">{(paging?.offset ?? 0) + sourceIndex + 1}</span>
+                    </div>
+
+                    {row.map((cell, colIndex) => {
+                      const isEditing = editing?.row === sourceIndex && editing.col === colIndex;
+                      return (
+                        <Cell
+                          key={colIndex}
+                          value={cell}
+                          width={widths[colIndex] ?? MIN_COL_WIDTH}
+                          editable={result.editable}
+                          nullable={result.columns[colIndex]?.nullable !== false}
+                          editing={isEditing}
+                          saving={isEditing && saving}
+                          draft={draft}
+                          onDraft={setDraft}
+                          onBegin={() => beginEdit(sourceIndex, colIndex, cell)}
+                          onCommit={commit}
+                          onCommitValue={(next) => void commitValue(sourceIndex, colIndex, next)}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            // The cursor follows the pointer, so the panel and
+                            // the menu are about the same row.
+                            setCurrent(sourceIndex);
+                            setMenu({
+                              x: e.clientX,
+                              y: e.clientY,
+                              row: sourceIndex,
+                              col: colIndex,
+                            });
+                          }}
+                        />
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
+
+        {detailsOpen && (
+          <RowDetails
+            columns={result.columns}
+            row={currentRow}
+            // The gutter's number, so the panel and the row it came from agree
+            // even on the second page.
+            rowNumber={current === null ? null : (paging?.offset ?? 0) + current + 1}
+            editable={result.editable}
+            onEdit={async (colIndex, next) => {
+              if (current === null) return;
+              // Straight to the grid's own edit path, rejection included: the
+              // panel shows the failure against the field that caused it rather
+              // than in the strip above the grid.
+              await onEdit(current, colIndex, next);
+            }}
+            onClose={() => setDetailsOpen(false)}
+          />
+        )}
       </div>
 
       {paging && <PagingBar paging={paging} rows={result.rows.length} />}
+
+      {menu && menuItems.length > 0 && (
+        <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />
+      )}
 
       <GuaranteesPanel
         open={showGuarantees}
@@ -710,6 +994,8 @@ function GridToolbar({
   onExplain,
   onChart,
   onInsertRow,
+  detailsOpen,
+  onToggleDetails,
   onDeleteSelected,
 }: {
   result: ResultSet;
@@ -724,6 +1010,9 @@ function GridToolbar({
   onExplain: () => void;
   onChart: () => void;
   onInsertRow?: (() => void) | undefined;
+  /** Whether the row panel is showing, and how to change that. */
+  detailsOpen: boolean;
+  onToggleDetails: () => void;
   onDeleteSelected?: (() => void) | undefined;
 }) {
   return (
@@ -820,6 +1109,26 @@ function GridToolbar({
         Chart
       </button>
 
+      {/* The connections pane's control, mirrored: the same window outline with
+          the divider on the right instead of the left. Filled while the panel
+          is hidden, which is the convention that button already set — the
+          button says which state you are in and not only what it would do.
+          Drawn rather than typed for the same reason: no font we can rely on
+          has a glyph that means "panel". */}
+      <button
+        onClick={onToggleDetails}
+        title={detailsOpen ? "Hide row details" : "Show row details"}
+        aria-label={detailsOpen ? "Hide row details" : "Show row details"}
+        aria-pressed={detailsOpen}
+        className="flex size-5 items-center justify-center rounded text-text-muted hover:bg-surface-3 hover:text-text"
+      >
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <rect x="1.5" y="2.5" width="13" height="11" rx="2" stroke="currentColor" />
+          <line x1="10" y1="2.5" x2="10" y2="13.5" stroke="currentColor" />
+          {!detailsOpen && <rect x="10" y="3" width="4" height="10" fill="currentColor" />}
+        </svg>
+      </button>
+
       <button
         onClick={onExplain}
         className="rounded px-1.5 py-0.5 text-text-muted underline decoration-dotted underline-offset-2 hover:bg-surface-3 hover:text-text"
@@ -900,6 +1209,7 @@ function Cell({
   onBegin,
   onCommit,
   onCommitValue,
+  onContextMenu,
 }: {
   value: Value;
   width: number;
@@ -914,6 +1224,7 @@ function Cell({
   onCommit: () => void;
   /** Commit a value directly, for controls where choosing is the edit. */
   onCommitValue: (next: Value) => void;
+  onContextMenu: (e: React.MouseEvent) => void;
 }) {
   if (editing) {
     const kind = editorFor(value);
@@ -958,6 +1269,7 @@ function Cell({
     <div
       style={{ width }}
       onDoubleClick={editable || value.kind === "bytes" ? onBegin : undefined}
+      onContextMenu={onContextMenu}
       className={cx(
         "shrink-0 truncate border-r border-border px-2 font-mono",
         "text-[length:var(--text-data)] leading-[var(--row-height)]",

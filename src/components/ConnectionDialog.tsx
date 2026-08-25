@@ -12,6 +12,7 @@ import { SshSection } from "./SshSection";
 import { Banner, Button, Checkbox, Field, Input, Select } from "./ui/primitives";
 import { ipc, IpcError } from "@/lib/ipc";
 import { folderNames, normalizeFolder } from "@/lib/folders";
+import { forDriver, retargetConfig } from "@/lib/connection";
 import { useConnections } from "@/store/connections";
 import type { ConnectionConfig, DriverInfo, TlsMode } from "@/lib/types";
 
@@ -26,6 +27,21 @@ const COLORS = [
   { value: "#4d8df5", label: "Blue" },
   { value: "#8e4ec6", label: "Purple" },
 ];
+
+/**
+ * The driver a new connection starts on.
+ *
+ * Not simply the first registered one, which is whichever module happens to be
+ * listed first in the registry — today ClickHouse, which is nobody's likely
+ * answer to "New connection". Drivers sit behind Cargo features, so a build
+ * without this one falls back to the first it does have rather than opening a
+ * form with no driver at all.
+ */
+const DEFAULT_DRIVER = "mysql";
+
+function defaultDriver(drivers: DriverInfo[]): DriverInfo | undefined {
+  return drivers.find((d) => d.id === DEFAULT_DRIVER) ?? drivers[0];
+}
 
 function blankConfig(driver: DriverInfo): ConnectionConfig {
   return {
@@ -87,13 +103,13 @@ export function ConnectionDialog({
   // next one.
   useEffect(() => {
     if (!open) return;
-    const first = drivers[0];
+    const starting = defaultDriver(drivers);
     if (editing) {
       setConfig({ ...editing });
       setSecret(KEEP_EXISTING);
       setSshSecrets([]);
-    } else if (first) {
-      setConfig(blankConfig(first));
+    } else if (starting) {
+      setConfig(blankConfig(starting));
       setSecret("");
       setSshSecrets([]);
     }
@@ -110,22 +126,17 @@ export function ConnectionDialog({
   const patch = (changes: Partial<ConnectionConfig>) =>
     setConfig((c) => (c ? { ...c, ...changes } : c));
 
-  /** Switching driver rewrites the transport fields but keeps the name and id. */
+  /**
+   * Switching driver keeps what was typed and moves only what the engine
+   * decides — see `retargetConfig`.
+   *
+   * The driver is the first control on the form and the one people get wrong,
+   * so it is changed after the rest is filled in at least as often as before.
+   */
   const changeDriver = (id: string) => {
     const next = drivers.find((d) => d.id === id);
     if (!next) return;
-    setConfig((c) =>
-      c
-        ? {
-            ...blankConfig(next),
-            id: c.id,
-            name: c.name,
-            folder: c.folder,
-            color: c.color,
-            read_only: c.read_only,
-          }
-        : c,
-    );
+    setConfig((c) => (c ? retargetConfig(c, driver, next) : c));
   };
 
   const nameError = config.name.trim() === "" ? "A name is required" : undefined;
@@ -156,7 +167,9 @@ export function ConnectionDialog({
     setTesting(true);
     setResult(null);
     try {
-      await ipc.testConnection(config, secretArg(), sshSecretsArg());
+      // The same shape that would be saved, so a test that passes is a test of
+      // the connection that gets stored rather than of a fuller one.
+      await ipc.testConnection(forDriver(config, driver), secretArg(), sshSecretsArg());
       setResult({ tone: "success", text: "Connected successfully." });
     } catch (e) {
       const err = e as IpcError;
@@ -175,7 +188,11 @@ export function ConnectionDialog({
     setSaving(true);
     setResult(null);
     try {
-      await onSaved({ ...config, name: config.name.trim() }, secretArg(), sshSecretsArg());
+      await onSaved(
+        forDriver({ ...config, name: config.name.trim() }, driver),
+        secretArg(),
+        sshSecretsArg(),
+      );
       onClose();
     } catch (e) {
       // Stay open on failure so the user's input is not thrown away.

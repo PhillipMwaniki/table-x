@@ -120,6 +120,20 @@ export function editText(value: Value): string {
 }
 
 /**
+ * Whether an edit would leave the cell as it already is.
+ *
+ * Compared as text and *only* as text. It is tempting to require the kinds to
+ * match too, and wrong: [`parseEdit`] deliberately re-kinds what it parses —
+ * every type it has no case for comes back as `text` — so a date column
+ * compared by kind never looks unchanged, and re-typing what was already there
+ * sends an UPDATE. Identical text is an identical value, whatever the two sides
+ * call themselves.
+ */
+export function unchanged(next: Value, original: Value): boolean {
+  return formatValue(next) === formatValue(original);
+}
+
+/**
  * Turn edited text back into a `Value`, preserving the original column's kind so
  * a numeric column stays numeric.
  *

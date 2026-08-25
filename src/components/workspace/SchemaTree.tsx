@@ -11,6 +11,7 @@ import { ipc } from "@/lib/ipc";
 import { Spinner, cx } from "../ui/primitives";
 import { matchesName, splitHighlight } from "@/lib/tree";
 import { useWorkspace } from "@/store/workspace";
+import { noteLinkFailure } from "@/store/connections";
 import type { NodeKind, SchemaNode } from "@/lib/types";
 
 /** Glyph per node kind. Text rather than icons keeps the tree dense and crisp. */
@@ -124,6 +125,9 @@ export function SchemaTree({
         if (!cancelled) setRoots(nodes);
       })
       .catch((e) => {
+        // A tree that will not load is often the first sign that the link has
+        // gone, so the failure is reported to the connection as well as here.
+        noteLinkFailure(connectionId, e);
         if (!cancelled) setRootError((e as Error).message);
       });
 
@@ -171,6 +175,7 @@ export function SchemaTree({
           };
         });
       } catch (e) {
+        noteLinkFailure(connectionId, e);
         setTree((t) => {
           const loading = new Set(t.loading);
           loading.delete(node.id);
@@ -209,6 +214,7 @@ export function SchemaTree({
           return { ...t, children: { ...t.children, [node.id]: children }, loading, failed };
         });
       } catch (e) {
+        noteLinkFailure(connectionId, e);
         setTree((t) => {
           const loading = new Set(t.loading);
           loading.delete(node.id);

@@ -408,6 +408,52 @@ pub struct RowExportRequest {
     pub quote: char,
 }
 
+/// The same rows, in the same formats, as text rather than a file.
+///
+/// Written by the same [`Writer`] a file export uses, which is the whole point:
+/// an `INSERT` copied to the clipboard is a statement somebody will paste and
+/// run, and quoting rules, escaping, and NULL are exactly the things a second
+/// implementation gets subtly wrong. There is no second implementation.
+///
+/// In memory rather than streamed because the clipboard is: what comes back is
+/// held in the webview and then in the system clipboard anyway, so there is
+/// nothing to gain by writing it in batches. A selection is what a person can
+/// pick out of a page, not a whole table.
+pub fn rows_to_text(request: RowTextRequest) -> Result<String> {
+    let mut buffer: Vec<u8> = Vec::new();
+    let mut writer = Writer::new(
+        &mut buffer,
+        request.format,
+        &request.columns,
+        &request.table,
+        request.quote,
+    );
+    // A file always names its columns; a clipboard often should not, because
+    // what is being pasted lands under columns that are already there.
+    if !request.header {
+        writer = writer.headerless();
+    }
+
+    let failed = |e: std::io::Error| Error::Io(format!("could not format the rows: {e}"));
+    writer.begin().map_err(failed)?;
+    writer.write_batch(&request.rows).map_err(failed)?;
+    writer.finish().map_err(failed)?;
+
+    String::from_utf8(buffer).map_err(|e| Error::Serde(format!("formatted rows are not text: {e}")))
+}
+
+/// As [`RowExportRequest`], without a path: the result is returned instead.
+pub struct RowTextRequest {
+    pub format: Format,
+    /// Used as the table name in generated `INSERT` statements.
+    pub table: String,
+    pub columns: Vec<Column>,
+    pub rows: Vec<Vec<Value>>,
+    pub quote: char,
+    /// Whether the delimited formats name their columns on the first line.
+    pub header: bool,
+}
+
 pub fn run_rows(request: RowExportRequest) -> Result<u64> {
     let file = std::fs::File::create(&request.path)
         .map_err(|e| Error::Io(format!("could not create {}: {}", request.path, e)))?;
@@ -565,6 +611,7 @@ mod tests {
                     statements: statements.clone(),
                 }),
                 None,
+                None,
             )
             .await;
 
@@ -691,5 +738,153 @@ mod tests {
             std::fs::read_to_string(dir.join("out.csv")).expect("read back"),
             "id\n"
         );
+    }
+
+    /// Columns for the clipboard tests.
+    fn text_columns() -> Vec<Column> {
+        ["id", "name"]
+            .into_iter()
+            .map(|name| Column {
+                name: name.into(),
+                type_name: "text".into(),
+                nullable: None,
+                source: None,
+            })
+            .collect()
+    }
+
+    fn text_rows() -> Vec<Vec<Value>> {
+        vec![
+            vec![Value::Int(1), Value::Text("O'Hara".into())],
+            vec![Value::Int(2), Value::Null],
+        ]
+    }
+
+    fn to_text(format: Format) -> String {
+        with_header(format, true)
+    }
+
+    fn with_header(format: Format, header: bool) -> String {
+        rows_to_text(RowTextRequest {
+            format,
+            table: "users".into(),
+            columns: text_columns(),
+            rows: text_rows(),
+            quote: '`',
+            header,
+        })
+        .expect("format")
+    }
+
+    #[test]
+    fn copied_inserts_are_quoted_by_the_engines_own_rules() {
+        // The point of formatting in Rust: this is a statement somebody will
+        // paste and run. The apostrophe has to be doubled, NULL has to be a
+        // keyword rather than the string "NULL", and the identifiers have to
+        // carry the quote this engine uses.
+        let sql = to_text(Format::Sql);
+        assert_eq!(
+            sql,
+            concat!(
+                "INSERT INTO `users` (`id`, `name`) VALUES (1, 'O''Hara');
+",
+                "INSERT INTO `users` (`id`, `name`) VALUES (2, NULL);
+",
+            )
+        );
+    }
+
+    #[test]
+    fn copied_csv_carries_its_header() {
+        // Pasted into a spreadsheet, a header is what makes the columns
+        // readable; an export writes one for the same reason.
+        assert_eq!(
+            to_text(Format::Csv),
+            "id,name
+1,O'Hara
+2,
+"
+        );
+    }
+
+    #[test]
+    fn copied_json_is_a_complete_document() {
+        // Not a fragment: the brackets are what make it pasteable into
+        // anything that reads JSON.
+        let json = to_text(Format::Json);
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        assert_eq!(parsed[0]["name"], "O'Hara");
+        assert!(parsed[1]["name"].is_null());
+    }
+
+    #[test]
+    fn copied_tsv_separates_with_tabs_and_can_skip_the_header() {
+        // Tab separated is what a spreadsheet pastes into columns without
+        // being asked, and what a chat window does not mangle.
+        assert_eq!(
+            with_header(Format::Tsv, true),
+            concat!("id\tname\n", "1\tO'Hara\n", "2\t\n")
+        );
+        // Without it, for pasting under columns that are already there.
+        assert_eq!(
+            with_header(Format::Tsv, false),
+            concat!("1\tO'Hara\n", "2\t\n")
+        );
+    }
+
+    #[test]
+    fn copied_csv_can_skip_its_header_too() {
+        assert_eq!(
+            with_header(Format::Csv, false),
+            concat!("1,O'Hara\n", "2,\n")
+        );
+    }
+
+    #[test]
+    fn a_copied_markdown_table_has_a_rule_and_says_null_out_loud() {
+        // The rule under the header is what makes it render as a table.
+        // NULL is written rather than left blank: an empty cell in a table
+        // somebody is reading says nothing at all.
+        assert_eq!(
+            to_text(Format::Markdown),
+            concat!(
+                "| id | name |\n",
+                "| --- | --- |\n",
+                "| 1 | O'Hara |\n",
+                "| 2 | NULL |\n",
+            )
+        );
+    }
+
+    #[test]
+    fn markdown_escapes_a_pipe_that_would_end_the_cell_early() {
+        let text = rows_to_text(RowTextRequest {
+            format: Format::Markdown,
+            table: "t".into(),
+            columns: text_columns(),
+            rows: vec![vec![Value::Int(1), Value::Text("a | b".into())]],
+            quote: '`',
+            header: true,
+        })
+        .expect("format");
+        // Unescaped, this row would render as three columns against a
+        // two-column header.
+        assert!(text.contains("| 1 | a \\| b |"), "{text}");
+    }
+
+    #[test]
+    fn tsv_flattens_a_value_that_would_shift_the_columns() {
+        let text = rows_to_text(RowTextRequest {
+            format: Format::Tsv,
+            table: "t".into(),
+            columns: text_columns(),
+            rows: vec![vec![Value::Int(1), Value::Text("a\tb\nc".into())]],
+            quote: '`',
+            header: false,
+        })
+        .expect("format");
+        // One line, two fields. A tab inside a value would otherwise make
+        // this row one column wider than every other row.
+        assert_eq!(text, "1\ta b c\n");
     }
 }

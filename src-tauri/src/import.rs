@@ -495,6 +495,7 @@ mod tests {
                     fail_on,
                 }),
                 None,
+                None,
             )
             .await;
 
