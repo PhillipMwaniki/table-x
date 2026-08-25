@@ -1,12 +1,16 @@
-//! Writing result rows out as CSV, JSON, or SQL.
+//! Writing result rows out as CSV, TSV, JSON, Markdown, or SQL.
 //!
 //! Every writer takes rows one batch at a time and writes them straight to a
 //! [`std::io::Write`], so an export is bounded by the size of a batch rather
 //! than the size of the table.
 //!
-//! The three formats disagree about almost everything that matters — what a
-//! NULL is, whether a number is quoted, what happens to a newline inside a
-//! value — so each one states its choice where it makes it.
+//! The formats disagree about almost everything that matters — what a NULL is,
+//! whether a number is quoted, what happens to a newline inside a value — so
+//! each one states its choice where it makes it.
+//!
+//! Three of them go to files, and all five to the clipboard. They are the same
+//! writers either way: a copied `INSERT` is a statement somebody will paste and
+//! run, and there is no version of "escape it correctly" worth writing twice.
 
 use crate::driver::RowSink;
 use crate::result::Column;
@@ -19,6 +23,11 @@ pub enum Format {
     Csv,
     Json,
     Sql,
+    /// Tab separated. The same shape as CSV without the quoting rules, which is
+    /// what a spreadsheet and most chat windows paste cleanly.
+    Tsv,
+    /// A pipe table, for pasting into a pull request or a ticket.
+    Markdown,
 }
 
 impl Format {
@@ -28,6 +37,8 @@ impl Format {
             Format::Csv => "csv",
             Format::Json => "json",
             Format::Sql => "sql",
+            Format::Tsv => "tsv",
+            Format::Markdown => "md",
         }
     }
 }
@@ -40,6 +51,12 @@ pub struct Writer<W: Write> {
     /// Table name used by the SQL writer's `INSERT INTO`.
     table: String,
     quote: char,
+    /// Whether the delimited formats name their columns on the first line.
+    ///
+    /// Always true for a file, where a reader has nothing else to go on. Not
+    /// always true for the clipboard, where the rows are as often being pasted
+    /// underneath columns that are already there.
+    header: bool,
     rows_written: u64,
 }
 
@@ -51,14 +68,23 @@ impl<W: Write> Writer<W> {
             columns: columns.iter().map(|c| c.name.clone()).collect(),
             table: table.to_string(),
             quote,
+            header: true,
             rows_written: 0,
         }
+    }
+
+    /// Leave out the header line. Delimited formats only — a Markdown table
+    /// without its header row is not a table, and JSON and SQL name their
+    /// columns on every row.
+    pub fn headerless(mut self) -> Self {
+        self.header = false;
+        self
     }
 
     /// Anything that precedes the first row.
     pub fn begin(&mut self) -> std::io::Result<()> {
         match self.format {
-            Format::Csv => {
+            Format::Csv if self.header => {
                 let header = self
                     .columns
                     .iter()
@@ -67,7 +93,30 @@ impl<W: Write> Writer<W> {
                     .join(",");
                 writeln!(self.sink, "{header}")
             }
+            Format::Tsv if self.header => {
+                let header = self
+                    .columns
+                    .iter()
+                    .map(|c| tsv_field(c))
+                    .collect::<Vec<_>>()
+                    .join("\t");
+                writeln!(self.sink, "{header}")
+            }
+            Format::Csv | Format::Tsv => Ok(()),
             Format::Json => writeln!(self.sink, "["),
+            Format::Markdown => {
+                let header = self
+                    .columns
+                    .iter()
+                    .map(|c| markdown_field(c))
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                // The rule under the header is what makes it a table rather
+                // than three lines that happen to contain pipes.
+                let rule = vec!["---"; self.columns.len().max(1)].join(" | ");
+                writeln!(self.sink, "| {header} |")?;
+                writeln!(self.sink, "| {rule} |")
+            }
             // The SQL writer names its columns on every statement instead, so
             // the file survives a table whose column order later changes.
             Format::Sql => Ok(()),
@@ -80,6 +129,18 @@ impl<W: Write> Writer<W> {
                 Format::Csv => {
                     let line = row.iter().map(csv_value).collect::<Vec<_>>().join(",");
                     writeln!(self.sink, "{line}")?;
+                }
+                Format::Tsv => {
+                    let line = row.iter().map(tsv_value).collect::<Vec<_>>().join("\t");
+                    writeln!(self.sink, "{line}")?;
+                }
+                Format::Markdown => {
+                    let line = row
+                        .iter()
+                        .map(markdown_value)
+                        .collect::<Vec<_>>()
+                        .join(" | ");
+                    writeln!(self.sink, "| {line} |")?;
                 }
                 Format::Json => {
                     // Commas go *before* each row but the first, so the file is
@@ -158,6 +219,45 @@ fn csv_value(value: &Value) -> String {
     match value {
         Value::Null => String::new(),
         other => csv_field(&other.to_string()),
+    }
+}
+
+/// One TSV field.
+///
+/// TSV has no quoting rule — that is the whole of its appeal and the whole of
+/// its limitation. A tab or a newline inside a value would move the columns
+/// under it, so both become a space: a value that reads slightly differently is
+/// a better outcome than a table that is silently one column wider on one row.
+fn tsv_field(text: &str) -> String {
+    text.replace(['\t', '\n', '\r'], " ")
+}
+
+/// A value as a TSV field. NULL is empty, as it is in CSV and for the same
+/// reason.
+fn tsv_value(value: &Value) -> String {
+    match value {
+        Value::Null => String::new(),
+        other => tsv_field(&other.to_string()),
+    }
+}
+
+/// One Markdown table cell.
+///
+/// A pipe would end the cell early and a newline would end the row, so both are
+/// dealt with: the pipe is escaped, which Markdown has a rule for, and the
+/// newline becomes a space, which it does not.
+fn markdown_field(text: &str) -> String {
+    text.replace('\\', "\\\\")
+        .replace('|', "\\|")
+        .replace(['\n', '\r'], " ")
+}
+
+/// A value as a Markdown cell. NULL is written out, because an empty cell in a
+/// table somebody is reading says nothing at all.
+fn markdown_value(value: &Value) -> String {
+    match value {
+        Value::Null => "NULL".to_string(),
+        other => markdown_field(&other.to_string()),
     }
 }
 

@@ -428,6 +428,11 @@ pub fn rows_to_text(request: RowTextRequest) -> Result<String> {
         &request.table,
         request.quote,
     );
+    // A file always names its columns; a clipboard often should not, because
+    // what is being pasted lands under columns that are already there.
+    if !request.header {
+        writer = writer.headerless();
+    }
 
     let failed = |e: std::io::Error| Error::Io(format!("could not format the rows: {e}"));
     writer.begin().map_err(failed)?;
@@ -445,6 +450,8 @@ pub struct RowTextRequest {
     pub columns: Vec<Column>,
     pub rows: Vec<Vec<Value>>,
     pub quote: char,
+    /// Whether the delimited formats name their columns on the first line.
+    pub header: bool,
 }
 
 pub fn run_rows(request: RowExportRequest) -> Result<u64> {
@@ -754,12 +761,17 @@ mod tests {
     }
 
     fn to_text(format: Format) -> String {
+        with_header(format, true)
+    }
+
+    fn with_header(format: Format, header: bool) -> String {
         rows_to_text(RowTextRequest {
             format,
             table: "users".into(),
             columns: text_columns(),
             rows: text_rows(),
             quote: '`',
+            header,
         })
         .expect("format")
     }
@@ -803,5 +815,76 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
         assert_eq!(parsed[0]["name"], "O'Hara");
         assert!(parsed[1]["name"].is_null());
+    }
+
+    #[test]
+    fn copied_tsv_separates_with_tabs_and_can_skip_the_header() {
+        // Tab separated is what a spreadsheet pastes into columns without
+        // being asked, and what a chat window does not mangle.
+        assert_eq!(
+            with_header(Format::Tsv, true),
+            concat!("id\tname\n", "1\tO'Hara\n", "2\t\n")
+        );
+        // Without it, for pasting under columns that are already there.
+        assert_eq!(
+            with_header(Format::Tsv, false),
+            concat!("1\tO'Hara\n", "2\t\n")
+        );
+    }
+
+    #[test]
+    fn copied_csv_can_skip_its_header_too() {
+        assert_eq!(
+            with_header(Format::Csv, false),
+            concat!("1,O'Hara\n", "2,\n")
+        );
+    }
+
+    #[test]
+    fn a_copied_markdown_table_has_a_rule_and_says_null_out_loud() {
+        // The rule under the header is what makes it render as a table.
+        // NULL is written rather than left blank: an empty cell in a table
+        // somebody is reading says nothing at all.
+        assert_eq!(
+            to_text(Format::Markdown),
+            concat!(
+                "| id | name |\n",
+                "| --- | --- |\n",
+                "| 1 | O'Hara |\n",
+                "| 2 | NULL |\n",
+            )
+        );
+    }
+
+    #[test]
+    fn markdown_escapes_a_pipe_that_would_end_the_cell_early() {
+        let text = rows_to_text(RowTextRequest {
+            format: Format::Markdown,
+            table: "t".into(),
+            columns: text_columns(),
+            rows: vec![vec![Value::Int(1), Value::Text("a | b".into())]],
+            quote: '`',
+            header: true,
+        })
+        .expect("format");
+        // Unescaped, this row would render as three columns against a
+        // two-column header.
+        assert!(text.contains("| 1 | a \\| b |"), "{text}");
+    }
+
+    #[test]
+    fn tsv_flattens_a_value_that_would_shift_the_columns() {
+        let text = rows_to_text(RowTextRequest {
+            format: Format::Tsv,
+            table: "t".into(),
+            columns: text_columns(),
+            rows: vec![vec![Value::Int(1), Value::Text("a\tb\nc".into())]],
+            quote: '`',
+            header: false,
+        })
+        .expect("format");
+        // One line, two fields. A tab inside a value would otherwise make
+        // this row one column wider than every other row.
+        assert_eq!(text, "1\ta b c\n");
     }
 }

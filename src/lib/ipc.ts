@@ -219,7 +219,9 @@ export const ipc = {
     table: string;
     columns: Column[];
     rows: Value[][];
-  }) => call<string>("format_rows", { request: args }),
+    /** Whether CSV and TSV name their columns first. Defaults to true. */
+    header?: boolean;
+  }) => call<string>("format_rows", { request: { header: true, ...args } }),
 
   /**
    * Write the query history to a file — an audit trail that can leave.

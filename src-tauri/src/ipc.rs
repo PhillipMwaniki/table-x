@@ -1206,6 +1206,14 @@ pub struct RowTextArgs {
     pub table: String,
     pub columns: Vec<tablex_core::result::Column>,
     pub rows: Vec<Vec<tablex_core::Value>>,
+    /// Whether CSV and TSV name their columns on the first line. Absent means
+    /// they do, which is what a file export does.
+    #[serde(default = "yes")]
+    pub header: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// Rows as text, for the clipboard.
@@ -1234,6 +1242,7 @@ pub async fn format_rows(
             columns: request.columns,
             rows: request.rows,
             quote,
+            header: request.header,
         },
     )?)
 }
