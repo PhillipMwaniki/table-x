@@ -20,7 +20,10 @@ use tablex_core::{
     error::{Error, Result},
     plan::{Plan, PlanRow},
     result::{Column, ColumnSource, QueryOutcome, ResultSet, StatementResult},
-    schema::{decode_path, ColumnDef, ForeignKeyDef, IndexDef, NodeKind, SchemaNode, TableDetail},
+    schema::{
+        decode_path, ColumnDef, ForeignKeyDef, IndexDef, NodeKind, SchemaNode, TableDetail,
+        TriggerDef, TriggerEvent, TriggerTiming,
+    },
     sql::{quote_ident, split_statements},
 };
 use types::Affinity;
@@ -466,7 +469,7 @@ impl Connection for SqliteConnection {
                 columns,
                 indexes: table_indexes(conn, &table)?,
                 foreign_keys: table_foreign_keys(conn, &table)?,
-                triggers: Vec::new(),
+                triggers: table_triggers(conn, &table)?,
                 primary_key,
                 estimated_rows: None,
                 comment: None,
@@ -1062,6 +1065,57 @@ fn table_columns(conn: &rusqlite::Connection, table: &str) -> Result<Vec<ColumnD
         })
         .map_err(map_err)?;
     rows.collect::<std::result::Result<_, _>>().map_err(map_err)
+}
+
+/// The triggers on one table.
+///
+/// SQLite keeps no parts, only the `CREATE TRIGGER` text it was given, so the
+/// timing and the events are read back out of that text. It is parsing, which
+/// is a thing to avoid where a catalogue offers the pieces -- here nothing
+/// else does, and showing the trigger without saying when it fires would be
+/// showing half of it.
+fn table_triggers(conn: &rusqlite::Connection, table: &str) -> Result<Vec<TriggerDef>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT name, sql FROM sqlite_master \
+             WHERE type = 'trigger' AND tbl_name = ?1 ORDER BY name",
+        )
+        .map_err(map_err)?;
+
+    let rows: Vec<(String, Option<String>)> = stmt
+        .query_map([table], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map_err(map_err)?
+        .collect::<std::result::Result<_, _>>()
+        .map_err(map_err)?;
+
+    Ok(rows
+        .into_iter()
+        .map(|(name, sql)| {
+            let statement = sql.unwrap_or_default();
+            // Everything before ON is the timing and the events; everything
+            // after the first BEGIN is the body.
+            let head = statement
+                .split_once(" ON ")
+                .map(|(head, _)| head.to_string())
+                .unwrap_or_else(|| statement.clone());
+            let body = statement
+                .split_once("BEGIN")
+                .map(|(_, rest)| rest.trim().trim_end_matches("END;").trim_end_matches("END"))
+                .unwrap_or("")
+                .trim()
+                .to_string();
+
+            TriggerDef {
+                name,
+                timing: TriggerTiming::parse(&head),
+                events: TriggerEvent::parse_all(&head),
+                // SQLite has only the row form.
+                for_each_row: true,
+                body,
+                condition: None,
+            }
+        })
+        .collect())
 }
 
 fn table_indexes(conn: &rusqlite::Connection, table: &str) -> Result<Vec<IndexDef>> {

@@ -48,7 +48,10 @@ use tablex_core::{
     error::{Error, Result},
     plan::{Plan, PlanRow},
     result::{Column, QueryOutcome, ResultSet, StatementResult},
-    schema::{decode_path, ColumnDef, ForeignKeyDef, IndexDef, NodeKind, SchemaNode, TableDetail},
+    schema::{
+        decode_path, ColumnDef, ForeignKeyDef, IndexDef, NodeKind, SchemaNode, TableDetail,
+        TriggerDef, TriggerEvent, TriggerTiming,
+    },
     sql::{quote_ident, split_statements},
     Value,
 };
@@ -578,6 +581,7 @@ impl Connection for OracleConnection {
         let primary_key = self.read_primary_key(&owner, table).await?;
         let indexes = self.read_indexes(&owner, table).await?;
         let foreign_keys = self.read_foreign_keys(&owner, table).await?;
+        let triggers = self.read_triggers(&owner, table).await.unwrap_or_default();
 
         // The optimiser's estimate, which is what `num_rows` is: it is whatever
         // the last gather of statistics found, and saying so is the caller's
@@ -603,7 +607,7 @@ impl Connection for OracleConnection {
             columns,
             indexes,
             foreign_keys,
-            triggers: Vec::new(),
+            triggers,
             primary_key,
             estimated_rows: estimated,
             comment: None,
@@ -1047,6 +1051,40 @@ impl OracleConnection {
             Ok(())
         })
         .await
+    }
+
+    /// The triggers on one table.
+    ///
+    /// `ALL_TRIGGERS` keeps the parts apart, so nothing has to be parsed out of
+    /// a `CREATE` statement: the type carries both the timing and whether it
+    /// fires per row, and the body is stored as it was written.
+    async fn read_triggers(&self, owner: &str, table: &str) -> Result<Vec<TriggerDef>> {
+        let sql = format!(
+            "SELECT trigger_name, trigger_type, triggering_event, trigger_body, when_clause \
+             FROM all_triggers WHERE table_owner = {} AND table_name = {} \
+             ORDER BY trigger_name",
+            literal(owner),
+            literal(table)
+        );
+
+        Ok(self
+            .rows_of(sql)
+            .await?
+            .into_iter()
+            .map(|row| {
+                let kind = cell(&row, 1);
+                TriggerDef {
+                    name: cell(&row, 0),
+                    timing: TriggerTiming::parse(&kind),
+                    events: TriggerEvent::parse_all(&cell(&row, 2)),
+                    // Oracle folds it into the type: "BEFORE EACH ROW" against
+                    // "BEFORE STATEMENT".
+                    for_each_row: kind.to_uppercase().contains("EACH ROW"),
+                    body: cell(&row, 3).trim().to_string(),
+                    condition: optional(&row, 4),
+                }
+            })
+            .collect())
     }
 
     async fn read_columns(&self, owner: &str, table: &str) -> Result<Vec<ColumnDef>> {

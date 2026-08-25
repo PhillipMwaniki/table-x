@@ -11,7 +11,10 @@ use tablex_core::{
     diagram::{GraphTable, SchemaGraph},
     driver::CompletionScope,
     error::{Error, Result},
-    schema::{decode_path, ColumnDef, ForeignKeyDef, IndexDef, NodeKind, SchemaNode, TableDetail},
+    schema::{
+        decode_path, ColumnDef, ForeignKeyDef, IndexDef, NodeKind, SchemaNode, TableDetail,
+        TriggerDef, TriggerEvent, TriggerTiming,
+    },
     sql::quote_ident,
 };
 use tokio_postgres::Client;
@@ -494,6 +497,85 @@ pub async fn indexes(client: &Client, schema: &str, table: &str) -> Result<Vec<I
         .collect())
 }
 
+/// The triggers on one table.
+///
+/// The body is not on the trigger: PostgreSQL keeps it in the function the
+/// trigger calls, so this joins `pg_proc` to find it. Internal triggers -- the
+/// ones the server creates to enforce foreign keys -- are excluded, because
+/// they are not somebody's trigger and dropping one would break the constraint
+/// it belongs to.
+///
+/// `tgtype` is a bitmask rather than columns, so the timing and the events are
+/// read out of its bits. The layout is fixed and documented, and the constants
+/// are named here rather than left as numbers in a condition.
+pub async fn triggers(client: &Client, schema: &str, table: &str) -> Result<Vec<TriggerDef>> {
+    /// Fires once per row rather than once per statement.
+    const ROW: i16 = 1 << 0;
+    const BEFORE: i16 = 1 << 1;
+    const INSERT: i16 = 1 << 2;
+    const DELETE: i16 = 1 << 3;
+    const UPDATE: i16 = 1 << 4;
+    const INSTEAD: i16 = 1 << 6;
+
+    let rows = client
+        .query(
+            "SELECT t.tgname, t.tgtype::int2, p.prosrc \
+             FROM pg_catalog.pg_trigger t \
+             JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid \
+             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+             JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid \
+             WHERE n.nspname = $1 AND c.relname = $2 AND NOT t.tgisinternal \
+             ORDER BY t.tgname",
+            &[&schema, &table],
+        )
+        .await
+        .map_err(map_err)?;
+
+    Ok(rows
+        .iter()
+        .map(|row| {
+            let name: String = row.get(0);
+            let kind: i16 = row.get(1);
+            let body: String = row.get(2);
+
+            let mut events = Vec::new();
+            if kind & INSERT != 0 {
+                events.push(TriggerEvent::Insert);
+            }
+            if kind & UPDATE != 0 {
+                events.push(TriggerEvent::Update);
+            }
+            if kind & DELETE != 0 {
+                events.push(TriggerEvent::Delete);
+            }
+
+            TriggerDef {
+                name,
+                timing: if kind & INSTEAD != 0 {
+                    TriggerTiming::InsteadOf
+                } else if kind & BEFORE != 0 {
+                    TriggerTiming::Before
+                } else {
+                    TriggerTiming::After
+                },
+                events,
+                for_each_row: kind & ROW != 0,
+                // The function's source, which is the body somebody wrote --
+                // the BEGIN/END around it belongs to the function and is added
+                // back when one is created.
+                body: body
+                    .trim()
+                    .trim_start_matches("BEGIN")
+                    .trim_end_matches("END;")
+                    .trim_end_matches("END")
+                    .trim()
+                    .to_string(),
+                condition: None,
+            }
+        })
+        .collect())
+}
+
 pub async fn foreign_keys(
     client: &Client,
     schema: &str,
@@ -591,7 +673,7 @@ pub async fn table_detail(client: &Client, schema: &str, table: &str) -> Result<
         columns,
         indexes: indexes(client, schema, table).await?,
         foreign_keys: foreign_keys(client, schema, table).await?,
-        triggers: Vec::new(),
+        triggers: triggers(client, schema, table).await?,
         primary_key: primary_key(client, schema, table).await?,
         estimated_rows,
         comment,

@@ -194,6 +194,24 @@ pub enum TriggerTiming {
 }
 
 impl TriggerTiming {
+    /// Read a catalogue's word for it.
+    ///
+    /// Every engine writes this as text and each writes it slightly
+    /// differently -- `BEFORE`, `INSTEAD OF`, and Oracle's `BEFORE EACH ROW`
+    /// with the row-ness folded in. Matched loosely on purpose: an unknown
+    /// word means `After`, which is the commoner of the two and the safer thing
+    /// to show against a trigger somebody is reading rather than creating.
+    pub fn parse(text: &str) -> Self {
+        let upper = text.to_uppercase();
+        if upper.contains("INSTEAD") {
+            TriggerTiming::InsteadOf
+        } else if upper.contains("BEFORE") {
+            TriggerTiming::Before
+        } else {
+            TriggerTiming::After
+        }
+    }
+
     pub fn sql(&self) -> &'static str {
         match self {
             TriggerTiming::Before => "BEFORE",
@@ -213,6 +231,26 @@ pub enum TriggerEvent {
 }
 
 impl TriggerEvent {
+    /// Every event named in a catalogue's description of a trigger.
+    ///
+    /// `INSERT OR UPDATE` and `INSERT, UPDATE` are both ordinary, so this looks
+    /// for the words rather than splitting on a separator that differs by
+    /// engine. An empty result means none were recognised, which the caller
+    /// should treat as "the catalogue said something unexpected" rather than as
+    /// a trigger on nothing.
+    pub fn parse_all(text: &str) -> Vec<Self> {
+        let upper = text.to_uppercase();
+        [
+            (TriggerEvent::Insert, "INSERT"),
+            (TriggerEvent::Update, "UPDATE"),
+            (TriggerEvent::Delete, "DELETE"),
+        ]
+        .into_iter()
+        .filter(|(_, word)| upper.contains(word))
+        .map(|(event, _)| event)
+        .collect()
+    }
+
     pub fn sql(&self) -> &'static str {
         match self {
             TriggerEvent::Insert => "INSERT",
@@ -286,6 +324,41 @@ impl TableDetail {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_catalogues_word_for_the_timing_is_read_however_it_is_written() {
+        // Each engine writes this its own way, and Oracle folds the row-ness
+        // into the same string.
+        assert_eq!(TriggerTiming::parse("BEFORE"), TriggerTiming::Before);
+        assert_eq!(
+            TriggerTiming::parse("BEFORE EACH ROW"),
+            TriggerTiming::Before
+        );
+        assert_eq!(TriggerTiming::parse("after"), TriggerTiming::After);
+        assert_eq!(TriggerTiming::parse("INSTEAD OF"), TriggerTiming::InsteadOf);
+        // Anything unrecognised reads as AFTER, which is the commoner of the
+        // two and the safer thing to show against somebody else's trigger.
+        assert_eq!(TriggerTiming::parse("???"), TriggerTiming::After);
+    }
+
+    #[test]
+    fn every_event_named_is_found_whatever_separates_them() {
+        // `INSERT OR UPDATE` and `INSERT, UPDATE` are both ordinary, and which
+        // one an engine writes is not worth a parser per engine.
+        assert_eq!(
+            TriggerEvent::parse_all("INSERT OR UPDATE"),
+            vec![TriggerEvent::Insert, TriggerEvent::Update]
+        );
+        assert_eq!(
+            TriggerEvent::parse_all("INSERT, DELETE"),
+            vec![TriggerEvent::Insert, TriggerEvent::Delete]
+        );
+        assert_eq!(
+            TriggerEvent::parse_all("update"),
+            vec![TriggerEvent::Update]
+        );
+        assert!(TriggerEvent::parse_all("TRUNCATE").is_empty());
+    }
     use super::*;
 
     fn column(name: &str, nullable: bool) -> ColumnDef {

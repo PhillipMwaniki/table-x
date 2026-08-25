@@ -27,7 +27,10 @@ use tablex_core::{
     plan::Plan,
     privileges::Privileges,
     result::{Column, ColumnSource, QueryOutcome, ResultSet, StatementResult},
-    schema::{decode_path, ColumnDef, ForeignKeyDef, IndexDef, NodeKind, SchemaNode, TableDetail},
+    schema::{
+        decode_path, ColumnDef, ForeignKeyDef, IndexDef, NodeKind, SchemaNode, TableDetail,
+        TriggerDef, TriggerEvent, TriggerTiming,
+    },
     sql::{quote_ident, split_statements},
 };
 
@@ -636,7 +639,7 @@ impl Connection for MysqlConnection {
             columns,
             indexes,
             foreign_keys: self.foreign_keys(&db, table).await?,
-            triggers: Vec::new(),
+            triggers: self.triggers(&db, table).await?,
             primary_key,
             // TABLE_ROWS is a storage-engine estimate on InnoDB, not a count.
             estimated_rows: estimated.flatten(),
@@ -1113,6 +1116,44 @@ impl MysqlConnection {
                         format!("{} NOT NULL", c.type_name)
                     },
                 )
+            })
+            .collect())
+    }
+
+    /// The triggers on one table.
+    ///
+    /// MySQL stores the parts separately, so no parsing is needed: one row per
+    /// trigger, with the timing, the single event it fires on, and the body it
+    /// was created with. One event per trigger is the engine's rule rather than
+    /// a simplification here.
+    async fn triggers(&mut self, db: &str, table: &str) -> Result<Vec<TriggerDef>> {
+        let rows: Vec<(String, String, String, String, Option<String>)> = self
+            .conn
+            .exec(
+                "SELECT TRIGGER_NAME, ACTION_TIMING, EVENT_MANIPULATION, ACTION_STATEMENT,                         NULLIF(ACTION_CONDITION, '')                  FROM information_schema.TRIGGERS                  WHERE EVENT_OBJECT_SCHEMA = ? AND EVENT_OBJECT_TABLE = ?                  ORDER BY TRIGGER_NAME",
+                (db, table),
+            )
+            .await
+            .map_err(map_err)?;
+
+        Ok(rows
+            .into_iter()
+            .map(|(name, timing, event, body, condition)| TriggerDef {
+                name,
+                timing: TriggerTiming::parse(&timing),
+                events: TriggerEvent::parse_all(&event),
+                // MySQL has only the row form; there is no statement-level
+                // trigger to distinguish it from.
+                for_each_row: true,
+                // Stored with its BEGIN/END where the trigger had one, which is
+                // what the editor should show and what a recreate needs.
+                body: body
+                    .trim()
+                    .trim_start_matches("BEGIN")
+                    .trim_end_matches("END")
+                    .trim()
+                    .to_string(),
+                condition,
             })
             .collect())
     }

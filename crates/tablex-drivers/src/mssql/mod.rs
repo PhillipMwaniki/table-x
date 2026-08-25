@@ -53,7 +53,10 @@ use tablex_core::{
     plan::{Plan, PlanRow},
     privileges::Privileges,
     result::{Column, QueryOutcome, ResultSet, StatementResult},
-    schema::{decode_path, ColumnDef, ForeignKeyDef, IndexDef, NodeKind, SchemaNode, TableDetail},
+    schema::{
+        decode_path, ColumnDef, ForeignKeyDef, IndexDef, NodeKind, SchemaNode, TableDetail,
+        TriggerDef, TriggerEvent, TriggerTiming,
+    },
     sql::{quote_ident, split_statements},
 };
 use tiberius::{AuthMethod, Client, Config, QueryItem};
@@ -621,7 +624,7 @@ impl Connection for MssqlConnection {
             columns,
             indexes,
             foreign_keys: self.foreign_keys(&schema, table).await?,
-            triggers: Vec::new(),
+            triggers: self.triggers(&schema, table).await.unwrap_or_default(),
             primary_key,
             estimated_rows: estimated,
             comment: None,
@@ -1189,6 +1192,87 @@ impl MssqlConnection {
                 })
             })
             .collect())
+    }
+
+    /// The triggers on one table.
+    ///
+    /// `sys.trigger_events` is one row per event, so a trigger on INSERT and
+    /// UPDATE arrives as two and is grouped back together here. The body comes
+    /// from the module definition, which is the whole `CREATE TRIGGER` text --
+    /// the part after AS is what a person wrote, and that is what is shown.
+    ///
+    /// Disabled triggers are listed like any other: a trigger that exists and
+    /// is not firing is exactly the thing somebody looking at this needs to
+    /// see.
+    async fn triggers(&mut self, schema: &str, table: &str) -> Result<Vec<TriggerDef>> {
+        let sql = format!(
+            "SELECT tr.name, te.type_desc, \
+                    CAST(tr.is_instead_of_trigger AS varchar(4)), \
+                    m.definition \
+             FROM sys.triggers tr \
+             JOIN sys.tables t ON t.object_id = tr.parent_id \
+             JOIN sys.schemas s ON s.schema_id = t.schema_id \
+             JOIN sys.trigger_events te ON te.object_id = tr.object_id \
+             LEFT JOIN sys.sql_modules m ON m.object_id = tr.object_id \
+             WHERE s.name = '{}' AND t.name = '{}' \
+             ORDER BY tr.name",
+            escape_literal(schema),
+            escape_literal(table)
+        );
+
+        let rows = self
+            .client
+            .simple_query(sql)
+            .await
+            .map_err(map_err)?
+            .into_first_result()
+            .await
+            .map_err(map_err)?;
+
+        let mut grouped: Vec<TriggerDef> = Vec::new();
+        for r in rows.iter() {
+            let Some(name) = r.get::<&str, _>(0) else {
+                continue;
+            };
+            let event = r.get::<&str, _>(1).unwrap_or_default();
+
+            if let Some(last) = grouped.last_mut() {
+                if last.name == name {
+                    last.events.extend(TriggerEvent::parse_all(event));
+                    continue;
+                }
+            }
+
+            let definition = r.get::<&str, _>(3).unwrap_or_default();
+            // Everything after the first AS is the body; before it is the
+            // header this app builds itself when recreating one.
+            let body = definition
+                .split_once("\nAS")
+                .or_else(|| definition.split_once(" AS "))
+                .map(|(_, rest)| rest)
+                .unwrap_or(definition)
+                .trim()
+                .trim_start_matches("BEGIN")
+                .trim_end_matches("END")
+                .trim()
+                .to_string();
+
+            grouped.push(TriggerDef {
+                name: name.to_string(),
+                timing: if r.get::<&str, _>(2) == Some("1") {
+                    TriggerTiming::InsteadOf
+                } else {
+                    // T-SQL has no BEFORE at all; everything else is AFTER.
+                    TriggerTiming::After
+                },
+                events: TriggerEvent::parse_all(event),
+                // Its triggers fire once per statement, never per row.
+                for_each_row: false,
+                body,
+                condition: None,
+            });
+        }
+        Ok(grouped)
     }
 
     async fn indexes(&mut self, schema: &str, table: &str) -> Result<Vec<IndexDef>> {
