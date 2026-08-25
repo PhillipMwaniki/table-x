@@ -80,6 +80,8 @@ export type PlaceholderStyle = "question" | "dollar" | "at_p" | "colon";
 
 /** Which parts of an existing table this engine can be asked to change. */
 export interface DdlSupport {
+  /** Whether triggers can be created and dropped from here. */
+  triggers: boolean;
   /** Whether a database can be created from here — see the Rust capability. */
   create_database: boolean;
   /** Whether a schema can be created inside a database from here. */
@@ -378,6 +380,8 @@ export type Change =
   | { kind: "index_removed"; table: string; index: string }
   | { kind: "foreign_key_added"; table: string; key: ForeignKeyDef }
   | { kind: "foreign_key_removed"; table: string; key: string }
+  | { kind: "trigger_added"; table: string; trigger: TriggerDef }
+  | { kind: "trigger_removed"; table: string; trigger: string }
   | { kind: "primary_key_changed"; table: string; from: string[]; to: string[] };
 
 /** One statement of a generated migration. */
@@ -570,12 +574,35 @@ export interface ForeignKeyDef {
   on_update?: string | undefined;
 }
 
+/** When a trigger fires relative to the statement. */
+export type TriggerTiming = "before" | "after" | "instead_of";
+
+/** What a trigger fires on. */
+export type TriggerEvent = "insert" | "update" | "delete";
+
+/**
+ * A trigger on a table.
+ *
+ * The parts every engine spells the same way are fields; the body is text,
+ * because it is a program in the engine's own procedural language.
+ */
+export interface TriggerDef {
+  name: string;
+  timing: TriggerTiming;
+  events: TriggerEvent[];
+  for_each_row: boolean;
+  body: string;
+  condition?: string | undefined;
+}
+
 export interface TableDetail {
   schema?: string | undefined;
   name: string;
   columns: ColumnDef[];
   indexes: IndexDef[];
   foreign_keys: ForeignKeyDef[];
+  /** Triggers on this table, where the driver reads them. */
+  triggers?: TriggerDef[] | undefined;
   primary_key: string[];
   /** Planner estimate, not an exact count. */
   estimated_rows?: number | undefined;

@@ -81,6 +81,39 @@ describe("withPending", () => {
     expect(state.get("column:note")).toBe("added");
   });
 
+  it("lists a staged trigger on a table the driver read none for", () => {
+    // `triggers` is absent, not empty, when the driver does not read them --
+    // and a table that has none reads the same way. Staging one has to produce
+    // a list either way, or the new trigger is staged and never shown.
+    const trigger = {
+      name: "orders_touch",
+      timing: "before" as const,
+      events: ["update" as const],
+      for_each_row: true,
+      body: "SET NEW.updated_at = NOW();",
+    };
+    const { detail, state } = withPending(TABLE, [
+      { kind: "trigger_added", table: "orders", trigger },
+    ]);
+    expect(detail.triggers?.map((t) => t.name)).toEqual(["orders_touch"]);
+    expect(state.get("trigger:orders_touch")).toBe("added");
+  });
+
+  it("shows a dropped trigger in place, like a dropped column", () => {
+    const trigger = {
+      name: "orders_audit",
+      timing: "after" as const,
+      events: ["insert" as const],
+      for_each_row: true,
+      body: "INSERT INTO audit VALUES (NEW.id);",
+    };
+    const { detail, state } = withPending({ ...TABLE, triggers: [trigger] }, [
+      { kind: "trigger_removed", table: "orders", trigger: "orders_audit" },
+    ]);
+    expect(detail.triggers?.map((t) => t.name)).toEqual(["orders_audit"]);
+    expect(state.get("trigger:orders_audit")).toBe("removed");
+  });
+
   it("leaves the original untouched", () => {
     // The staged view is derived every render; mutating the fetched detail would
     // make a discarded edit unrecoverable without refetching.

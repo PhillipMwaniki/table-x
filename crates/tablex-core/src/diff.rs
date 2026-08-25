@@ -611,6 +611,9 @@ pub fn refusal(change: &Change, support: DdlSupport) -> Option<String> {
         {
             no("add or drop a foreign key")
         }
+        Change::TriggerAdded { .. } | Change::TriggerRemoved { .. } if !support.triggers => {
+            no("add or drop a trigger")
+        }
         Change::PrimaryKeyChanged { .. } => {
             Some("Changing a primary key rewrites the table, so it is not offered here.".into())
         }
@@ -1769,9 +1772,42 @@ mod tests {
                 table: "t".into(),
                 key: "fk".into(),
             },
+            Change::TriggerAdded {
+                table: "t".into(),
+                trigger: touch_trigger(),
+            },
+            Change::TriggerRemoved {
+                table: "t".into(),
+                trigger: "users_touch".into(),
+            },
         ];
         for change in &changes {
             assert!(refusal(change, ALL).is_none(), "{change:?}");
+        }
+    }
+
+    #[test]
+    fn an_engine_with_no_triggers_refuses_before_a_statement_is_built() {
+        // The unsupported statement is the backstop; this is the layer the
+        // editor reads, and a capability that is off has to produce a reason
+        // there too -- otherwise the Add button is hidden and a change staged
+        // some other way reaches the executor with nothing to say about it.
+        let support = DdlSupport {
+            triggers: false,
+            ..ALL
+        };
+        for change in [
+            Change::TriggerAdded {
+                table: "t".into(),
+                trigger: touch_trigger(),
+            },
+            Change::TriggerRemoved {
+                table: "t".into(),
+                trigger: "users_touch".into(),
+            },
+        ] {
+            let why = refusal(&change, support).expect("refused");
+            assert!(why.contains("trigger"), "{why}");
         }
     }
 }

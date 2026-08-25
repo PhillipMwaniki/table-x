@@ -161,9 +161,14 @@ function signOf(change: Change): [string, string] {
     case "column_added":
     case "index_added":
     case "foreign_key_added":
+    case "trigger_added":
       return ["+", "text-ok"];
     case "table_removed":
     case "column_removed":
+      return ["−", "text-danger"];
+    // A dropped trigger takes its body with it, and the body is not written
+    // anywhere else — the same reason the backend calls this destructive.
+    case "trigger_removed":
       return ["−", "text-danger"];
     case "index_removed":
     case "foreign_key_removed":
@@ -195,6 +200,10 @@ function describe(change: Change): string {
       return `key ${change.key.columns.join(", ")} → ${change.key.referenced_table}`;
     case "foreign_key_removed":
       return `key ${change.key}`;
+    case "trigger_added":
+      return `trigger ${change.trigger.name} ${change.trigger.timing.replace("_", " ")} ${change.trigger.events.join(", ")}`;
+    case "trigger_removed":
+      return `trigger ${change.trigger}`;
     case "primary_key_changed":
       return `primary key ${change.from.join(", ") || "none"} → ${change.to.join(", ") || "none"}`;
   }

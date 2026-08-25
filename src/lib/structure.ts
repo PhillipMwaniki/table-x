@@ -57,6 +57,10 @@ export function describeChange(change: Change): string {
       return `add foreign key ${change.key.name}`;
     case "foreign_key_removed":
       return `drop foreign key ${change.key}`;
+    case "trigger_added":
+      return `add trigger ${change.trigger.name}`;
+    case "trigger_removed":
+      return `drop trigger ${change.trigger}`;
     default:
       // The remaining variants are refused by the backend before they can be
       // staged, so this is a label for something that should not arrive.
@@ -83,6 +87,9 @@ export function withPending(
   let columns = [...detail.columns];
   let indexes = [...detail.indexes];
   let foreignKeys = [...detail.foreign_keys];
+  // Undefined where the driver does not read triggers at all, which is not the
+  // same as a table having none; staging one still has to produce a list.
+  let triggers = [...(detail.triggers ?? [])];
 
   for (const change of pending) {
     switch (change.kind) {
@@ -117,13 +124,20 @@ export function withPending(
       case "foreign_key_removed":
         state.set(`fk:${change.key}`, "removed");
         break;
+      case "trigger_added":
+        triggers = [...triggers, change.trigger];
+        state.set(`trigger:${change.trigger.name}`, "added");
+        break;
+      case "trigger_removed":
+        state.set(`trigger:${change.trigger}`, "removed");
+        break;
       default:
         break;
     }
   }
 
   return {
-    detail: { ...detail, columns, indexes, foreign_keys: foreignKeys },
+    detail: { ...detail, columns, indexes, foreign_keys: foreignKeys, triggers },
     state,
   };
 }

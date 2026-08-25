@@ -20,9 +20,10 @@
  * facts about the engine, so the driver states them and this file asks.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { Children, useCallback, useEffect, useState } from "react";
 import { Banner, Button, Spinner, cx } from "../ui/primitives";
 import { ColumnForm, ForeignKeyForm, IndexForm } from "./StructureForms";
+import { TriggerForm } from "./TriggerForm";
 import { ReviewChangesDialog } from "./ReviewChangesDialog";
 import { ipc, IpcError } from "@/lib/ipc";
 import { columnDifferences, describeChange, discard, withPending } from "@/lib/structure";
@@ -37,6 +38,7 @@ const NO_DDL: DdlSupport = {
   alter_column: false,
   indexes: false,
   foreign_keys: false,
+  triggers: false,
   create_database: false,
   create_schema: false,
   transactional_ddl: false,
@@ -57,7 +59,7 @@ export function StructureView({
 
   /** Staged, not applied. Cleared by a successful apply or by discarding. */
   const [pending, setPending] = useState<Change[]>([]);
-  const [adding, setAdding] = useState<null | "column" | "index" | "foreign_key">(null);
+  const [adding, setAdding] = useState<null | "column" | "index" | "foreign_key" | "trigger">(null);
   const [editingColumn, setEditingColumn] = useState<string | null>(null);
   const [reviewing, setReviewing] = useState(false);
   const [applied, setApplied] = useState<string | null>(null);
@@ -474,6 +476,84 @@ export function StructureView({
           )}
         </Section>
 
+        <Section
+          title="Triggers"
+          empty="No triggers."
+          action={
+            editable && ddl.triggers && !adding ? (
+              <SectionButton onClick={() => setAdding("trigger")}>Add trigger</SectionButton>
+            ) : undefined
+          }
+        >
+          {(staged.triggers ?? []).length > 0 && (
+            <ul className="space-y-1">
+              {(staged.triggers ?? []).map((trigger) => {
+                const mark = state.get(`trigger:${trigger.name}`);
+                return (
+                  <li key={trigger.name} className="text-[11.5px]">
+                    <div className="flex flex-wrap items-baseline gap-2">
+                      <span
+                        className={cx(
+                          "font-mono text-text",
+                          mark === "removed" && "line-through opacity-60",
+                        )}
+                      >
+                        {trigger.name}
+                      </span>
+                      <StateMark state={mark} />
+                      <span className="text-text-muted">
+                        {trigger.timing.replace("_", " ")} {trigger.events.join(", ")}
+                        {trigger.for_each_row ? " for each row" : ""}
+                      </span>
+                      {editable && ddl.triggers && mark !== "removed" && (
+                        <RowButton
+                          tone="error"
+                          title={`Drop ${trigger.name}`}
+                          onClick={() =>
+                            stage({
+                              kind: "trigger_removed",
+                              table: staged.name,
+                              trigger: trigger.name,
+                            })
+                          }
+                        >
+                          drop
+                        </RowButton>
+                      )}
+                    </div>
+                    {/* The body, as it was written. Read-only: changing one
+                        means dropping and recreating it on every engine here,
+                        and an editor that looked like it edited in place would
+                        be describing something the server cannot do. */}
+                    {trigger.body && (
+                      <pre
+                        data-selectable
+                        className="mt-0.5 max-h-24 overflow-auto rounded bg-surface-0 p-1 font-mono text-[10.5px] whitespace-pre-wrap text-text-muted"
+                      >
+                        {trigger.body}
+                      </pre>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+
+          {adding === "trigger" && (
+            <div className="mt-2">
+              <TriggerForm
+                table={staged.name}
+                driver={connection?.driver ?? ""}
+                onCancel={() => setAdding(null)}
+                onSave={(trigger) => {
+                  stage({ kind: "trigger_added", table: staged.name, trigger });
+                  setAdding(null);
+                }}
+              />
+            </div>
+          )}
+        </Section>
+
         {/* Not offered where the engine cannot honestly do it, and said rather
             than left as an absence the user has to guess the reason for. */}
         {!readOnly && !editable && (
@@ -518,6 +598,12 @@ function Section({
   action?: React.ReactNode;
   children: React.ReactNode;
 }) {
+  // A section's children are a list of conditionals -- the rows, then the add
+  // form -- so an empty section arrives as an array of `false` rather than as
+  // nothing. Asking React what actually survived is the only way to tell "no
+  // triggers" from "triggers, listed below".
+  const nothing = Children.toArray(children).length === 0;
+
   return (
     <section>
       <div className="mb-1.5 flex items-baseline gap-2">
@@ -528,7 +614,7 @@ function Section({
         {action}
       </div>
       {children ?? null}
-      {!children && empty && <p className="text-[11px] text-text-muted/60">{empty}</p>}
+      {nothing && empty && <p className="text-[11px] text-text-muted/60">{empty}</p>}
     </section>
   );
 }
