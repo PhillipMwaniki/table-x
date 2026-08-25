@@ -76,7 +76,7 @@ export interface ErrorPayload {
 // Drivers
 // ---------------------------------------------------------------------------
 
-export type PlaceholderStyle = "question" | "dollar" | "at_p";
+export type PlaceholderStyle = "question" | "dollar" | "at_p" | "colon";
 
 /** Which parts of an existing table this engine can be asked to change. */
 export interface DdlSupport {

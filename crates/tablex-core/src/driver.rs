@@ -156,6 +156,8 @@ pub enum PlaceholderStyle {
     Dollar,
     /// `@p1`, `@p2` — SQL Server.
     AtP,
+    /// `:1`, `:2` — Oracle.
+    Colon,
 }
 
 /// Static description of a driver, used to render the "new connection" form

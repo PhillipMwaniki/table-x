@@ -13,6 +13,8 @@ pub mod clickhouse;
 pub mod mssql;
 #[cfg(feature = "mysql")]
 pub mod mysql;
+#[cfg(feature = "oracle")]
+pub mod oracle;
 #[cfg(feature = "postgres")]
 pub mod postgres;
 #[cfg(feature = "sqlite")]
@@ -32,6 +34,8 @@ pub fn registry() -> DriverRegistry {
     reg.register(std::sync::Arc::new(mssql::MssqlDriver::new()));
     #[cfg(feature = "mysql")]
     reg.register(std::sync::Arc::new(mysql::MysqlDriver::new()));
+    #[cfg(feature = "oracle")]
+    reg.register(std::sync::Arc::new(oracle::OracleDriver::new()));
     #[cfg(feature = "postgres")]
     reg.register(std::sync::Arc::new(postgres::PostgresDriver::new()));
     #[cfg(feature = "sqlite")]

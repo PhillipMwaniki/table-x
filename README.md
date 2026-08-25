@@ -75,19 +75,19 @@ word "supported" usually covers. It mirrors the same `Capabilities` the app read
 runtime to decide which controls to draw — so where a cell says no, the button is not
 there, rather than there and failing.
 
-| | PostgreSQL | MySQL / MariaDB | SQLite | SQL Server | ClickHouse |
-|---|:---:|:---:|:---:|:---:|:---:|
-| Edit results in the grid | ✅ | ✅ | ✅ | — <sup>1</sup> | — <sup>2</sup> |
-| Edit a table's structure | ✅ | ✅ <sup>3</sup> | partial <sup>4</sup> | ✅ | — <sup>2</sup> |
-| Transactions | ✅ | ✅ | ✅ | ✅ | — |
-| Stop a running query | ✅ | ✅ | ✅ | — <sup>5</sup> | ✅ |
-| `EXPLAIN` | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Measured plan (`ANALYZE`) | ✅ <sup>6</sup> | — | — | — | — |
-| Schemas within a database | ✅ | — <sup>7</sup> | — | ✅ | — <sup>7</sup> |
-| Several databases per server | ✅ | ✅ | — | ✅ | ✅ |
-| Server activity, kill a session | ✅ | ✅ | — | ✅ | ✅ |
-| Privileges and roles | ✅ | ✅ | — | ✅ | ✅ |
-| A table's `CREATE` statement | — <sup>8</sup> | ✅ | ✅ | — <sup>8</sup> | ✅ |
+| | PostgreSQL | MySQL / MariaDB | SQLite | SQL Server | ClickHouse | Oracle <sup>9</sup> |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|
+| Edit results in the grid | ✅ | ✅ | ✅ | — <sup>1</sup> | — <sup>2</sup> | — <sup>1</sup> |
+| Edit a table's structure | ✅ | ✅ <sup>3</sup> | partial <sup>4</sup> | ✅ | — <sup>2</sup> | ✅ <sup>3</sup> |
+| Transactions | ✅ | ✅ | ✅ | ✅ | — | ✅ |
+| Stop a running query | ✅ | ✅ | ✅ | — <sup>5</sup> | ✅ | ✅ |
+| `EXPLAIN` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Measured plan (`ANALYZE`) | ✅ <sup>6</sup> | — | — | — | — | — |
+| Schemas within a database | ✅ | — <sup>7</sup> | — | ✅ | — <sup>7</sup> | ✅ |
+| Several databases per server | ✅ | ✅ | — | ✅ | ✅ | — <sup>10</sup> |
+| Server activity, kill a session | ✅ | ✅ | — | ✅ | ✅ | ✅ |
+| Privileges and roles | ✅ | ✅ | — | ✅ | ✅ | — <sup>11</sup> |
+| A table's `CREATE` statement | — <sup>8</sup> | ✅ | ✅ | — <sup>8</sup> | ✅ | ✅ |
 
 Not in the table because they are not per-engine: exact numerics, SSH tunnelling,
 streaming export and import, query history, the schema diff, the ER diagram, the
@@ -113,6 +113,19 @@ streaming export and import, query history, the schema diff, the ER diagram, the
    tables.
 8. No catalog function renders a table as a `CREATE` statement, so the tree does not
    offer one.
+9. **Oracle needs Oracle Instant Client on the machine.** Every other engine here is
+   reached by a protocol implementation written in Rust; Oracle's wire protocol is
+   undocumented, so its own client library is the only way in. Building Table X needs
+   nothing from Oracle — the ODPI-C source is vendored and compiled with the driver — but
+   connecting loads `oci.dll` or `libclntsh.so` at runtime. Without it, the connection
+   fails with instructions rather than an error code; nothing else in the app is affected.
+   Download Instant Client Basic from Oracle and put it on `PATH` (Windows),
+   `LD_LIBRARY_PATH` (Linux) or `DYLD_LIBRARY_PATH` (macOS).
+10. A connection reaches one service, and a schema there is a *user* who owns objects.
+    What Oracle calls a database is not something a session moves between, so the tree
+    starts at schemas rather than a level above them.
+11. Not yet. Reading `DBA_ROLE_PRIVS` and its relatives is a driver's worth of work on
+    its own, and a panel that opens empty is worse than one that is not offered.
 
 Oracle and MongoDB are wanted and are not simply two more drivers — see
 [Why Oracle and MongoDB are not simply two more drivers](#why-oracle-and-mongodb-are-not-simply-two-more-drivers).

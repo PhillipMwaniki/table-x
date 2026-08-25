@@ -87,8 +87,14 @@ reqwest = { version = "0.13", optional = true, default-features = false, feature
     "stream",
 ] }
 
+# Oracle has no open protocol implementation, so its own client library is the
+# only way in. This crate wraps ODPI-C, whose C source it vendors and compiles —
+# so building needs nothing from Oracle — but at runtime ODPI loads the Instant
+# Client from the machine. Without it, connecting fails; nothing else does.
+oracle = { version = "0.6", optional = true }
+
 [features]
-default = ["postgres", "sqlite", "mysql", "mssql", "clickhouse"]
+default = ["postgres", "sqlite", "mysql", "mssql", "clickhouse", "oracle"]
 postgres = [
     "dep:tokio-postgres",
     "dep:postgres-protocol",
@@ -102,6 +108,7 @@ mssql = ["dep:tiberius", "dep:tokio-util"]
 # Pulls `rustls` so the ring provider is compiled in; reqwest is built with
 # `rustls-no-provider` and relies on it being the only one available.
 clickhouse = ["dep:reqwest", "dep:rustls"]
+oracle = ["dep:oracle"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }
