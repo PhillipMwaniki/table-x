@@ -734,7 +734,7 @@ To cut a release:
 ```bash
 # The tag and the version in tauri.conf.json and Cargo.toml must agree —
 # nothing enforces that yet, so check it by eye.
-git tag v0.5.0 && git push origin v0.5.0
+git tag v0.5.6 && git push origin v0.5.6
 ```
 
 #### macOS — Apple Developer Program
