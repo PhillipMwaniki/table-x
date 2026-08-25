@@ -144,9 +144,14 @@ function Item({ item, flip, onClose }: { item: MenuItem; flip: boolean; onClose:
         aria-haspopup={nested ? "menu" : undefined}
         aria-expanded={nested ? open : undefined}
         onClick={() => {
-          // An item that only opens a submenu has nothing to do on a click, and
-          // closing the menu under the pointer would be the opposite of what
-          // clicking it looks like it should do.
+          // A parent opens on the way past it, and also on a click: pointing at
+          // something and clicking it are the same intention, and a row that
+          // does nothing when clicked reads as a broken one. Nothing here
+          // closes the menu — the submenu that just opened is the point.
+          if (nested) {
+            setOpen((was) => !was);
+            return;
+          }
           if (!item.onSelect) return;
           item.onSelect();
           onClose();

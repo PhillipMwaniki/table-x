@@ -15,6 +15,7 @@ import {
   kindOf,
   parseEdit,
   previewValue,
+  unchanged,
 } from "./value";
 import type { Value } from "./types";
 
@@ -156,5 +157,38 @@ describe("kind classification", () => {
     for (const s of samples) {
       expect(kindOf(s), `no kind for ${s.kind}`).toBeTruthy();
     }
+  });
+});
+
+describe("unchanged", () => {
+  it("sees a re-typed date as the same value, kind or no kind", () => {
+    // The bug this pins: `parseEdit` has no case for a date, so it hands back
+    // `text`. A guard that also compared kinds therefore never saw a date as
+    // unchanged -- and clicking into a date field and clicking out again sent
+    // an UPDATE with the value that was already there. In the grid that needed
+    // a double-click; in the details panel, where every field is a live input,
+    // it needed nothing at all.
+    const date: Value = { kind: "date", value: "2025-03-14" };
+    expect(unchanged(parseEdit("2025-03-14", date), date)).toBe(true);
+    expect(unchanged(parseEdit("2025-03-15", date), date)).toBe(false);
+  });
+
+  it("sees a re-typed number as the same value", () => {
+    // `int` comes back as `numeric` for the same reason: the digits are sent
+    // to the server untouched.
+    const n: Value = { kind: "int", value: 42 };
+    expect(unchanged(parseEdit("42", n), n)).toBe(true);
+    expect(unchanged(parseEdit("43", n), n)).toBe(false);
+  });
+
+  it("keeps NULL and an empty string apart", () => {
+    // The one pair that must never be treated as equal: they are different
+    // values, and the whole NULL-handling of the editor rests on it.
+    const nothing: Value = { kind: "null" };
+    const empty: Value = { kind: "text", value: "" };
+    expect(unchanged(empty, nothing)).toBe(false);
+    expect(unchanged(nothing, empty)).toBe(false);
+    expect(unchanged(parseEdit("", nothing), nothing)).toBe(true);
+    expect(unchanged(parseEdit("", empty), empty)).toBe(true);
   });
 });

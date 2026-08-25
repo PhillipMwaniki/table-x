@@ -16,7 +16,7 @@
 import { useMemo, useState } from "react";
 import { cx } from "../ui/primitives";
 import { byteSize } from "@/lib/editors";
-import { editText, formatValue, parseEdit } from "@/lib/value";
+import { editText, formatValue, parseEdit, unchanged } from "@/lib/value";
 import type { Column, Value } from "@/lib/types";
 
 /**
@@ -149,11 +149,17 @@ function Field({
   onCommit: (next: Value) => Promise<void>;
 }) {
   const [draft, setDraft] = useState(() => editText(value));
+  /**
+   * Whether this field has been typed into.
+   *
+   * Every field here is a live input, so a field is focused and blurred just by
+   * clicking past it on the way to somewhere else. Without this, that blur
+   * commits -- and a commit of an untouched field is an UPDATE nobody asked
+   * for, against a row somebody was only reading.
+   */
+  const [touched, setTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  /** What is in the database now, to tell a real edit from a no-op. */
-  const settled = formatValue(value);
 
   // Binary has no text form to edit: the grid opens a viewer for it, and a box
   // holding "12.4 KB" that accepted typing would be a way to destroy a blob.
@@ -161,10 +167,10 @@ function Field({
   const readOnly = !editable || binary;
 
   const commit = async () => {
-    if (readOnly) return;
+    if (readOnly || !touched) return;
     const next = parseEdit(draft, value);
     // Nothing changed: no statement, and nothing on the undo stack to take back.
-    if (formatValue(next) === settled && next.kind === value.kind) return;
+    if (unchanged(next, value)) return;
 
     setSaving(true);
     setError(null);
@@ -206,7 +212,10 @@ function Field({
         // distinction the grid's editor makes: an empty string and NULL are
         // different values, and a box reading "NULL" could be either.
         placeholder={value.kind === "null" ? "NULL" : ""}
-        onChange={(e) => setDraft(e.target.value)}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          setTouched(true);
+        }}
         onBlur={() => void commit()}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
@@ -216,6 +225,7 @@ function Field({
           if (e.key === "Escape") {
             e.preventDefault();
             setDraft(editText(value));
+            setTouched(false);
             setError(null);
           }
         }}

@@ -17,6 +17,7 @@ import {
   isInlineEditable,
   isNumeric,
   parseEdit,
+  unchanged,
 } from "@/lib/value";
 import { cx } from "../ui/primitives";
 import { FILTER_HINT, matchesFilter, parseFilter } from "@/lib/filter";
@@ -358,7 +359,7 @@ export function ResultGrid({
     if (!original) return setEditing(null);
 
     const next = parseEdit(draft, original);
-    if (formatValue(next) === formatValue(original) && next.kind === original.kind) {
+    if (unchanged(next, original)) {
       // Nothing changed — skip the round trip rather than writing an identical
       // value and pushing a no-op onto the undo stack.
       return setEditing(null);
@@ -387,7 +388,7 @@ export function ResultGrid({
     async (rowIndex: number, colIndex: number, next: Value) => {
       const original = result.rows[rowIndex]?.[colIndex];
       if (!original) return;
-      if (formatValue(next) === formatValue(original) && next.kind === original.kind) {
+      if (unchanged(next, original)) {
         setEditing(null);
         return;
       }
