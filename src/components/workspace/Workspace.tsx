@@ -166,6 +166,8 @@ export function Workspace({
   // identity — which is how this component learned to tear itself down.
   const connections = useConnections((s) => s.connections);
   const openConnections = useConnections((s) => s.open);
+  /** Every driver this build has, for a design that has to pick one. */
+  const drivers = useConnections((s) => s.drivers);
   /** Whether this connection's link has failed, and whether it is being rebuilt. */
   const linkLost = useConnections((s) => s.broken.has(connection.id));
   const reconnecting = useConnections((s) => s.busy.has(connection.id));
@@ -1611,6 +1613,7 @@ export function Workspace({
         connectionId={connection.id}
         onOpenNotebook={(notebook) => openNotebook(connection.id, notebook)}
         schema={database}
+        drivers={drivers}
         onOpenDesign={(design) => openDesign(connection.id, design)}
         onPick={(sql) => tab && setSql(connection.id, tab.id, sql)}
         onRun={(sql) => {

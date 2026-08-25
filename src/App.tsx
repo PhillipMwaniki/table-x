@@ -20,6 +20,7 @@ import { useUpdates } from "./store/updates";
 import { useCommands } from "./store/commands";
 import { useWorkspace } from "./store/workspace";
 import { DesignView } from "./components/workspace/DesignView";
+import { DesignList } from "./components/workspace/DesignList";
 import { ipc, IpcError } from "./lib/ipc";
 import type { ConnectionConfig, Design } from "./lib/types";
 
@@ -77,6 +78,14 @@ export default function App() {
    * is for anyway.
    */
   const [designScript, setDesignScript] = useState<string | null>(null);
+  /**
+   * Whether the designs browser has the pane.
+   *
+   * App-level rather than inside a connection's workspace, because a design is
+   * not about a connection. Somebody who opens Table X to draw a schema should
+   * not have to connect to a database first to find where that is done.
+   */
+  const [designsOpen, setDesignsOpen] = useState(false);
 
   const initSettings = useSettings((s) => s.init);
   const settingsReady = useSettings((s) => s.ready);
@@ -114,6 +123,23 @@ export default function App() {
       setDesignError(null);
     } catch (e) {
       setDesignError((e as IpcError).message);
+    }
+  }, []);
+
+  /** Show a design, in a tab where there is one and in the pane where not. */
+  const showDesign = useCallback((design: Design) => {
+    const connections = useConnections.getState();
+    const target =
+      connections.selectedId && connections.open.has(connections.selectedId)
+        ? connections.selectedId
+        : null;
+    if (target) {
+      useWorkspace.getState().openDesign(target, design);
+      setDesignsOpen(false);
+      setDesignFile(null);
+    } else {
+      setDesignFile(design);
+      setDesignsOpen(false);
     }
   }, []);
 
@@ -186,6 +212,15 @@ export default function App() {
         shortcut: "Ctrl+,",
         run: () => setSettingsOpen(true),
       },
+      {
+        id: "app.designs",
+        title: "Designs",
+        group: "Design",
+        run: () => {
+          setDesignsOpen(true);
+          setDesignFile(null);
+        },
+      },
       // The panel has a button of its own on the grid's toolbar; this is the
       // way to it that does not involve finding a 13px icon.
       {
@@ -230,6 +265,18 @@ export default function App() {
         </span>
 
         <div className="flex-1" />
+
+        <button
+          onClick={() => {
+            setDesignsOpen(true);
+            setDesignFile(null);
+          }}
+          title="Schema designs"
+          aria-label="Schema designs"
+          className="no-drag flex h-7 items-center rounded px-2 text-[11px] text-text-muted hover:bg-surface-2 hover:text-text"
+        >
+          Designs
+        </button>
 
         <button
           onClick={() => setSidebarCollapsed((was) => !was)}
@@ -316,7 +363,21 @@ export default function App() {
           {/* A design file takes the pane when there is no connected workspace
               to put it in a tab of. It is the whole reason the app was started
               in that case, and a design needs no database to be worked on. */}
-          {designFile && !(selected && open.has(selected.id)) ? (
+          {designsOpen ? (
+            <div className="flex min-h-0 flex-1 flex-col">
+              <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border bg-surface-1 px-2">
+                <span className="text-[12px] font-semibold">Designs</span>
+                <span className="text-[11px] text-text-muted">
+                  Schemas as documents. No connection needed until you want a script.
+                </span>
+                <div className="flex-1" />
+                <Button variant="ghost" className="h-6" onClick={() => setDesignsOpen(false)}>
+                  Close
+                </Button>
+              </div>
+              <DesignList drivers={drivers} onOpen={showDesign} />
+            </div>
+          ) : designFile && !(selected && open.has(selected.id)) ? (
             <div className="flex min-h-0 flex-1 flex-col">
               <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border bg-surface-1 px-2">
                 <span className="text-[11px] text-text-muted">
@@ -363,18 +424,21 @@ export default function App() {
                 <div className="text-center">
                   <h2 className="text-[13px] font-semibold">No connection selected</h2>
                   <p className="mt-1 max-w-sm text-[12px] text-text-muted">
-                    Select a connection from the sidebar, or create one to get started.
+                    Select a connection from the sidebar, or create one to get started. To draw a
+                    schema rather than query one, open a design — that needs no connection at all.
                   </p>
-                  <Button
-                    variant="primary"
-                    className="mt-4"
-                    onClick={() => {
-                      setEditing(null);
-                      setDialogOpen(true);
-                    }}
-                  >
-                    New connection
-                  </Button>
+                  <div className="mt-4 flex items-center justify-center gap-2">
+                    <Button
+                      variant="primary"
+                      onClick={() => {
+                        setEditing(null);
+                        setDialogOpen(true);
+                      }}
+                    >
+                      New connection
+                    </Button>
+                    <Button onClick={() => setDesignsOpen(true)}>Designs</Button>
+                  </div>
                 </div>
               )}
             </div>

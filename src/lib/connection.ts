@@ -11,6 +11,21 @@
 import type { ConnectionConfig, DriverInfo } from "./types";
 
 /**
+ * The driver a new connection or design starts on.
+ *
+ * Not simply the first registered one, which is whichever module happens to be
+ * listed first in the registry — today ClickHouse, which is nobody's likely
+ * answer to "New connection". Drivers sit behind Cargo features, so a build
+ * without this one falls back to the first it does have rather than offering
+ * nothing at all.
+ */
+export const DEFAULT_DRIVER = "mysql";
+
+export function defaultDriver(drivers: DriverInfo[]): DriverInfo | undefined {
+  return drivers.find((d) => d.id === DEFAULT_DRIVER) ?? drivers[0];
+}
+
+/**
  * Point a config at another driver, keeping everything that still means
  * something.
  *

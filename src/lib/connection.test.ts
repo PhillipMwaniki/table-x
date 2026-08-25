@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { forDriver, retargetConfig } from "./connection";
+import { defaultDriver, forDriver, retargetConfig } from "./connection";
 import type { ConnectionConfig, DriverInfo } from "./types";
 
 function driver(id: string, overrides: Partial<DriverInfo> = {}): DriverInfo {
@@ -109,5 +109,24 @@ describe("forDriver", () => {
     const next = forDriver(config({ file_path: "/data/app.db" }), mysql);
     expect(next.file_path).toBeUndefined();
     expect(next.host).toBe("db.internal");
+  });
+});
+
+describe("defaultDriver", () => {
+  it("starts on MySQL rather than on whichever driver sorts first", () => {
+    // The registry's order is an accident of how the modules are listed, and
+    // the first one is ClickHouse -- nobody's likely answer to "new design".
+    const clickhouse = driver("clickhouse");
+    expect(defaultDriver([clickhouse, postgres, mysql])?.id).toBe("mysql");
+  });
+
+  it("falls back to the first driver a build actually has", () => {
+    // Drivers sit behind Cargo features, so a build without MySQL still has to
+    // open the form on something.
+    expect(defaultDriver([postgres, sqlite])?.id).toBe("postgres");
+  });
+
+  it("has nothing to offer a build with no drivers at all", () => {
+    expect(defaultDriver([])).toBeUndefined();
   });
 });

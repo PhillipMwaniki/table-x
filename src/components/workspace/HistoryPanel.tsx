@@ -16,7 +16,7 @@ import { SnippetList } from "./SnippetList";
 import { NotebookList } from "./NotebookList";
 import { DesignList } from "./DesignList";
 import { tabsOf, useWorkspace } from "@/store/workspace";
-import type { Design, HistoryEntry, Notebook } from "@/lib/types";
+import type { Design, DriverInfo, HistoryEntry, Notebook } from "@/lib/types";
 
 /** Debounce for the search box, in ms. Long enough to skip intermediate
  *  keystrokes, short enough that the list feels attached to the input. */
@@ -28,6 +28,7 @@ export function HistoryPanel({
   onRun,
   onOpenNotebook,
   schema,
+  drivers,
   onOpenDesign,
 }: {
   connectionId: string;
@@ -38,6 +39,7 @@ export function HistoryPanel({
   onOpenNotebook: (notebook: Notebook) => void;
   /** The schema in front of the user, which a new design is read from. */
   schema: string | null;
+  drivers: DriverInfo[];
   onOpenDesign: (design: Design) => void;
 }) {
   const {
@@ -136,7 +138,12 @@ export function HistoryPanel({
       {tab === "snippets" && <SnippetList onPick={onPick} onRun={onRun} />}
       {tab === "notebooks" && <NotebookList connectionId={connectionId} onOpen={onOpenNotebook} />}
       {tab === "designs" && (
-        <DesignList connectionId={connectionId} schema={schema} onOpen={onOpenDesign} />
+        <DesignList
+          connectionId={connectionId}
+          schema={schema}
+          drivers={drivers}
+          onOpen={onOpenDesign}
+        />
       )}
 
       {tab === "history" && (

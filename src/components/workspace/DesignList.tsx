@@ -1,29 +1,35 @@
 /**
- * Saved schema designs.
+ * Saved schema designs, and the three ways to get one.
  *
- * Beside the notebooks rather than mixed into them: a notebook is reasoning
- * about a database that exists, a design is a database that does not exist yet.
+ * Beside the notebooks when there is a connection, and in the main pane when
+ * there is not — because a design needs no database, and somebody who opens the
+ * app wanting to draw a schema should not have to connect to one first.
  *
- * The button that matters most is the one that starts a design from the schema
- * in front of you. Almost every schema worth designing already exists in some
- * form, and typing it in again to get it onto a canvas is the reason people
- * give up on tools like this.
+ * The three ways are deliberate. Start empty, when the schema is still in
+ * somebody's head. Start from a database, because almost every schema worth
+ * changing already exists and typing it in again is why people abandon tools
+ * like this. Or open a file somebody sent.
  */
 
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Button, Spinner } from "../ui/primitives";
+import { Button, Field, Input, Select, Spinner } from "../ui/primitives";
+import { Dialog } from "../ui/Dialog";
 import { ipc, IpcError } from "@/lib/ipc";
-import type { Design } from "@/lib/types";
+import { defaultDriver } from "@/lib/connection";
+import type { Design, DriverInfo } from "@/lib/types";
 
 export function DesignList({
   connectionId,
   schema,
+  drivers,
   onOpen,
 }: {
-  connectionId: string;
+  /** Absent when nothing is connected, which removes only "From schema". */
+  connectionId?: string | undefined;
   /** The schema the workspace is looking at, which a new design starts from. */
-  schema: string | null;
+  schema?: string | null | undefined;
+  drivers: DriverInfo[];
   onOpen: (design: Design) => void;
 }) {
   const [designs, setDesigns] = useState<Design[]>([]);
@@ -31,6 +37,8 @@ export function DesignList({
   const [reading, setReading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
+  /** The new-design form, when it is open. */
+  const [creating, setCreating] = useState<{ name: string; driver: string } | null>(null);
 
   const refresh = async () => {
     setLoading(true);
@@ -67,7 +75,32 @@ export function DesignList({
     };
   }, []);
 
+  /** Start from nothing, which is what designing usually means. */
+  const create = async () => {
+    if (!creating) return;
+    const draft = creating;
+    setCreating(null);
+    try {
+      const design = await ipc.saveDesign({
+        // crypto.randomUUID is available in every webview Tauri v2 supports.
+        id: crypto.randomUUID(),
+        name: draft.name.trim() || "Untitled design",
+        driver: draft.driver,
+        tables: [],
+        layout: [],
+        created_at: "",
+        updated_at: "",
+      });
+      await refresh();
+      onOpen(design);
+    } catch (e) {
+      setError((e as IpcError).message);
+    }
+  };
+
+  /** Read the schema in front of the user into a new design. */
   const reverseEngineer = async () => {
+    if (!connectionId) return;
     setReading(true);
     setError(null);
     try {
@@ -108,22 +141,34 @@ export function DesignList({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-center gap-2 border-b border-border px-2 py-1">
+      <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border px-2 py-1">
         <input
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           placeholder="Filter designs…"
-          className="h-5 flex-1 rounded border border-border bg-surface-0 px-1.5 text-[11px] outline-none focus:border-accent"
+          className="h-5 min-w-24 flex-1 rounded border border-border bg-surface-0 px-1.5 text-[11px] outline-none focus:border-accent"
         />
         <Button
           variant="ghost"
           className="h-5"
-          busy={reading}
-          onClick={() => void reverseEngineer()}
-          title="Read this schema into a new design"
+          onClick={() => setCreating({ name: "", driver: defaultDriver(drivers)?.id ?? "" })}
+          title="Start a design with no tables in it"
         >
-          From schema
+          New
         </Button>
+        {/* Only where there is a schema to read. Offered without one it would be
+            a button whose failure message is the only answer it has. */}
+        {connectionId && (
+          <Button
+            variant="ghost"
+            className="h-5"
+            busy={reading}
+            onClick={() => void reverseEngineer()}
+            title="Read this schema into a new design"
+          >
+            From schema
+          </Button>
+        )}
         <Button
           variant="ghost"
           className="h-5"
@@ -146,9 +191,11 @@ export function DesignList({
             <Spinner className="text-text-muted" />
           </div>
         ) : visible.length === 0 ? (
-          <p className="p-4 text-center text-[11px] text-text-muted">
+          <p className="p-6 text-center text-[11px] text-text-muted">
             {designs.length === 0
-              ? "No designs yet. “From schema” reads the schema you are connected to into one, or open a .erd file."
+              ? connectionId
+                ? "No designs yet. Start an empty one, read this schema into a design, or open a .erd file."
+                : "No designs yet. Start an empty one, or open a .erd file — a design needs no connection."
               : "Nothing matches that."}
           </p>
         ) : (
@@ -158,10 +205,13 @@ export function DesignList({
                 <div className="flex items-center gap-2 px-2 py-1.5">
                   <button onClick={() => onOpen(design)} className="min-w-0 flex-1 text-left">
                     <span className="block truncate text-[12px] text-text">{design.name}</span>
-                    <span className="block text-[10.5px] text-text-muted">
+                    <span className="block truncate text-[10.5px] text-text-muted">
                       {design.tables.length} table{design.tables.length === 1 ? "" : "s"} ·{" "}
                       <span className="font-mono">{design.driver}</span> ·{" "}
                       {new Date(design.updated_at).toLocaleString()}
+                      {/* Named when it is also a file, since that is where
+                          saving will write and what can be sent to somebody. */}
+                      {design.path && <span className="ml-1 text-text-muted/70">· a file</span>}
                     </span>
                   </button>
                   <button
@@ -179,6 +229,57 @@ export function DesignList({
           </ul>
         )}
       </div>
+
+      <Dialog
+        open={creating !== null}
+        onClose={() => setCreating(null)}
+        title="New design"
+        description="A design is a document. It needs no database until you ask it for a script."
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setCreating(null)}>
+              Cancel
+            </Button>
+            <Button variant="primary" onClick={() => void create()}>
+              Create
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-3">
+          <Field label="Name">
+            <Input
+              autoFocus
+              value={creating?.name ?? ""}
+              placeholder="Untitled design"
+              onChange={(e) => setCreating((was) => (was ? { ...was, name: e.target.value } : was))}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void create();
+              }}
+            />
+          </Field>
+          {/* Asked at the start because it cannot be avoided later: a design's
+              script has to be written for one engine, and AUTO_INCREMENT and
+              SERIAL are not the same thing. */}
+          <Field
+            label="For engine"
+            hint="Decides how the script is written. A design is not portable between engines."
+          >
+            <Select
+              value={creating?.driver ?? ""}
+              onChange={(e) =>
+                setCreating((was) => (was ? { ...was, driver: e.target.value } : was))
+              }
+            >
+              {drivers.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </div>
+      </Dialog>
     </div>
   );
 }
