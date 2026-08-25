@@ -286,6 +286,7 @@ impl Connection for SqliteConnection {
                         schema: None,
                         name,
                         foreign_keys,
+                        columns: Vec::new(),
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;

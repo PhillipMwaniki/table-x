@@ -349,6 +349,7 @@ impl Connection for MssqlConnection {
                 schema: Some(target.clone()),
                 name,
                 foreign_keys: Vec::new(),
+                columns: Vec::new(),
             })
             .collect();
 

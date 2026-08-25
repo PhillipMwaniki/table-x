@@ -377,6 +377,7 @@ impl Connection for MysqlConnection {
                 schema: Some(db.clone()),
                 name,
                 foreign_keys: Vec::new(),
+                columns: Vec::new(),
             })
             .collect();
 

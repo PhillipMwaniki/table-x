@@ -363,6 +363,28 @@ pub struct Dialect {
     /// engine can rewrite a column and still have no way to attach a foreign key
     /// to a table that already exists.
     pub constraints: bool,
+    /// How this engine spells "the server fills this in".
+    pub generated: GeneratedKeyStyle,
+}
+
+/// How a generated key is written in a `CREATE TABLE`.
+///
+/// Every engine has one and no two agree, which is exactly the kind of thing a
+/// design must not be asked to know: the design records *that* a column is
+/// generated, and the dialect decides what that looks like.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GeneratedKeyStyle {
+    /// `id int NOT NULL AUTO_INCREMENT`.
+    AutoIncrement,
+    /// The type is replaced outright: `id SERIAL`, `id BIGSERIAL`.
+    Serial,
+    /// `id int IDENTITY(1,1)`.
+    Identity,
+    /// `id INTEGER PRIMARY KEY AUTOINCREMENT` — and only ever on that exact
+    /// type, which is why SQLite gets its own spelling rather than a keyword.
+    SqliteRowid,
+    /// The engine has no such thing.
+    None,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -390,11 +412,13 @@ impl Dialect {
                 quote: '`',
                 alter_column: AlterColumnStyle::MySql,
                 constraints: true,
+                generated: GeneratedKeyStyle::AutoIncrement,
             },
             "mssql" => Dialect {
                 quote: '[',
                 alter_column: AlterColumnStyle::TSql,
                 constraints: true,
+                generated: GeneratedKeyStyle::Identity,
             },
             // Spelled like MySQL, but with no constraints of any kind — and its
             // indexes are data-skipping indexes, which are a different concept
@@ -403,6 +427,10 @@ impl Dialect {
                 quote: '`',
                 alter_column: AlterColumnStyle::MySql,
                 constraints: false,
+                // No generated keys either: rows are inserted with whatever
+                // they carry, and a column that fills itself in is not a thing
+                // here.
+                generated: GeneratedKeyStyle::None,
             },
             // Named rather than left to the default, because what SQLite cannot
             // do is the whole point. It was previously treated as PostgreSQL,
@@ -413,11 +441,13 @@ impl Dialect {
                 quote: '"',
                 alter_column: AlterColumnStyle::Unsupported,
                 constraints: false,
+                generated: GeneratedKeyStyle::SqliteRowid,
             },
             _ => Dialect {
                 quote: '"',
                 alter_column: AlterColumnStyle::Postgres,
                 constraints: true,
+                generated: GeneratedKeyStyle::Serial,
             },
         }
     }
@@ -551,7 +581,15 @@ fn statement_for(change: &Change, dialect: Dialect) -> Option<Statement> {
                 .iter()
                 .map(|c| format!("  {}", column_definition(c, dialect)))
                 .collect();
-            if !primary_key.is_empty() {
+            // SQLite's generated key is spelled `INTEGER PRIMARY KEY
+            // AUTOINCREMENT`, so the key is already declared and a second
+            // `PRIMARY KEY (...)` clause makes the statement invalid.
+            let key_already_declared = dialect.generated == GeneratedKeyStyle::SqliteRowid
+                && primary_key.len() == 1
+                && columns
+                    .iter()
+                    .any(|c| c.auto_increment && c.name == primary_key[0]);
+            if !primary_key.is_empty() && !key_already_declared {
                 let keys: Vec<String> = primary_key.iter().map(|c| q(c)).collect();
                 parts.push(format!("  PRIMARY KEY ({})", keys.join(", ")));
             }
@@ -801,16 +839,44 @@ fn statement_for(change: &Change, dialect: Dialect) -> Option<Statement> {
 
 /// A column as it appears inside CREATE TABLE or after ADD COLUMN.
 fn column_definition(column: &ColumnDef, dialect: Dialect) -> String {
-    let mut out = format!(
-        "{} {}",
-        quote_ident(&column.name, dialect.quote),
-        column.type_name
-    );
+    let name = quote_ident(&column.name, dialect.quote);
+
+    // PostgreSQL's generated key replaces the type rather than qualifying it,
+    // and SQLite's is a fixed phrase that includes the primary key. Both are
+    // whole definitions rather than a suffix, so they are written as such.
+    if column.auto_increment {
+        match dialect.generated {
+            GeneratedKeyStyle::Serial => {
+                let serial = if column.type_name.to_lowercase().contains("big") {
+                    "bigserial"
+                } else {
+                    "serial"
+                };
+                return format!("{name} {serial}");
+            }
+            GeneratedKeyStyle::SqliteRowid => {
+                return format!("{name} INTEGER PRIMARY KEY AUTOINCREMENT");
+            }
+            _ => {}
+        }
+    }
+
+    let mut out = format!("{name} {}", column.type_name);
     if !column.nullable {
         out.push_str(" NOT NULL");
     }
     if let Some(default) = &column.default {
         out.push_str(&format!(" DEFAULT {default}"));
+    }
+    if column.auto_increment {
+        match dialect.generated {
+            GeneratedKeyStyle::AutoIncrement => out.push_str(" AUTO_INCREMENT"),
+            GeneratedKeyStyle::Identity => out.push_str(" IDENTITY(1,1)"),
+            // Serial and SQLite returned above; None has nothing to add, and
+            // saying so silently is right: the column is still created, it
+            // simply will not fill itself in.
+            _ => {}
+        }
     }
     out
 }
@@ -829,6 +895,91 @@ mod tests {
             ordinal: 1,
             comment: None,
         }
+    }
+
+    /// A table with a generated key, which is what a new design starts from.
+    fn keyed_table() -> TableDetail {
+        TableDetail {
+            schema: None,
+            name: "users".into(),
+            columns: vec![
+                ColumnDef {
+                    name: "id".into(),
+                    type_name: "int".into(),
+                    nullable: false,
+                    default: None,
+                    auto_increment: true,
+                    ordinal: 0,
+                    comment: None,
+                },
+                column("email", "text"),
+            ],
+            indexes: vec![],
+            foreign_keys: vec![],
+            primary_key: vec!["id".into()],
+            estimated_rows: None,
+            comment: None,
+        }
+    }
+
+    fn create_for(driver: &str) -> String {
+        let to = SchemaSnapshot {
+            label: "design".into(),
+            tables: vec![keyed_table()],
+        };
+        let script = migration(
+            &diff(&SchemaSnapshot::default(), &to),
+            Dialect::for_driver(driver),
+        );
+        script.first().expect("a create statement").sql.clone()
+    }
+
+    #[test]
+    fn each_engine_spells_a_generated_key_its_own_way() {
+        // The design records *that* the column is generated. Which of these
+        // five spellings that means is the dialect's business, and getting it
+        // wrong produces a script that fails on the first statement.
+        assert!(
+            create_for("mysql").contains("AUTO_INCREMENT"),
+            "{}",
+            create_for("mysql")
+        );
+        assert!(
+            create_for("mssql").contains("IDENTITY(1,1)"),
+            "{}",
+            create_for("mssql")
+        );
+        assert!(
+            create_for("postgres").contains("serial"),
+            "{}",
+            create_for("postgres")
+        );
+    }
+
+    #[test]
+    fn postgres_replaces_the_type_rather_than_qualifying_it() {
+        // `id int serial` is not a thing; `id serial` is.
+        let sql = create_for("postgres");
+        assert!(sql.contains("\"id\" serial"), "{sql}");
+        assert!(!sql.contains("int serial"), "{sql}");
+    }
+
+    #[test]
+    fn sqlite_declares_its_key_once() {
+        // Its generated key is a fixed phrase that already says PRIMARY KEY, so
+        // a second clause would make the statement invalid.
+        let sql = create_for("sqlite");
+        assert!(sql.contains("INTEGER PRIMARY KEY AUTOINCREMENT"), "{sql}");
+        assert_eq!(sql.matches("PRIMARY KEY").count(), 1, "{sql}");
+    }
+
+    #[test]
+    fn an_engine_without_generated_keys_still_creates_the_column() {
+        // ClickHouse has no such thing. The column is still wanted; it simply
+        // will not fill itself in, and saying nothing is the honest output.
+        let sql = create_for("clickhouse");
+        assert!(sql.contains("`id` int"), "{sql}");
+        assert!(!sql.to_uppercase().contains("AUTO_INCREMENT"), "{sql}");
     }
 
     fn table(name: &str, columns: Vec<ColumnDef>) -> TableDetail {
@@ -855,6 +1006,7 @@ mod tests {
         quote: '"',
         alter_column: AlterColumnStyle::Postgres,
         constraints: true,
+        generated: GeneratedKeyStyle::Serial,
     };
 
     #[test]
@@ -1160,6 +1312,7 @@ mod tests {
         quote: '"',
         alter_column: AlterColumnStyle::Unsupported,
         constraints: false,
+        generated: GeneratedKeyStyle::SqliteRowid,
     };
 
     /// Everything on, for testing the refusals rather than the capabilities.

@@ -715,6 +715,9 @@ pub async fn schema_graph(client: &Client, schema: &str) -> Result<SchemaGraph> 
             schema: Some(schema.to_string()),
             name: r.get(0),
             foreign_keys: Vec::new(),
+            // Left empty: the browsing diagram draws the columns that carry a
+            // relationship, not every column of every table.
+            columns: Vec::new(),
         })
         .collect();
 

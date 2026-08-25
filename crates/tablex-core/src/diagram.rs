@@ -21,6 +21,24 @@ pub struct GraphTable {
     pub schema: Option<String>,
     pub name: String,
     pub foreign_keys: Vec<ForeignKeyDef>,
+    /// Every column, for a diagram that should show them all.
+    ///
+    /// A driver leaves this empty and gets the browsing diagram: only the
+    /// columns that carry a relationship, because a hundred tables with every
+    /// column listed is a wall rather than a picture. A design fills it in,
+    /// because a design is being *edited* — a column you cannot see is a column
+    /// you cannot check, and the type beside it is half of what is being
+    /// decided.
+    #[serde(default)]
+    pub columns: Vec<GraphColumn>,
+}
+
+/// A column as a diagram needs to show it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphColumn {
+    pub name: String,
+    pub type_name: String,
+    pub primary: bool,
 }
 
 /// Every table in one schema, with its relations.
@@ -44,6 +62,15 @@ pub fn graph_of(tables: &[crate::schema::TableDetail]) -> SchemaGraph {
                 schema: table.schema.clone(),
                 name: table.name.clone(),
                 foreign_keys: table.foreign_keys.clone(),
+                columns: table
+                    .columns
+                    .iter()
+                    .map(|column| GraphColumn {
+                        name: column.name.clone(),
+                        type_name: column.type_name.clone(),
+                        primary: table.primary_key.iter().any(|k| k == &column.name),
+                    })
+                    .collect(),
             })
             .collect(),
     }
@@ -61,6 +88,12 @@ pub struct BoxColumn {
     pub outgoing: bool,
     /// Another table points at this column.
     pub incoming: bool,
+    /// The declared type, when the diagram is showing every column.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_name: Option<String>,
+    /// Part of the primary key.
+    #[serde(default)]
+    pub primary: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -176,31 +209,67 @@ pub fn layout(graph: &SchemaGraph) -> Diagram {
         .map(|(i, table)| {
             // One entry per column, whichever direction it was touched from,
             // in first-seen order so a composite key keeps its order.
-            let mut columns: Vec<BoxColumn> = Vec::new();
-            for (name, is_outgoing) in outgoing[i]
-                .iter()
-                .map(|c| (c, true))
-                .chain(incoming[i].iter().map(|c| (c, false)))
-            {
-                match columns
-                    .iter_mut()
-                    .find(|c| c.name.eq_ignore_ascii_case(name))
+            let touched = |name: &str, want_outgoing: bool| {
+                let list = if want_outgoing {
+                    &outgoing[i]
+                } else {
+                    &incoming[i]
+                };
+                list.iter().any(|c| c.eq_ignore_ascii_case(name))
+            };
+
+            let mut columns: Vec<BoxColumn> = if table.columns.is_empty() {
+                // Nothing but the columns that carry a relationship — see
+                // `GraphTable::columns`.
+                let mut only_keys: Vec<BoxColumn> = Vec::new();
+                for (name, is_outgoing) in outgoing[i]
+                    .iter()
+                    .map(|c| (c, true))
+                    .chain(incoming[i].iter().map(|c| (c, false)))
                 {
-                    Some(existing) => {
-                        existing.outgoing |= is_outgoing;
-                        existing.incoming |= !is_outgoing;
+                    match only_keys
+                        .iter_mut()
+                        .find(|c| c.name.eq_ignore_ascii_case(name))
+                    {
+                        Some(existing) => {
+                            existing.outgoing |= is_outgoing;
+                            existing.incoming |= !is_outgoing;
+                        }
+                        None => only_keys.push(BoxColumn {
+                            name: name.clone(),
+                            outgoing: is_outgoing,
+                            incoming: !is_outgoing,
+                            type_name: None,
+                            primary: false,
+                        }),
                     }
-                    None => columns.push(BoxColumn {
-                        name: name.clone(),
-                        outgoing: is_outgoing,
-                        incoming: !is_outgoing,
-                    }),
                 }
-            }
+                only_keys
+            } else {
+                // Every column, in the order the table declares them, which is
+                // the order somebody put them in.
+                table
+                    .columns
+                    .iter()
+                    .map(|column| BoxColumn {
+                        outgoing: touched(&column.name, true),
+                        incoming: touched(&column.name, false),
+                        name: column.name.clone(),
+                        type_name: Some(column.type_name.clone()),
+                        primary: column.primary,
+                    })
+                    .collect()
+            };
+            columns.shrink_to_fit();
 
             let widest = columns
                 .iter()
-                .map(|c| c.name.len())
+                .map(|c| match &c.type_name {
+                    // The type is drawn beside the name, so it is part of how
+                    // wide the box has to be. Two for the gap between them.
+                    Some(type_name) => c.name.len() + type_name.len() + 2,
+                    None => c.name.len(),
+                })
                 .chain(std::iter::once(table.name.len()))
                 .max()
                 .unwrap_or(0);
@@ -360,7 +429,103 @@ mod tests {
             schema: None,
             name: name.into(),
             foreign_keys: keys,
+            columns: Vec::new(),
         }
+    }
+
+    /// A table that knows all of its columns, as a design's does.
+    fn detailed(name: &str, columns: &[(&str, &str, bool)]) -> GraphTable {
+        GraphTable {
+            schema: None,
+            name: name.into(),
+            foreign_keys: Vec::new(),
+            columns: columns
+                .iter()
+                .map(|(name, type_name, primary)| GraphColumn {
+                    name: (*name).into(),
+                    type_name: (*type_name).into(),
+                    primary: *primary,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn a_browsing_diagram_shows_only_the_columns_that_carry_a_relation() {
+        // Two hundred tables with every column listed is a wall rather than a
+        // picture, which is why a driver leaves the column list empty.
+        let graph = SchemaGraph {
+            tables: vec![
+                table("orders", vec![fk(&["user_id"], "users", &["id"])]),
+                table("users", vec![]),
+            ],
+        };
+        let drawing = layout(&graph);
+        let orders = drawing
+            .boxes
+            .iter()
+            .find(|b| b.table == "orders")
+            .expect("orders");
+        assert_eq!(orders.columns.len(), 1);
+        assert_eq!(orders.columns[0].name, "user_id");
+        // No type, because the driver did not send one and inventing one would
+        // be worse than leaving it out.
+        assert!(orders.columns[0].type_name.is_none());
+    }
+
+    #[test]
+    fn a_design_shows_every_column_with_its_type() {
+        // A design is being edited: a column you cannot see is one you cannot
+        // check, and the type beside it is half of what is being decided.
+        let graph = SchemaGraph {
+            tables: vec![detailed(
+                "users",
+                &[("id", "int", true), ("email", "varchar(255)", false)],
+            )],
+        };
+        let drawing = layout(&graph);
+        let users = &drawing.boxes[0];
+        assert_eq!(users.columns.len(), 2);
+        assert_eq!(users.columns[0].type_name.as_deref(), Some("int"));
+        assert!(users.columns[0].primary);
+        assert!(!users.columns[1].primary);
+        // Wide enough for the longest "name type" pair, or the type is clipped.
+        assert!(
+            users.width > "email varchar(255)".len() as f64,
+            "{}",
+            users.width
+        );
+    }
+
+    #[test]
+    fn a_designs_columns_still_show_what_points_where() {
+        let graph = SchemaGraph {
+            tables: vec![
+                GraphTable {
+                    foreign_keys: vec![fk(&["user_id"], "users", &["id"])],
+                    ..detailed("orders", &[("id", "int", true), ("user_id", "int", false)])
+                },
+                detailed("users", &[("id", "int", true)]),
+            ],
+        };
+        let drawing = layout(&graph);
+        let orders = drawing
+            .boxes
+            .iter()
+            .find(|b| b.table == "orders")
+            .expect("orders");
+        let user_id = orders
+            .columns
+            .iter()
+            .find(|c| c.name == "user_id")
+            .expect("user_id");
+        assert!(user_id.outgoing, "the column that points at users");
+        let users = drawing
+            .boxes
+            .iter()
+            .find(|b| b.table == "users")
+            .expect("users");
+        assert!(users.columns[0].incoming, "the column pointed at");
     }
 
     #[test]
