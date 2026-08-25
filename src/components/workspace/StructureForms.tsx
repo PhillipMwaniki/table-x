@@ -61,11 +61,14 @@ function FormPanel({
 export function ColumnForm({
   existing,
   ordinal,
+  types,
   onCancel,
   onSave,
 }: {
   existing?: ColumnDef | undefined;
   ordinal: number;
+  /** The column types this engine has, offered as suggestions. */
+  types?: string[] | undefined;
   onCancel: () => void;
   onSave: (column: ColumnDef) => void;
 }) {
@@ -100,11 +103,21 @@ export function ColumnForm({
         <Field label="Type" hint="Written through as typed, in this engine's own spelling.">
           <Input
             value={draft.type_name}
+            // The engine's own types, suggested rather than enforced: a
+            // `varchar(80)` or an enum of somebody's own values is a type this
+            // list cannot hold, and typing one from memory is how `timestmap`
+            // gets into a schema.
+            list="column-types"
             onChange={(e) => patch({ type_name: e.target.value })}
             placeholder="text"
             spellCheck={false}
             autoFocus={Boolean(existing)}
           />
+          <datalist id="column-types">
+            {(types ?? []).map((t) => (
+              <option key={t} value={t} />
+            ))}
+          </datalist>
         </Field>
       </div>
 

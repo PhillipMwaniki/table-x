@@ -107,6 +107,36 @@ impl Driver for ClickhouseDriver {
             // The HTTP interface, not the native protocol on 9000.
             default_port: Some(8123),
             file_based: false,
+            column_types: vec![
+                "Int32",
+                "Int64",
+                "String",
+                "DateTime",
+                "Date",
+                "Float64",
+                "UInt32",
+                "UInt64",
+                "Decimal(10,2)",
+                "Bool",
+                "UUID",
+                "Int8",
+                "Int16",
+                "UInt8",
+                "UInt16",
+                "Float32",
+                "DateTime64(3)",
+                "FixedString(16)",
+                "Enum8('a'=1)",
+                "Array(String)",
+                "Nullable(String)",
+                "LowCardinality(String)",
+                "JSON",
+                "IPv4",
+                "IPv6",
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect(),
             capabilities: Capabilities {
                 // None of it, and not for lack of an ALTER statement.
                 // ClickHouse has no foreign keys at all, and its indexes are

@@ -162,6 +162,36 @@ impl Driver for MssqlDriver {
             name: "SQL Server".into(),
             default_port: Some(1433),
             file_based: false,
+            column_types: vec![
+                "int",
+                "bigint",
+                "nvarchar(255)",
+                "nvarchar(max)",
+                "varchar(255)",
+                "bit",
+                "datetime2",
+                "date",
+                "decimal(10,2)",
+                "uniqueidentifier",
+                "float",
+                "real",
+                "smallint",
+                "tinyint",
+                "money",
+                "char(1)",
+                "nchar(1)",
+                "text",
+                "ntext",
+                "time",
+                "datetimeoffset",
+                "varbinary(max)",
+                "binary(16)",
+                "xml",
+                "geography",
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect(),
             capabilities: Capabilities {
                 ddl: DdlSupport {
                     add_column: true,

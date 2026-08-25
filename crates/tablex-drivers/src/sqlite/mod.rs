@@ -57,6 +57,21 @@ impl Driver for SqliteDriver {
             name: "SQLite".into(),
             default_port: None,
             file_based: true,
+            column_types: vec![
+                "INTEGER",
+                "TEXT",
+                "REAL",
+                "BLOB",
+                "NUMERIC",
+                "BOOLEAN",
+                "DATETIME",
+                "DATE",
+                "VARCHAR(255)",
+                "DECIMAL(10,2)",
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect(),
             capabilities: Capabilities {
                 // Add, drop and index only. SQLite has no ALTER COLUMN and no
                 // ADD CONSTRAINT: changing a type or attaching a foreign key

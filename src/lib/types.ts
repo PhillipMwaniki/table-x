@@ -116,6 +116,15 @@ export interface DriverInfo {
   id: string;
   name: string;
   default_port: number | null;
+  /**
+   * The column types this engine has, for a form that has to offer them.
+   *
+   * Declared by the driver rather than listed here, because a list in the UI is
+   * a second place to be wrong about MySQL. Ordered by how often a column turns
+   * out to be one of them, and not exhaustive — the fields that use it take
+   * free text, so anything missing can still be typed.
+   */
+  column_types?: string[] | undefined;
   /** Embedded databases take a file path instead of host/port. */
   file_based: boolean;
   capabilities: Capabilities;

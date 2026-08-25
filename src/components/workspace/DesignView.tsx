@@ -17,6 +17,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { Banner, Button, Spinner, cx } from "../ui/primitives";
 import { ipc, IpcError } from "@/lib/ipc";
+import { useConnections } from "@/store/connections";
 import { HEADER, ROW, canvasPoint, clampScale, linkPath, loopPath } from "@/lib/erd";
 import { addTable, removeTable, renameTable, withTable } from "@/lib/design";
 import { TableInspector } from "./TableInspector";
@@ -30,6 +31,12 @@ import type { Design, Diagram, DiffReport, TableDetail } from "@/lib/types";
  * screen.
  */
 const SAVE_DELAY = 600;
+
+/**
+ * One shared empty list, because a zustand selector's result is compared by
+ * identity and a fresh `[]` per call reads as a change on every render.
+ */
+const EMPTY_TYPES: string[] = [];
 
 export function DesignView({
   design,
@@ -51,6 +58,12 @@ export function DesignView({
    */
   onSync?: (() => void) | undefined;
 }) {
+  // The engine's own column types, for the field that offers them. A design
+  // naming a driver this build does not have still edits; it simply has no list
+  // to suggest from.
+  const types = useConnections(
+    (s) => s.drivers.find((d) => d.id === design.driver)?.column_types ?? EMPTY_TYPES,
+  );
   const [diagram, setDiagram] = useState<Diagram | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -469,6 +482,7 @@ export function DesignView({
             <TableInspector
               table={editing}
               tables={design.tables}
+              types={types}
               onChange={(next) => persist(withTable(design, editing.name, next))}
               onRename={(name) => {
                 // Through the design rather than the table: a rename has to reach

@@ -169,6 +169,20 @@ pub struct DriverInfo {
     pub default_port: Option<u16>,
     /// True for embedded databases that take a file path instead of host/port.
     pub file_based: bool,
+    /// The column types this engine has, for a form that has to offer them.
+    ///
+    /// Declared by the driver because the driver is where everything else about
+    /// an engine is declared, and because the alternative — a list in the UI —
+    /// is a second place to be wrong about MySQL. Ordered roughly by how often
+    /// a column turns out to be one of them rather than alphabetically: a list
+    /// somebody scrolls should put the answer near the top.
+    ///
+    /// Sizes are included where a bare type is not usable (`varchar` needs a
+    /// length) or where one spelling is overwhelmingly the common one. It is
+    /// not exhaustive and is not meant to be: the field it fills in takes free
+    /// text, so anything missing can still be typed.
+    #[serde(default)]
+    pub column_types: Vec<String>,
     pub capabilities: Capabilities,
 }
 

@@ -63,7 +63,10 @@ export function StructureView({
   const connections = useConnections((s) => s.connections);
   const drivers = useConnections((s) => s.drivers);
   const connection = connections.find((c) => c.id === connectionId);
-  const ddl = drivers.find((d) => d.id === connection?.driver)?.capabilities.ddl ?? NO_DDL;
+  const driver = drivers.find((d) => d.id === connection?.driver);
+  const ddl = driver?.capabilities.ddl ?? NO_DDL;
+  /** The engine's own column types, suggested by the column form. */
+  const types = driver?.column_types;
   // The same flag that stops a write from the grid. A structure edit is the
   // largest write there is, so it is the last place to make an exception.
   const readOnly = connection?.read_only ?? false;
@@ -303,6 +306,7 @@ export function StructureView({
               <ColumnForm
                 existing={staged.columns.find((c) => c.name === editingColumn)}
                 ordinal={staged.columns.length + 1}
+                types={types}
                 onCancel={() => setEditingColumn(null)}
                 onSave={(next) => {
                   const before = detail.columns.find((c) => c.name === editingColumn);
@@ -329,6 +333,7 @@ export function StructureView({
             <div className="mt-2">
               <ColumnForm
                 ordinal={staged.columns.length + 1}
+                types={types}
                 onCancel={() => setAdding(null)}
                 onSave={(column) => stage({ kind: "column_added", table: staged.name, column })}
               />

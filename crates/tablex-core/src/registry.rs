@@ -71,6 +71,7 @@ mod tests {
                 name: self.1.into(),
                 default_port: None,
                 file_based: true,
+                column_types: Vec::new(),
                 capabilities: Capabilities::default(),
             }
         }

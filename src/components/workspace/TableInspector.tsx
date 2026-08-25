@@ -22,23 +22,10 @@ import {
 } from "@/lib/design";
 import type { TableDetail } from "@/lib/types";
 
-/** Types offered first, being the ones most columns turn out to be. */
-const COMMON_TYPES = [
-  "int",
-  "bigint",
-  "varchar(255)",
-  "text",
-  "boolean",
-  "date",
-  "timestamp",
-  "decimal(10,2)",
-  "json",
-  "uuid",
-];
-
 export function TableInspector({
   table,
   tables,
+  types,
   onChange,
   onRename,
   onRemove,
@@ -47,6 +34,8 @@ export function TableInspector({
   table: TableDetail;
   /** Every table in the design, as the targets a relation can point at. */
   tables: TableDetail[];
+  /** The column types this design's engine has. */
+  types: string[];
   onChange: (next: TableDetail) => void;
   /** Renaming reaches wider than the table, so the design handles it. */
   onRename: (name: string) => void;
@@ -139,10 +128,11 @@ export function TableInspector({
                 </div>
 
                 <div className="mt-1 flex items-center gap-1.5">
-                  {/* A list of the usual types and a box to type any other:
-                      offering only a list would make every engine's own types
-                      unreachable, and offering only a box makes the common case
-                      typing. */}
+                  {/* The engine's own types, and a box to type anything they
+                      do not cover. A list alone could not express a
+                      `varchar(80)` or an enum of somebody's own values; a box
+                      alone makes the common case typing, and typing a type
+                      from memory is how `timestmap` gets into a schema. */}
                   <Input
                     value={column.type_name}
                     spellCheck={false}
@@ -211,7 +201,7 @@ export function TableInspector({
         </ul>
 
         <datalist id="design-types">
-          {COMMON_TYPES.map((t) => (
+          {types.map((t) => (
             <option key={t} value={t} />
           ))}
         </datalist>
