@@ -565,6 +565,33 @@ export interface TableDetail {
   comment?: string | undefined;
 }
 
+/** Where one table sits on a design's canvas. */
+export interface Placement {
+  table: string;
+  x: number;
+  y: number;
+}
+
+/**
+ * A schema design: a diagram you own, rather than a picture of a database.
+ *
+ * The tables are the same structures a live schema is read into, which is what
+ * lets the same comparison engine write both the script that creates the design
+ * and the script that brings a database up to it.
+ */
+export interface Design {
+  id: string;
+  name: string;
+  /** The engine the script is written for. A design is not portable. */
+  driver: string;
+  schema?: string | undefined;
+  tables: TableDetail[];
+  /** Only the tables that have been moved; the rest are laid out. */
+  layout: Placement[];
+  created_at: string;
+  updated_at: string;
+}
+
 export interface CompletionScope {
   schemas: string[];
   /** Qualified table name paired with its column names. */

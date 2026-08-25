@@ -21,6 +21,7 @@ import { parseSaved, shouldAutoRun, toSaved } from "@/lib/session";
 import { changesCatalog } from "@/lib/statements";
 import type {
   CompletionScope,
+  Design,
   DiffReport,
   ErrorCategory,
   Notebook,
@@ -67,7 +68,7 @@ export interface QueryError {
  * is the whole point and a modal would put it in front of the work instead.
  */
 export type TabKind =
-  "query" | "table" | "activity" | "diagram" | "diff" | "privileges" | "notebook";
+  "query" | "table" | "activity" | "diagram" | "diff" | "privileges" | "notebook" | "design";
 
 export interface Tab {
   id: string;
@@ -99,6 +100,15 @@ export interface Tab {
   cells?: NotebookCell[];
   /** The stored notebook this tab is editing, once it has been saved. */
   notebookId?: string | undefined;
+  /**
+   * The schema design this tab is showing.
+   *
+   * The design itself is held here rather than fetched by the view on every
+   * render: a drag moves a table sixty times a second, and a round trip per
+   * frame to find out where the table already is would make the canvas fight
+   * the pointer.
+   */
+  design?: Design | undefined;
   running: boolean;
   /** Index of the statement whose results are shown. */
   activeStatement: number;
@@ -242,6 +252,10 @@ interface WorkspaceState {
   openDiagram: (connectionId: string, schema: string | null) => void;
   openDiff: (connectionId: string, title: string, report: DiffReport) => void;
   openNotebook: (connectionId: string, notebook?: Notebook) => void;
+  /** Show a design on a canvas, focusing the tab that already has it. */
+  openDesign: (connectionId: string, design: Design) => void;
+  /** Follow a design as it is edited — a rename retitles its tab. */
+  setDesign: (connectionId: string, tabId: string, design: Design) => void;
   setCells: (connectionId: string, tabId: string, cells: NotebookCell[]) => void;
   setTabView: (connectionId: string, tabId: string, view: "data" | "structure") => void;
   renameNotebookTab: (
@@ -440,6 +454,30 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       active: { ...s.active, [id]: tab.id },
     }));
   },
+
+  openDesign: (id, design) => {
+    const list = tabsOf(get(), id);
+    // Reopening a design focuses the tab already showing it rather than opening
+    // a second copy, which would then save over the first.
+    const existing = list.find((t) => t.design?.id === design.id);
+    if (existing) {
+      set((s) => ({
+        active: { ...s.active, [id]: existing.id },
+        // The list's copy is newer than whatever the tab was holding.
+        tabs: patchTab(s.tabs, id, existing.id, { design, title: design.name }),
+      }));
+      return;
+    }
+
+    const tab = blankTab({ kind: "design", title: design.name, design });
+    set((s) => ({
+      tabs: { ...s.tabs, [id]: [...list, tab] },
+      active: { ...s.active, [id]: tab.id },
+    }));
+  },
+
+  setDesign: (id, tabId, design) =>
+    set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { design, title: design.name }) })),
 
   setCells: (id, tabId, cells) => set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { cells }) })),
 

@@ -27,6 +27,7 @@ import { ConfirmDestructive } from "./ConfirmDestructive";
 import { NotebookView } from "./NotebookView";
 import { StructureView } from "./StructureView";
 import { InsertRowDialog } from "./InsertRowDialog";
+import { DesignView } from "./DesignView";
 import { Button, Spinner, cx } from "../ui/primitives";
 import { ContextMenu } from "../ui/ContextMenu";
 import { Dialog } from "../ui/Dialog";
@@ -47,6 +48,7 @@ import { useWorkspace } from "@/store/workspace";
 import type {
   ColumnDef,
   ConnectionConfig,
+  Design,
   DriverInfo,
   ExportFormat,
   HazardItem,
@@ -95,6 +97,8 @@ export function Workspace({
     openDiagram,
     openDiff,
     openNotebook,
+    openDesign,
+    setDesign,
     setCells,
     setTabView,
     renameNotebookTab,
@@ -764,6 +768,28 @@ export function Workspace({
   };
 
   /**
+   * Compare a design against the connected database.
+   *
+   * The direction is the one a design is for: the database is what the script
+   * would run against, the design is what it is being brought to. It opens in
+   * the same diff view a schema comparison does, because it is the same thing —
+   * one side simply happens to be a document rather than a server.
+   */
+  const syncDesign = async (design: Design) => {
+    const id = crypto.randomUUID();
+    const current = activeTab(connection.id);
+    beginExport(id, `Comparing ${connection.name}`, "tables");
+    try {
+      const report = await ipc.designSync(design.id, connection.id, database ?? undefined);
+      openDiff(connection.id, `${connection.name} ⇄ ${design.name}`, report);
+    } catch (e) {
+      reportJobFailure(e as IpcError, current?.id, "Comparison with the design");
+    } finally {
+      endExport(id);
+    }
+  };
+
+  /**
    * Run a SQL file against this connection.
    *
    * Nothing is dropped or emptied first: what the file does is what happens,
@@ -1058,6 +1084,7 @@ export function Workspace({
               tab.kind === "diagram" ||
               tab.kind === "diff" ||
               tab.kind === "notebook" ||
+              tab.kind === "design" ||
               tab.kind === "privileges" ? (
                 <span className="text-[11px] text-text-muted">
                   {tab.kind === "activity"
@@ -1068,7 +1095,9 @@ export function Workspace({
                         ? "Principals and their grants, in the engine's own words."
                         : tab.kind === "notebook"
                           ? "Prose and queries together. Results are not saved with it."
-                          : "Tables and the keys between them. Drag to pan, scroll to zoom."}
+                          : tab.kind === "design"
+                            ? "A design, not a database. Drag tables about; nothing here runs."
+                            : "Tables and the keys between them. Drag to pan, scroll to zoom."}
                 </span>
               ) : (
                 <>
@@ -1225,7 +1254,21 @@ export function Workspace({
             {/* A table tab gives its whole height to the rows: there is no
                 statement to edit, and the SQL that produced them is one line
                 the tab's own context already describes. */}
-            {tab.kind === "notebook" ? (
+            {tab.kind === "design" ? (
+              tab.design ? (
+                <DesignView
+                  design={tab.design}
+                  onChange={(design) => setDesign(connection.id, tab.id, design)}
+                  onScript={(report) =>
+                    openScriptTab(connection.id, {
+                      title: `Create — ${report.to}`,
+                      sql: report.statements.map((s) => s.sql).join("\n\n"),
+                    })
+                  }
+                  onSync={() => void syncDesign(tab.design!)}
+                />
+              ) : null
+            ) : tab.kind === "notebook" ? (
               <NotebookView
                 cells={tab.cells ?? []}
                 saved={Boolean(tab.notebookId)}
@@ -1567,6 +1610,8 @@ export function Workspace({
       <HistoryPanel
         connectionId={connection.id}
         onOpenNotebook={(notebook) => openNotebook(connection.id, notebook)}
+        schema={database}
+        onOpenDesign={(design) => openDesign(connection.id, design)}
         onPick={(sql) => tab && setSql(connection.id, tab.id, sql)}
         onRun={(sql) => {
           if (!tab) return;

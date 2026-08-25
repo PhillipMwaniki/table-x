@@ -15,6 +15,7 @@ import type {
   Change,
   CsvPreview,
   DdlOutcome,
+  Design,
   DdlPlan,
   Diagram,
   DiffReport,
@@ -204,6 +205,26 @@ export const ipc = {
     columns: Column[];
     rows: Value[][];
   }) => call<number>("export_rows", { request: args }),
+
+  // Schema designs -------------------------------------------------------
+
+  listDesigns: () => call<Design[]>("list_designs"),
+  saveDesign: (design: Design) => call<Design>("save_design", { design }),
+  deleteDesign: (id: string) => call<void>("delete_design", { id }),
+
+  /** The design laid out for the canvas, saved positions applied. */
+  designDiagram: (id: string) => call<Diagram>("design_diagram", { id }),
+
+  /** Reverse engineer: read a live schema into a new design. */
+  designFromSchema: (connection_id: string, schema: string | undefined, name: string) =>
+    call<Design>("design_from_schema", { connection_id, schema: schema ?? null, name }),
+
+  /** Forward engineer: the script that would build this design from nothing. */
+  designScript: (id: string) => call<DiffReport>("design_script", { id }),
+
+  /** What it would take to make a database match this design. */
+  designSync: (id: string, connection_id: string, schema?: string) =>
+    call<DiffReport>("design_sync", { id, connection_id, schema: schema ?? null }),
 
   /**
    * The same rows an export would write, returned as text for the clipboard.

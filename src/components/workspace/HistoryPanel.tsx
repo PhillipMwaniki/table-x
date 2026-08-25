@@ -14,8 +14,9 @@ import { ipc } from "@/lib/ipc";
 import { useHistory } from "@/store/history";
 import { SnippetList } from "./SnippetList";
 import { NotebookList } from "./NotebookList";
+import { DesignList } from "./DesignList";
 import { tabsOf, useWorkspace } from "@/store/workspace";
-import type { HistoryEntry, Notebook } from "@/lib/types";
+import type { Design, HistoryEntry, Notebook } from "@/lib/types";
 
 /** Debounce for the search box, in ms. Long enough to skip intermediate
  *  keystrokes, short enough that the list feels attached to the input. */
@@ -26,6 +27,8 @@ export function HistoryPanel({
   onPick,
   onRun,
   onOpenNotebook,
+  schema,
+  onOpenDesign,
 }: {
   connectionId: string;
   /** Load a statement into the editor. */
@@ -33,6 +36,9 @@ export function HistoryPanel({
   /** Load and run it. */
   onRun: (sql: string) => void;
   onOpenNotebook: (notebook: Notebook) => void;
+  /** The schema in front of the user, which a new design is read from. */
+  schema: string | null;
+  onOpenDesign: (design: Design) => void;
 }) {
   const {
     open,
@@ -110,6 +116,9 @@ export function HistoryPanel({
         <PanelTabButton active={tab === "notebooks"} onClick={() => setTab("notebooks")}>
           Notebooks
         </PanelTabButton>
+        <PanelTabButton active={tab === "designs"} onClick={() => setTab("designs")}>
+          Designs
+        </PanelTabButton>
         <PanelTabButton active={tab === "snippets"} onClick={() => setTab("snippets")}>
           Saved
         </PanelTabButton>
@@ -126,6 +135,9 @@ export function HistoryPanel({
 
       {tab === "snippets" && <SnippetList onPick={onPick} onRun={onRun} />}
       {tab === "notebooks" && <NotebookList connectionId={connectionId} onOpen={onOpenNotebook} />}
+      {tab === "designs" && (
+        <DesignList connectionId={connectionId} schema={schema} onOpen={onOpenDesign} />
+      )}
 
       {tab === "history" && (
         <>

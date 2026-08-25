@@ -15,12 +15,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Banner, Button, Spinner } from "../ui/primitives";
 import { ipc, IpcError } from "@/lib/ipc";
-import type { Diagram, DiagramBox } from "@/lib/types";
-
-const HEADER = 24;
-const ROW = 16;
-const MIN_SCALE = 0.2;
-const MAX_SCALE = 2.5;
+import { HEADER, ROW, clampScale, linkPath, loopPath } from "@/lib/erd";
+import type { Diagram } from "@/lib/types";
 
 export function DiagramView({
   connectionId,
@@ -70,10 +66,7 @@ export function DiagramView({
       if (!e.ctrlKey && !e.metaKey && Math.abs(e.deltaY) < 2) return;
       e.preventDefault();
       setView((was) => {
-        const next = Math.min(
-          MAX_SCALE,
-          Math.max(MIN_SCALE, was.scale * (e.deltaY < 0 ? 1.1 : 0.9)),
-        );
+        const next = clampScale(was.scale * (e.deltaY < 0 ? 1.1 : 0.9));
         // Zoom toward the pointer rather than the origin, so the thing being
         // looked at stays where it is.
         const rect = el.getBoundingClientRect();
@@ -230,27 +223,4 @@ export function DiagramView({
       </div>
     </div>
   );
-}
-
-/**
- * A curve from the referencing table down to the one it references.
- *
- * Leaves the bottom of the child and arrives at the top of the parent, because
- * the layout always places a parent below its children — so the line always
- * travels the same way and the direction can be read without an arrowhead.
- */
-function linkPath(from: DiagramBox, to: DiagramBox): string {
-  const x1 = from.x + from.width / 2;
-  const y1 = from.y + from.height;
-  const x2 = to.x + to.width / 2;
-  const y2 = to.y;
-  const bend = Math.max(24, Math.abs(y2 - y1) / 2);
-  return `M ${x1} ${y1} C ${x1} ${y1 + bend}, ${x2} ${y2 - bend}, ${x2} ${y2}`;
-}
-
-/** A table that references itself: a loop off its right edge. */
-function loopPath(box: DiagramBox): string {
-  const x = box.x + box.width;
-  const y = box.y + box.height / 2;
-  return `M ${x} ${y - 8} C ${x + 28} ${y - 20}, ${x + 28} ${y + 20}, ${x} ${y + 8}`;
 }
