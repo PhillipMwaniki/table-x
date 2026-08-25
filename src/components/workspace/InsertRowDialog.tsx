@@ -15,6 +15,7 @@
 import { useMemo, useState } from "react";
 import { Dialog } from "../ui/Dialog";
 import { Button, Input, cx } from "../ui/primitives";
+import { insertValues, seedFields } from "@/lib/insert";
 import type { ColumnDef, Value } from "@/lib/types";
 
 export function InsertRowDialog({
@@ -43,21 +44,11 @@ export function InsertRowDialog({
   onClose: () => void;
   onInsert: (values: [string, Value][]) => void;
 }) {
+  const seed = useMemo(() => seedFields(columns, initial), [columns, initial]);
   /** Only the fields someone actually typed into — or arrived filled in. */
-  const [entered, setEntered] = useState<Record<string, string>>(() =>
-    Object.fromEntries(
-      Object.entries(initial ?? {}).filter((pair): pair is [string, string] => pair[1] !== null),
-    ),
-  );
+  const [entered, setEntered] = useState<Record<string, string>>(seed.entered);
   /** Fields explicitly set to NULL, which is different from left blank. */
-  const [nulled, setNulled] = useState<ReadonlySet<string>>(
-    () =>
-      new Set(
-        Object.entries(initial ?? {})
-          .filter(([, value]) => value === null)
-          .map(([name]) => name),
-      ),
-  );
+  const [nulled, setNulled] = useState<ReadonlySet<string>>(() => new Set(seed.nulled));
 
   const required = useMemo(
     () =>
@@ -71,21 +62,7 @@ export function InsertRowDialog({
 
   const missing = required.filter((c) => !entered[c.name]?.trim() && !nulled.has(c.name));
 
-  const submit = () => {
-    const values: [string, Value][] = [];
-    for (const column of columns) {
-      if (nulled.has(column.name)) {
-        values.push([column.name, { kind: "null" }]);
-        continue;
-      }
-      const text = entered[column.name];
-      if (text === undefined) continue;
-      // Sent as text and cast by the server, the same way an edited cell is —
-      // so an exact decimal reaches the column as its digits.
-      values.push([column.name, { kind: "text", value: text }]);
-    }
-    onInsert(values);
-  };
+  const submit = () => onInsert(insertValues(columns, entered, nulled));
 
   return (
     <Dialog
