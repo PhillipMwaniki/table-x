@@ -133,6 +133,20 @@ describe("stripedRows", () => {
   });
 });
 
+describe("rowDetails", () => {
+  it("starts closed and survives being opened", () => {
+    // Off by default: the panel takes width from the grid, which is what most
+    // results are being looked at for.
+    expect(DEFAULT_SETTINGS.rowDetails).toBe(false);
+    expect(normalize({ rowDetails: true }).rowDetails).toBe(true);
+  });
+
+  it("keeps the default for anything that is not a boolean", () => {
+    expect(normalize({ rowDetails: "true" }).rowDetails).toBe(false);
+    expect(normalize({}).rowDetails).toBe(false);
+  });
+});
+
 describe("the theme list", () => {
   it("offers Tokyo Night, and calls it dark", () => {
     const tokyo = THEMES.filter((t) => t.id.startsWith("tokyo-night"));

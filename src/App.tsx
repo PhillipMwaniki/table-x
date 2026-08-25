@@ -52,6 +52,8 @@ export default function App() {
   const checkForUpdates = useSettings((s) => s.checkForUpdates);
   const checkUpdate = useUpdates((s) => s.check);
   const update = useUpdates((s) => s.available);
+  const rowDetails = useSettings((s) => s.rowDetails);
+  const setRowDetails = useSettings((s) => s.setRowDetails);
   const setPaletteOpen = useCommands((s) => s.setOpen);
   const registerCommands = useCommands((s) => s.register);
   const reconnect = useWorkspace((s) => s.reconnect);
@@ -109,6 +111,14 @@ export default function App() {
         shortcut: "Ctrl+,",
         run: () => setSettingsOpen(true),
       },
+      // The panel has a button of its own on the grid's toolbar; this is the
+      // way to it that does not involve finding a 13px icon.
+      {
+        id: "app.row-details",
+        title: rowDetails ? "Hide row details" : "Show row details",
+        group: "View",
+        run: () => setRowDetails(!rowDetails),
+      },
       ...connections.map((c) => ({
         id: `app.open.${c.id}`,
         title: open.has(c.id) ? `Go to ${c.name}` : `Connect to ${c.name}`,
@@ -132,7 +142,7 @@ export default function App() {
           },
         })),
     ]);
-  }, [registerCommands, connections, open, select, connect, reconnect]);
+  }, [registerCommands, connections, open, select, connect, reconnect, rowDetails, setRowDetails]);
 
   const selected = connections.find((c) => c.id === selectedId) ?? null;
 
