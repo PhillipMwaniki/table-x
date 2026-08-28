@@ -683,6 +683,13 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     await get().loadSession(id);
     await get().loadCompletionFor(id);
 
+    // The object tree is the other thing that describes the server rather than
+    // the work. It caches what it fetched and only refetches when this counter
+    // moves, so without the bump it keeps whatever it had when the link went —
+    // usually the connection error it failed on, with no way to retry it. The
+    // catalogue may genuinely have changed while the link was down, too.
+    get().bumpSchema(id);
+
     const tab = get().activeTab(id);
     // Deliberately not re-running the statement that failed. A link that dropped
     // mid-statement leaves no way to tell whether the server applied it, and
