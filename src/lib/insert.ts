@@ -75,3 +75,48 @@ export function insertValues(
   }
   return values;
 }
+
+/**
+ * Which part of a clock a column stores, from its type name, or `null` for a
+ * column that does not store one.
+ *
+ * Read off the name rather than a driver-supplied kind because the insert form
+ * only has the catalog's type string to go on, and every supported database
+ * spells the three families recognisably: `datetime`, `timestamp`,
+ * `timestamptz`, `datetime2`, `smalldatetime`, `timestamp without time zone`;
+ * `date`; `time`, `timetz`, `time with time zone`. Checked in that order
+ * because `timestamp` also starts with `time`.
+ */
+export type TemporalKind = "datetime" | "date" | "time";
+
+export function temporalKind(typeName: string): TemporalKind | null {
+  const name = typeName.trim().toLowerCase();
+  if (name.includes("timestamp") || name.includes("datetime")) return "datetime";
+  if (name.startsWith("date")) return "date";
+  if (name.startsWith("time")) return "time";
+  return null;
+}
+
+/**
+ * The current moment, written the way the column expects it.
+ *
+ * Local wall-clock time rather than UTC, because that is what a person reading
+ * the field expects to see, and sent as text so the server casts it exactly as
+ * it would a typed value. Seconds but no fraction: a fraction on a `datetime`
+ * that has no room for it is a rounding the server does silently, and a
+ * timestamp somebody chose to stamp "now" is not one they need to the
+ * millisecond.
+ */
+export function nowText(kind: TemporalKind, now: Date = new Date()): string {
+  const two = (n: number) => String(n).padStart(2, "0");
+  const date = `${now.getFullYear()}-${two(now.getMonth() + 1)}-${two(now.getDate())}`;
+  const time = `${two(now.getHours())}:${two(now.getMinutes())}:${two(now.getSeconds())}`;
+  switch (kind) {
+    case "date":
+      return date;
+    case "time":
+      return time;
+    case "datetime":
+      return `${date} ${time}`;
+  }
+}

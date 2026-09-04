@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { insertValues, seedFields } from "./insert";
+import { insertValues, nowText, seedFields, temporalKind } from "./insert";
 import type { ColumnDef } from "./types";
 
 function column(name: string, overrides: Partial<ColumnDef> = {}): ColumnDef {
@@ -82,5 +82,40 @@ describe("insertValues", () => {
       new Set(),
     );
     expect(values.map(([name]) => name)).toEqual(["monthbill", "current_meta", "cms_value"]);
+  });
+});
+
+describe("temporalKind", () => {
+  it("recognises the clock families by their catalog names", () => {
+    expect(temporalKind("datetime")).toBe("datetime");
+    expect(temporalKind("timestamp")).toBe("datetime");
+    expect(temporalKind("timestamp without time zone")).toBe("datetime");
+    expect(temporalKind("timestamptz")).toBe("datetime");
+    expect(temporalKind("datetime2(3)")).toBe("datetime");
+    expect(temporalKind("smalldatetime")).toBe("datetime");
+    expect(temporalKind("DATE")).toBe("date");
+    expect(temporalKind("time")).toBe("time");
+    expect(temporalKind("time with time zone")).toBe("time");
+  });
+
+  it("says nothing about a column that stores no clock", () => {
+    expect(temporalKind("int unsigned")).toBeNull();
+    expect(temporalKind("varchar(255)")).toBeNull();
+    expect(temporalKind("interval")).toBeNull();
+    expect(temporalKind("year")).toBeNull();
+  });
+});
+
+describe("nowText", () => {
+  const at = new Date(2026, 7, 3, 9, 2, 44); // local time, months are 0-based
+
+  it("writes the moment the way the column expects it", () => {
+    expect(nowText("datetime", at)).toBe("2026-08-03 09:02:44");
+    expect(nowText("date", at)).toBe("2026-08-03");
+    expect(nowText("time", at)).toBe("09:02:44");
+  });
+
+  it("pads every part to two digits", () => {
+    expect(nowText("datetime", new Date(2026, 0, 5, 3, 4, 5))).toBe("2026-01-05 03:04:05");
   });
 });

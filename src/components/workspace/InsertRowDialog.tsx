@@ -15,7 +15,7 @@
 import { useMemo, useState } from "react";
 import { Dialog } from "../ui/Dialog";
 import { Button, Input, cx } from "../ui/primitives";
-import { insertValues, seedFields } from "@/lib/insert";
+import { insertValues, nowText, seedFields, temporalKind } from "@/lib/insert";
 import type { ColumnDef, Value } from "@/lib/types";
 
 export function InsertRowDialog({
@@ -96,6 +96,7 @@ export function InsertRowDialog({
       <div className="max-h-[26rem] space-y-1.5 overflow-y-auto">
         {columns.map((column) => {
           const isNull = nulled.has(column.name);
+          const temporal = temporalKind(column.type_name);
           return (
             <div key={column.name} className="grid grid-cols-[11rem_1fr_auto] items-center gap-2">
               <label
@@ -125,31 +126,54 @@ export function InsertRowDialog({
                 className={cx(isNull && "opacity-40")}
               />
 
-              {/* Only where NULL is a value the column can hold. Offering it
-                  elsewhere would be offering a statement the server refuses. */}
-              {column.nullable ? (
-                <button
-                  type="button"
-                  onClick={() =>
-                    setNulled((was) => {
-                      const next = new Set(was);
-                      if (!next.delete(column.name)) next.add(column.name);
-                      return next;
-                    })
-                  }
-                  className={cx(
-                    "rounded border px-1.5 py-0.5 text-[10px]",
-                    isNull
-                      ? "border-accent bg-accent/15 text-accent"
-                      : "border-border text-text-muted hover:text-text",
-                  )}
-                  title="Write NULL rather than leaving this out"
-                >
-                  null
-                </button>
-              ) : (
-                <span className="w-9" />
-              )}
+              {/* Only where the choice exists: NULL where the column can hold
+                  one, "now" where it stores a clock. Offering NULL elsewhere
+                  would be offering a statement the server refuses. */}
+              <div className="flex w-[4.5rem] items-center justify-end gap-1">
+                {temporal && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEntered((was) => ({ ...was, [column.name]: nowText(temporal) }));
+                      // A field stamped "now" has a value; it is no longer NULL.
+                      setNulled((was) => {
+                        if (!was.has(column.name)) return was;
+                        const next = new Set(was);
+                        next.delete(column.name);
+                        return next;
+                      });
+                    }}
+                    className={cx(
+                      "rounded border px-1.5 py-0.5 text-[10px]",
+                      "border-border text-text-muted hover:text-text",
+                    )}
+                    title="Fill in the current date and time"
+                  >
+                    now
+                  </button>
+                )}
+                {column.nullable && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setNulled((was) => {
+                        const next = new Set(was);
+                        if (!next.delete(column.name)) next.add(column.name);
+                        return next;
+                      })
+                    }
+                    className={cx(
+                      "rounded border px-1.5 py-0.5 text-[10px]",
+                      isNull
+                        ? "border-accent bg-accent/15 text-accent"
+                        : "border-border text-text-muted hover:text-text",
+                    )}
+                    title="Write NULL rather than leaving this out"
+                  >
+                    null
+                  </button>
+                )}
+              </div>
             </div>
           );
         })}
