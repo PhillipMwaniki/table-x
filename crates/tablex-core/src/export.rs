@@ -1,8 +1,11 @@
-//! Writing result rows out as CSV, TSV, JSON, Markdown, or SQL.
+//! Writing result rows out as CSV, TSV, JSON, Markdown, SQL, or an Excel
+//! workbook.
 //!
 //! Every writer takes rows one batch at a time and writes them straight to a
 //! [`std::io::Write`], so an export is bounded by the size of a batch rather
-//! than the size of the table.
+//! than the size of the table. The workbook is the one exception in shape —
+//! a zip cannot be streamed from a text writer — and keeps the same bound by
+//! going through a temporary file; see `xlsx`.
 //!
 //! The formats disagree about almost everything that matters — what a NULL is,
 //! whether a number is quoted, what happens to a newline inside a value — so
@@ -28,6 +31,8 @@ pub enum Format {
     Tsv,
     /// A pipe table, for pasting into a pull request or a ticket.
     Markdown,
+    /// An Excel workbook. Files only — there is no clipboard shape for it.
+    Xlsx,
 }
 
 impl Format {
@@ -39,6 +44,7 @@ impl Format {
             Format::Sql => "sql",
             Format::Tsv => "tsv",
             Format::Markdown => "md",
+            Format::Xlsx => "xlsx",
         }
     }
 }
@@ -58,6 +64,9 @@ pub struct Writer<W: Write> {
     /// underneath columns that are already there.
     header: bool,
     rows_written: u64,
+    /// The workbook being built, for the one format that is not text. Rows
+    /// go to it as they arrive; the file is assembled into `sink` at the end.
+    workbook: Option<crate::xlsx::Workbook>,
 }
 
 impl<W: Write> Writer<W> {
@@ -70,6 +79,7 @@ impl<W: Write> Writer<W> {
             quote,
             header: true,
             rows_written: 0,
+            workbook: None,
         }
     }
 
@@ -120,6 +130,10 @@ impl<W: Write> Writer<W> {
             // The SQL writer names its columns on every statement instead, so
             // the file survives a table whose column order later changes.
             Format::Sql => Ok(()),
+            Format::Xlsx => {
+                self.workbook = Some(crate::xlsx::Workbook::start(&self.columns)?);
+                Ok(())
+            }
         }
     }
 
@@ -172,6 +186,13 @@ impl<W: Write> Writer<W> {
                         quote_ident(&self.table, self.quote)
                     )?;
                 }
+                Format::Xlsx => {
+                    let workbook = self
+                        .workbook
+                        .as_mut()
+                        .ok_or_else(|| std::io::Error::other("rows arrived before begin"))?;
+                    workbook.row(row)?;
+                }
             }
             self.rows_written += 1;
         }
@@ -182,6 +203,9 @@ impl<W: Write> Writer<W> {
     pub fn finish(mut self) -> std::io::Result<u64> {
         if self.format == Format::Json {
             write!(self.sink, "\n]\n")?;
+        }
+        if let Some(workbook) = self.workbook.take() {
+            workbook.write_to(&mut self.sink)?;
         }
         self.sink.flush()?;
         Ok(self.rows_written)

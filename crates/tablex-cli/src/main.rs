@@ -173,6 +173,8 @@ enum FileFormat {
     Json,
     /// INSERT statements.
     Sql,
+    /// An Excel workbook. Exact numerics are written as text, not as numbers.
+    Xlsx,
 }
 
 impl From<FileFormat> for Format {
@@ -181,6 +183,7 @@ impl From<FileFormat> for Format {
             FileFormat::Csv => Format::Csv,
             FileFormat::Json => Format::Json,
             FileFormat::Sql => Format::Sql,
+            FileFormat::Xlsx => Format::Xlsx,
         }
     }
 }

@@ -27,6 +27,7 @@ pub mod schema;
 pub mod sql;
 pub mod url;
 pub mod value;
+mod xlsx;
 
 pub use config::ConnectionConfig;
 pub use driver::{Capabilities, Connection, Driver, DriverInfo, FetchOptions, RowEdit};

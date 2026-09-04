@@ -288,7 +288,7 @@ export interface SchemaNode {
  * and are written by the same writers, so they would work as files too if a
  * reason to offer them there ever turned up.
  */
-export type ExportFormat = "csv" | "json" | "sql" | "tsv" | "markdown";
+export type ExportFormat = "csv" | "json" | "sql" | "tsv" | "markdown" | "xlsx";
 
 /** A new row: only the columns the user filled in. */
 export interface RowInsert {

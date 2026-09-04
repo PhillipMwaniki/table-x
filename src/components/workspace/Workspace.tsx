@@ -74,6 +74,9 @@ const EXPORT_FORMATS: { format: ExportFormat; label: string; extension: string }
   { format: "csv", label: "CSV", extension: "csv" },
   { format: "json", label: "JSON", extension: "json" },
   { format: "sql", label: "SQL inserts", extension: "sql" },
+  // Exact numerics go in as text, not as spreadsheet numbers: a cell holds a
+  // double, and that is the rounding refused everywhere else here.
+  { format: "xlsx", label: "Excel workbook", extension: "xlsx" },
 ];
 
 /**
