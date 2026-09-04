@@ -34,6 +34,7 @@ import type { MenuItem } from "../ui/ContextMenu";
 import { quickFilter, rowsForMenu, sourceTable } from "@/lib/rowcopy";
 import { useSettings } from "@/store/settings";
 import { useLayouts } from "@/store/layouts";
+import { useCommands } from "@/store/commands";
 import {
   arrange,
   clampWidth,
@@ -471,6 +472,101 @@ export function ResultGrid({
   }, [rowHeight, virtualizer]);
 
   /**
+   * The find bar: a query, and which of its matches is the current one.
+   *
+   * Distinct from the filter beside it. The filter hides every row that does
+   * not match, which is the tool for narrowing; find leaves every row where it
+   * is and walks the matches, which is the tool for "where is this" — the rows
+   * around a match are usually why it matters.
+   */
+  const [find, setFind] = useState<{ open: boolean; query: string; at: number }>({
+    open: false,
+    query: "",
+    at: 0,
+  });
+  const needle = find.open ? find.query.trim().toLowerCase() : "";
+  /** Every matching cell, in reading order: down the rows, across the columns. */
+  const matches = useMemo(() => {
+    if (!needle) return [];
+    const out: { viewIndex: number; col: number }[] = [];
+    for (let v = 0; v < view.length; v++) {
+      const row = view[v]?.row;
+      if (!row) continue;
+      for (const col of visible) {
+        const cell = row[col];
+        if (cell && formatValue(cell).toLowerCase().includes(needle))
+          out.push({ viewIndex: v, col });
+      }
+    }
+    return out;
+  }, [needle, view, visible]);
+  // Wrapped rather than clamped, so "next" past the last match comes round to
+  // the first — the way every find box people arrive from behaves.
+  const at =
+    matches.length === 0 ? 0 : ((find.at % matches.length) + matches.length) % matches.length;
+  const currentMatch = matches[at] ?? null;
+  const findInput = useRef<HTMLInputElement>(null);
+  const openFind = useCallback(() => {
+    setFind((was) => ({ ...was, open: true }));
+    // Once the bar exists. Selecting rather than focusing, so a second Ctrl+F
+    // with a query already typed is ready to replace it.
+    requestAnimationFrame(() => findInput.current?.select());
+  }, []);
+  const stepFind = useCallback((by: number) => setFind((was) => ({ ...was, at: was.at + by })), []);
+
+  // Bring the current match into view, both ways. Once per match: this also
+  // fires when a width changes under it, and a scroll that follows every
+  // resize would fight the pointer.
+  const scrolledTo = useRef<typeof currentMatch>(null);
+  useEffect(() => {
+    if (!currentMatch || scrolledTo.current === currentMatch) return;
+    scrolledTo.current = currentMatch;
+    virtualizer.scrollToIndex(currentMatch.viewIndex, { align: "auto" });
+    const el = scroller.current;
+    const d = visible.indexOf(currentMatch.col);
+    // A frozen column is always in view.
+    if (!el || d === -1 || offsets[d] !== null) return;
+    const left = GUTTER_WIDTH + visibleWidths.slice(0, d).reduce((sum, w) => sum + w, 0);
+    const width = visibleWidths[d] ?? 0;
+    // The gutter and the frozen columns cover the left of the viewport, so a
+    // column can be inside the scroller and still be hidden under them.
+    const covered =
+      GUTTER_WIDTH + visibleWidths.slice(0, layout.frozen).reduce((sum, w) => sum + w, 0);
+    if (left < el.scrollLeft + covered) el.scrollLeft = left - covered;
+    else if (left + width > el.scrollLeft + el.clientWidth)
+      el.scrollLeft = left + width - el.clientWidth;
+  }, [currentMatch, virtualizer, visible, visibleWidths, offsets, layout.frozen]);
+
+  // Ctrl+F, unless the caret is in the editor, which has a find of its own
+  // and is the one meant when you are typing there.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== "f")
+        return;
+      if ((e.target as HTMLElement | null)?.closest?.(".cm-editor")) return;
+      e.preventDefault();
+      openFind();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [openFind]);
+
+  const registerCommands = useCommands((s) => s.register);
+  useEffect(
+    () =>
+      registerCommands("grid", [
+        {
+          id: "grid.find",
+          title: "Find in results",
+          group: "Data",
+          shortcut: "Ctrl+F",
+          run: openFind,
+        },
+      ]),
+    [registerCommands, openFind],
+  );
+
+  /**
    * Apply a click on the row gutter.
    *
    * The three modifiers do what they do in every file list: plain replaces,
@@ -868,6 +964,7 @@ export function ResultGrid({
         result={result}
         filter={filter}
         onFilter={setFilter}
+        onFind={openFind}
         visible={view.length}
         columnFilterCount={Object.keys(columnFilters).length}
         onClearColumnFilters={() => setColumnFilters({})}
@@ -907,6 +1004,18 @@ export function ResultGrid({
           }}
           onShowAll={() => updateLayout(showAll)}
           onClose={() => setPickerOpen(false)}
+        />
+      )}
+
+      {find.open && (
+        <FindBar
+          inputRef={findInput}
+          query={find.query}
+          count={matches.length}
+          at={at}
+          onQuery={(query) => setFind({ open: true, query, at: 0 })}
+          onStep={stepFind}
+          onClose={() => setFind((was) => ({ ...was, open: false }))}
         />
       )}
 
@@ -1166,6 +1275,14 @@ export function ResultGrid({
                               ? undefined
                               : { left, last: d === layout.frozen - 1, tint }
                           }
+                          mark={
+                            needle && formatValue(cell).toLowerCase().includes(needle)
+                              ? currentMatch?.viewIndex === virtual.index &&
+                                currentMatch.col === colIndex
+                                ? "current"
+                                : "match"
+                              : undefined
+                          }
                           editable={result.editable}
                           nullable={result.columns[colIndex]?.nullable !== false}
                           editing={isEditing}
@@ -1334,10 +1451,92 @@ function PagingBar({ paging, rows }: { paging: PagingProps; rows: number }) {
   );
 }
 
+/**
+ * The find bar, under the toolbar and above the rows it searches.
+ *
+ * Its own strip rather than a mode of the filter box: the two answer
+ * different questions and a person may want both at once — narrow to one
+ * country, then find an email within it.
+ */
+function FindBar({
+  inputRef,
+  query,
+  count,
+  at,
+  onQuery,
+  onStep,
+  onClose,
+}: {
+  inputRef: React.RefObject<HTMLInputElement | null>;
+  query: string;
+  count: number;
+  /** Which match is current, zero-based. */
+  at: number;
+  onQuery: (query: string) => void;
+  onStep: (by: number) => void;
+  onClose: () => void;
+}) {
+  const button =
+    "rounded px-1.5 py-0.5 text-text-muted hover:bg-surface-3 hover:text-text disabled:opacity-30 disabled:hover:bg-transparent";
+  return (
+    <div
+      role="search"
+      className="flex h-7 shrink-0 items-center gap-2 border-b border-border bg-surface-1 px-2 text-[11px]"
+    >
+      <input
+        ref={inputRef}
+        autoFocus
+        value={query}
+        onChange={(e) => onQuery(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            onStep(e.shiftKey ? -1 : 1);
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            onClose();
+          }
+        }}
+        placeholder="Find in these rows…"
+        aria-label="Find in these rows"
+        className="h-5 w-56 rounded border border-border bg-surface-0 px-1.5 font-mono text-[11px] focus:border-accent focus:outline-none"
+      />
+      <span className="tabular-nums text-text-muted" aria-live="polite">
+        {!query.trim()
+          ? "Matches are marked; the rows stay put"
+          : count === 0
+            ? "No matches"
+            : `${at + 1} of ${count}`}
+      </span>
+      <button
+        onClick={() => onStep(-1)}
+        disabled={count === 0}
+        className={button}
+        title="Previous match (Shift+Enter)"
+      >
+        ↑
+      </button>
+      <button
+        onClick={() => onStep(1)}
+        disabled={count === 0}
+        className={button}
+        title="Next match (Enter)"
+      >
+        ↓
+      </button>
+      <div className="flex-1" />
+      <button onClick={onClose} className={button} title="Close (Esc)">
+        ✕
+      </button>
+    </div>
+  );
+}
+
 function GridToolbar({
   result,
   filter,
   onFilter,
+  onFind,
   visible,
   columnFilterCount,
   onClearColumnFilters,
@@ -1357,6 +1556,7 @@ function GridToolbar({
   result: ResultSet;
   filter: string;
   onFilter: (value: string) => void;
+  onFind: () => void;
   visible: number;
   columnFilterCount: number;
   onClearColumnFilters: () => void;
@@ -1383,6 +1583,13 @@ function GridToolbar({
         placeholder="Filter rows…"
         className="h-5 w-44 rounded border border-border bg-surface-0 px-1.5 text-[11px] focus:border-accent focus:outline-none"
       />
+      <button
+        onClick={onFind}
+        className="rounded px-1.5 py-0.5 text-text-muted hover:bg-surface-3 hover:text-text"
+        title="Find a value in the loaded rows without hiding the rest (Ctrl+F)"
+      >
+        Find
+      </button>
 
       <span className="text-text-muted">
         {filter || columnFilterCount > 0
@@ -1793,6 +2000,7 @@ function Cell({
   value,
   width,
   frozen,
+  mark,
   editable,
   nullable,
   editing,
@@ -1811,6 +2019,8 @@ function Cell({
    * ground this cell has to supply for itself.
    */
   frozen?: (Frozen & { tint: string }) | undefined;
+  /** Whether the find bar's query is in this cell, and whether it is the match being looked at. */
+  mark?: "match" | "current" | undefined;
   editable: boolean;
   /** Whether the column accepts NULL, so the boolean list can offer it. */
   nullable: boolean;
@@ -1832,9 +2042,17 @@ function Cell({
     ? cx(
         "sticky isolate z-[5] bg-surface-0",
         "before:pointer-events-none before:absolute before:inset-0 before:-z-10 before:content-['']",
-        frozen.tint,
+        // A match shows through the frozen ground the same way the row's
+        // tint does, so it looks the same on either side of the line.
+        mark ? "before:bg-warn/25" : frozen.tint,
         frozen.last && "border-r-2",
       )
+    : undefined;
+  // The match tint sits on the cell itself where it can; the current match
+  // gets an outline as well, since a page of matches all tinted alike needs
+  // one that says "here".
+  const marked = mark
+    ? cx(!frozen && "bg-warn/20", mark === "current" && "ring-1 ring-warn ring-inset")
     : undefined;
   const place = { width, left: frozen?.left };
 
@@ -1892,6 +2110,7 @@ function Cell({
         cellClass(value),
         editable && "cursor-text",
         stay,
+        marked,
       )}
       title={value.kind === "bytes" ? undefined : formatValue(value)}
     >
