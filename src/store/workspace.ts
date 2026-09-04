@@ -19,6 +19,8 @@ import { load as loadStore } from "@tauri-apps/plugin-store";
 import type { Store } from "@tauri-apps/plugin-store";
 import { parseSaved, shouldAutoRun, toSaved } from "@/lib/session";
 import { changesCatalog } from "@/lib/statements";
+import { tableStatement } from "@/lib/browse";
+import type { Clauses } from "@/lib/browse";
 import type {
   CompletionScope,
   Design,
@@ -89,6 +91,15 @@ export interface Tab {
   plan?: Plan | null;
   /** A schema comparison, for a diff tab. */
   diff?: DiffReport | null;
+  /**
+   * A table tab's server-side clauses, kept beside its bare `SELECT`.
+   *
+   * Beside it rather than in it, so the tab can offer them as two boxes and
+   * the statement it was opened with stays the one the driver wrote. See
+   * `tableStatement` for how they are put together.
+   */
+  where?: string | undefined;
+  orderBy?: string | undefined;
   /**
    * Which half of a table tab is showing.
    *
@@ -312,6 +323,8 @@ interface WorkspaceState {
   endTransaction: (connectionId: string, how: "commit" | "rollback") => Promise<void>;
   /** Re-run this tab's statement at a different offset. */
   goToPage: (connectionId: string, tabId: string, offset: number) => Promise<void>;
+  /** Set a table tab's WHERE and ORDER BY and fetch its first page again. */
+  setClauses: (connectionId: string, tabId: string, clauses: Clauses) => Promise<void>;
 
   loadSession: (connectionId: string) => Promise<void>;
   /**
@@ -738,6 +751,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         sql: entry.sql,
         ...(entry.view ? { view: entry.view } : {}),
         ...(entry.cells ? { cells: entry.cells } : {}),
+        ...(typeof entry.where === "string" ? { where: entry.where } : {}),
+        ...(typeof entry.orderBy === "string" ? { orderBy: entry.orderBy } : {}),
         notebookId: entry.notebookId,
       }),
     );
@@ -839,6 +854,19 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     await get().run(id, tabId);
   },
 
+  setClauses: async (id, tabId, clauses) => {
+    // Back to the first page, as with any change to the statement: the offset
+    // counted rows of a query that no longer exists.
+    set((s) => ({
+      tabs: patchTab(s.tabs, id, tabId, {
+        where: clauses.where,
+        orderBy: clauses.orderBy,
+        offset: 0,
+      }),
+    }));
+    await get().run(id, tabId);
+  },
+
   watchProgress: async () => {
     if (watchingProgress) return;
     watchingProgress = true;
@@ -873,7 +901,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   run: async (id, tabId, sqlOverride) => {
     const tab = tabsOf(get(), id).find((t) => t.id === tabId);
     if (!tab) return;
-    const sql = sqlOverride ?? tab.sql;
+    // A table tab runs its SELECT with the clauses beside it appended; every
+    // other tab runs what it holds.
+    const sql = sqlOverride ?? tableStatement(tab);
     if (!sql.trim()) return;
     // One query per tab at a time. The session is locked for the duration
     // anyway, so a second submission would only queue behind the first.

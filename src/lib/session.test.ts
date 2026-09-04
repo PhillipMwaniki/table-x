@@ -76,6 +76,17 @@ describe("toSaved", () => {
     expect(saved.tabs.map((t) => t.kind)).toEqual(["activity", "diagram"]);
   });
 
+  it("keeps a table tab's clauses, which are typed work like the SQL", () => {
+    const saved = toSaved(
+      [tab({ kind: "table", where: "active = 1", orderBy: "joined DESC" })],
+      "tab-1",
+    );
+    expect(saved.tabs[0]?.where).toBe("active = 1");
+    expect(saved.tabs[0]?.orderBy).toBe("joined DESC");
+    // And writes nothing for a tab that has none, so the file stays as it was.
+    expect(JSON.stringify(toSaved([tab({ kind: "table" })], "tab-1"))).not.toContain("where");
+  });
+
   it("keeps which side of a table tab was showing", () => {
     const saved = toSaved([tab({ kind: "table", title: "users", view: "structure" })], "tab-1");
     expect(saved.tabs[0]?.view).toBe("structure");

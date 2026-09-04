@@ -11,6 +11,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { SchemaTree } from "./SchemaTree";
 import { SqlEditor } from "./SqlEditor";
+import { BrowseBar } from "./BrowseBar";
 import { ResultGrid } from "./ResultGrid";
 import { HistoryPanel } from "./HistoryPanel";
 import { TabBar } from "./TabBar";
@@ -37,6 +38,7 @@ import type { MenuItem } from "../ui/ContextMenu";
 import { ipc, IpcError } from "@/lib/ipc";
 import { hasOrderBy } from "@/lib/paging";
 import { layoutKeyFor } from "@/lib/columns";
+import { tableStatement } from "@/lib/browse";
 import { readOnlyExplanation } from "@/lib/guarantees";
 import { drop, selectFrom, truncate } from "@/lib/statements";
 import { keyTypeFor } from "@/lib/design";
@@ -114,6 +116,7 @@ export function Workspace({
     reconnect,
     applyEdit,
     goToPage,
+    setClauses,
     cancelQuery,
     beginTransaction,
     endTransaction,
@@ -892,7 +895,9 @@ export function Workspace({
       setTabError(connection.id, tab.id, "A saved query needs a name.");
       return;
     }
-    void saveSnippet(name, tab.sql).then(() => {
+    // What the tab runs, clauses included, rather than the bare SELECT a
+    // table tab holds: the saved query should bring back the same rows.
+    void saveSnippet(name, tableStatement(tab)).then(() => {
       setPanelTab("snippets");
       setHistoryOpen(true);
       setTabNotice(connection.id, tab.id, `Saved as “${name.trim()}”.`);
@@ -1399,6 +1404,19 @@ export function Workspace({
                   </>
                 )}
 
+                {/* Keyed on the tab so the drafts belong to it: switching
+                    tabs must not carry half-typed WHERE from one table to
+                    the next. */}
+                {tab.kind === "table" && (
+                  <BrowseBar
+                    key={tab.id}
+                    where={tab.where ?? ""}
+                    orderBy={tab.orderBy ?? ""}
+                    busy={tab.running}
+                    onApply={(clauses) => void setClauses(connection.id, tab.id, clauses)}
+                  />
+                )}
+
                 <div className="flex min-h-0 flex-1 flex-col border-t border-border">
                   {tab.error && (
                     <div
@@ -1482,7 +1500,7 @@ export function Workspace({
                       paging={{
                         offset: tab.offset,
                         limit: tab.limit || pageSize,
-                        ordered: hasOrderBy(tab.sql),
+                        ordered: hasOrderBy(tableStatement(tab)),
                         busy: tab.running,
                         onGoTo: (offset) => void goToPage(connection.id, tab.id, offset),
                         onPageSize: (rows) => {
@@ -1502,6 +1520,15 @@ export function Workspace({
                                     (c) => `${quote}${c.replaceAll(close, close + close)}${close}`,
                                   )
                                   .join(", ");
+                                // A table tab has a box for this; a query tab
+                                // has only its text.
+                                if (tab.kind === "table") {
+                                  void setClauses(connection.id, tab.id, {
+                                    where: tab.where ?? "",
+                                    orderBy: keys,
+                                  });
+                                  return;
+                                }
                                 setSql(
                                   connection.id,
                                   tab.id,

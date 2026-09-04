@@ -30,6 +30,9 @@ export interface SavedTab {
   database: string | null;
   schema?: string | undefined;
   sql: string;
+  /** A table tab's server-side clauses. Kept: they are as much typed work as the SQL. */
+  where?: string | undefined;
+  orderBy?: string | undefined;
   /** Which half of a table tab was showing. */
   view?: "data" | "structure";
   cells?: NotebookCell[];
@@ -63,6 +66,8 @@ export function toSaved(tabs: Tab[], activeId: string | undefined): SavedWorkspa
       database: tab.database,
       ...(tab.schema !== undefined ? { schema: tab.schema } : {}),
       sql: tab.sql,
+      ...(tab.where ? { where: tab.where } : {}),
+      ...(tab.orderBy ? { orderBy: tab.orderBy } : {}),
       ...(tab.view ? { view: tab.view } : {}),
       ...(tab.cells ? { cells: tab.cells } : {}),
       ...(tab.notebookId !== undefined ? { notebookId: tab.notebookId } : {}),
