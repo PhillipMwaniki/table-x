@@ -1365,6 +1365,28 @@ pub async fn inspect_statement(
     })
 }
 
+/// A writing statement rewritten as a read of the rows it would touch.
+///
+/// The connection is named so the rewrite can use the engine's identifier
+/// quote and know whether it is talking to Oracle; nothing is sent to the
+/// database here. Running the result is the caller's decision.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn preview_statement(
+    state: tauri::State<'_, AppState>,
+    connection_id: String,
+    sql: String,
+) -> IpcResult<tablex_core::preview::Preview> {
+    let config = state.config_for(&connection_id).await?;
+    let capabilities = state.drivers.get(&config.driver)?.info().capabilities;
+    Ok(tablex_core::preview::preview(
+        &sql,
+        tablex_core::preview::Dialect {
+            quote: capabilities.identifier_quote,
+            oracle: config.driver == "oracle",
+        },
+    )?)
+}
+
 /// Write the rows the user selected in the grid.
 ///
 /// The rows come from the frontend rather than being re-queried: the selection

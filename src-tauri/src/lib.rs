@@ -122,6 +122,7 @@ pub fn run() {
             ipc::commit_transaction,
             ipc::rollback_transaction,
             ipc::inspect_statement,
+            ipc::preview_statement,
             ipc::export_history,
             ipc::import_sql,
             ipc::import_csv,

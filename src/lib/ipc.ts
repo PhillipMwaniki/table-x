@@ -27,6 +27,7 @@ import type {
   ErrorPayload,
   ExportFormat,
   HazardReport,
+  StatementPreview,
   HistoryEntry,
   HistoryQuery,
   Notebook,
@@ -332,6 +333,15 @@ export const ipc = {
   /** What a submission would destroy, and whether this connection asks first. */
   inspectStatement: (connection_id: string, sql: string) =>
     call<HazardReport>("inspect_statement", { connection_id, sql }),
+
+  /**
+   * A writing statement as a SELECT of the rows it would touch.
+   *
+   * Refused, with a reason, for shapes the rewrite cannot place with
+   * confidence; the statement itself can still be run.
+   */
+  previewStatement: (connection_id: string, sql: string) =>
+    call<StatementPreview>("preview_statement", { connection_id, sql }),
 
   /** Who exists on this server, and what each of them can reach. */
   privileges: (connection_id: string) => call<Privileges>("privileges", { connection_id }),

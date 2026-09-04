@@ -19,6 +19,7 @@ pub mod error;
 pub mod export;
 pub mod format;
 pub mod plan;
+pub mod preview;
 pub mod privileges;
 pub mod registry;
 pub mod result;

@@ -334,6 +334,15 @@ export interface HazardReport {
   hazards: HazardItem[];
 }
 
+/** A writing statement rewritten as a read of the rows it would touch. */
+export interface StatementPreview {
+  kind: "update" | "insert" | "delete";
+  /** The statement to run instead. */
+  select: string;
+  /** What the rows are, phrased for the strip above them. */
+  note: string;
+}
+
 /** Someone or something that can hold a privilege. */
 export interface Principal {
   name: string;

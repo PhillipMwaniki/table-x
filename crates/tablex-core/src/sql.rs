@@ -509,8 +509,46 @@ fn bare_words(sql: &str) -> Vec<&str> {
 /// delete, and the one in `DELETE FROM t` — with a `WHERE` only inside some
 /// parenthesised expression — does not.
 fn bare_words_with_depth(sql: &str) -> Vec<(&str, usize)> {
+    scan(sql)
+        .into_iter()
+        .filter_map(|item| match item.kind {
+            ItemKind::Word(word) => Some((word, item.depth)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// One thing the scanner found outside strings, comments and quoted names.
+///
+/// Carries where it was found, so a caller that needs the text *between* two
+/// items — the assignments between `SET` and `WHERE`, say — can slice the
+/// original rather than reassemble it from tokens and lose the spacing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Item<'a> {
+    pub kind: ItemKind<'a>,
+    pub start: usize,
+    pub end: usize,
+    /// Parenthesis nesting at the point it appeared.
+    pub depth: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ItemKind<'a> {
+    /// A bare word: keyword, identifier or number.
+    Word(&'a str),
+    Comma,
+    /// A lone `=`, not one half of `<=`, `>=`, `!=`, `==` or `=>`.
+    Equals,
+}
+
+/// Walk a statement, reporting words and the two punctuation marks that
+/// divide a clause into parts, with their positions and nesting.
+///
+/// Strings, comments, quoted identifiers and dollar-quoted bodies are stepped
+/// over whole, so nothing inside them is reported.
+pub(crate) fn scan(sql: &str) -> Vec<Item<'_>> {
     let bytes = sql.as_bytes();
-    let mut words = Vec::new();
+    let mut words: Vec<Item> = Vec::new();
     let mut depth = 0usize;
     let mut i = 0usize;
 
@@ -593,7 +631,34 @@ fn bare_words_with_depth(sql: &str) -> Vec<(&str, usize)> {
                 {
                     i += 1;
                 }
-                words.push((&sql[start..i], depth));
+                words.push(Item {
+                    kind: ItemKind::Word(&sql[start..i]),
+                    start,
+                    end: i,
+                    depth,
+                });
+            }
+            b',' => {
+                words.push(Item {
+                    kind: ItemKind::Comma,
+                    start: i,
+                    end: i + 1,
+                    depth,
+                });
+                i += 1;
+            }
+            b'=' => {
+                let neighbour = |j: Option<&u8>| matches!(j, Some(b'<' | b'>' | b'!' | b'='));
+                let before = if i == 0 { None } else { bytes.get(i - 1) };
+                if !neighbour(before) && !neighbour(bytes.get(i + 1)) {
+                    words.push(Item {
+                        kind: ItemKind::Equals,
+                        start: i,
+                        end: i + 1,
+                        depth,
+                    });
+                }
+                i += 1;
             }
             _ => i += 1,
         }

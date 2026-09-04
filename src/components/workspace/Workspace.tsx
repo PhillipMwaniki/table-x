@@ -917,6 +917,41 @@ export function Workspace({
    * setSql the editor writes to — the undo history in CodeMirror then treats it
    * as one edit, which is what makes it safe to try.
    */
+  /**
+   * Whether the editor holds something a preview can be made of.
+   *
+   * A first-word test, because the button is drawn on every keystroke and
+   * the real decision is the backend's: a statement that starts like an
+   * UPDATE but is shaped in a way the rewrite cannot place is refused there,
+   * with the reason shown where the error would go.
+   */
+  const canPreview = tab?.kind === "query" && /^\s*(?:update|insert|delete)\b/i.test(tab.sql);
+
+  /**
+   * Run the statement as a read of the rows it would touch.
+   *
+   * The preview is a SELECT, so it goes through the same gate every run does
+   * and comes back as an ordinary result; the notice under it is what says it
+   * was a preview. Nothing is written — which is the point, and the reason a
+   * run is not a good enough way to see what a statement will do.
+   */
+  const previewChanges = async () => {
+    if (!tab || !canPreview) return;
+    let preview;
+    try {
+      preview = await ipc.previewStatement(connection.id, tab.sql);
+    } catch (e) {
+      setTabError(connection.id, tab.id, (e as Error).message);
+      return;
+    }
+    await runGuarded(tab.id, preview.select);
+    setTabNotice(
+      connection.id,
+      tab.id,
+      `Preview only — ${preview.note} Nothing was written; expressions were evaluated now and will be evaluated again by the write.`,
+    );
+  };
+
   const formatCurrentSql = async () => {
     if (!tab?.sql.trim()) return;
     try {
@@ -998,6 +1033,16 @@ export function Workspace({
         group: "Query",
         run: () => keepResult(connection.id, tab.id),
       },
+      ...(canPreview
+        ? [
+            {
+              id: "ws.preview",
+              title: "Preview changes as a SELECT",
+              group: "Query",
+              run: () => void previewChanges(),
+            },
+          ]
+        : []),
       {
         id: "ws.format",
         title: "Format SQL",
@@ -1289,6 +1334,20 @@ export function Workspace({
                       title="Format SQL (Ctrl+Shift+F)"
                     >
                       Format
+                    </Button>
+                  )}
+                  {/* Only while the editor holds a write: a button that
+                      says "preview changes" over a SELECT would be asking a
+                      question the statement does not raise. */}
+                  {canPreview && (
+                    <Button
+                      variant="ghost"
+                      className="h-6"
+                      disabled={tab.running}
+                      onClick={() => void previewChanges()}
+                      title="See the rows this would change, as a SELECT. Nothing is written."
+                    >
+                      Preview changes
                     </Button>
                   )}
                   {tab.kind === "query" && driver?.capabilities.explain && (
