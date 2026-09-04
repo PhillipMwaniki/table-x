@@ -233,6 +233,15 @@ export interface QueryOutcome {
   notices: string[];
 }
 
+/** How far a multi-statement run has got, as the backend emits it. */
+export interface QueryProgress {
+  /** The `progress_id` the run was submitted with. */
+  id: string;
+  /** Statements finished so far. */
+  done: number;
+  total: number;
+}
+
 // ---------------------------------------------------------------------------
 // Schema
 // ---------------------------------------------------------------------------

@@ -92,6 +92,7 @@ export function Workspace({
     setSql,
     setActiveStatement,
     run,
+    watchProgress,
     loadSession,
     loadCompletionFor,
     openScript: openScriptTab,
@@ -232,7 +233,8 @@ export function Workspace({
   // mounts; the store ignores repeat calls.
   useEffect(() => {
     void watchExports();
-  }, [watchExports]);
+    void watchProgress();
+  }, [watchExports, watchProgress]);
 
   // Undo/redo are global shortcuts while this pane is mounted. Bound on window
   // rather than the grid so they work regardless of which element has focus,
@@ -1411,6 +1413,33 @@ export function Workspace({
                           {tab.error.position !== undefined && ` · position ${tab.error.position}`}
                         </p>
                       )}
+                    </div>
+                  )}
+
+                  {/* A script of many statements says where it is. Shown
+                      above whatever result is already there rather than in
+                      place of it: a re-run keeps the previous rows on screen
+                      until the new ones arrive. */}
+                  {tab.running && tab.progress && tab.progress.total > 1 && (
+                    <div
+                      role="progressbar"
+                      aria-valuemin={0}
+                      aria-valuemax={tab.progress.total}
+                      aria-valuenow={tab.progress.done}
+                      aria-label="Statements run"
+                      className="flex shrink-0 items-center gap-2 border-b border-border bg-surface-1 px-2 py-1 text-[10.5px] text-text-muted"
+                    >
+                      <span className="whitespace-nowrap tabular-nums">
+                        {tab.progress.done} of {tab.progress.total} statements
+                      </span>
+                      <div className="h-1 flex-1 overflow-hidden rounded bg-surface-2">
+                        <div
+                          className="h-full bg-accent transition-[width] duration-150"
+                          style={{
+                            width: `${(100 * tab.progress.done) / tab.progress.total}%`,
+                          }}
+                        />
+                      </div>
                     </div>
                   )}
 

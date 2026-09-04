@@ -417,10 +417,26 @@ pub struct ExecuteRequest {
     pub offset: usize,
     #[serde(default)]
     pub timeout_secs: Option<u64>,
+    /// Names this run in progress events. Absent for runs nobody is watching
+    /// — a notebook cell, a paged fetch — and no events are sent.
+    #[serde(default)]
+    pub progress_id: Option<String>,
+}
+
+/// Emitted after each statement of a multi-statement run.
+pub const QUERY_PROGRESS_EVENT: &str = "query-progress";
+
+#[derive(Clone, Serialize)]
+pub struct QueryProgress {
+    pub id: String,
+    /// Statements finished so far.
+    pub done: usize,
+    pub total: usize,
 }
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn execute(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     request: ExecuteRequest,
 ) -> IpcResult<QueryOutcome> {
@@ -448,7 +464,22 @@ pub async fn execute(
     // slow disk must never hold up the next query on the same session.
     let outcome = {
         let mut guard = session.connection.lock().await;
-        guard.execute(&request.sql, &opts).await
+        execute_reporting(&mut **guard, &request.sql, &opts, |done, total| {
+            if let Some(id) = &request.progress_id {
+                // A failed emit means the window has gone. The run finishes
+                // regardless; what it did to the database is done either way.
+                let _ = tauri::Emitter::emit(
+                    &app,
+                    QUERY_PROGRESS_EVENT,
+                    QueryProgress {
+                        id: id.clone(),
+                        done,
+                        total,
+                    },
+                );
+            }
+        })
+        .await
     };
 
     // A BEGIN somebody typed leaves the session just as inside a transaction as
@@ -464,6 +495,180 @@ pub async fn execute(
     }
 
     Ok(outcome?)
+}
+
+/// Run a submission one statement at a time, reporting after each.
+///
+/// Every driver already splits a submission and runs the pieces in order, so
+/// doing the split here changes nothing about what reaches the server — it only
+/// puts a point between statements where progress can be reported. A script of
+/// four hundred statements otherwise shows a spinner for its whole duration,
+/// and a spinner that has been going for a minute looks the same as a hang.
+///
+/// A single statement is passed through untouched: there is nothing to report
+/// between, and no reason to touch the fast path.
+async fn execute_reporting(
+    conn: &mut dyn tablex_core::driver::Connection,
+    sql: &str,
+    opts: &FetchOptions,
+    mut report: impl FnMut(usize, usize),
+) -> tablex_core::error::Result<QueryOutcome> {
+    let statements = tablex_core::sql::split_statements(sql);
+    if statements.len() < 2 {
+        return conn.execute(sql, opts).await;
+    }
+
+    let total = statements.len();
+    report(0, total);
+    let mut merged = QueryOutcome {
+        statements: Vec::with_capacity(total),
+        elapsed_ms: 0,
+        notices: Vec::new(),
+    };
+    for (done, statement) in statements.iter().enumerate() {
+        let outcome = conn.execute(statement, opts).await?;
+        merged.statements.extend(outcome.statements);
+        merged.elapsed_ms += outcome.elapsed_ms;
+        merged.notices.extend(outcome.notices);
+        report(done + 1, total);
+    }
+    Ok(merged)
+}
+
+#[cfg(test)]
+mod execute_tests {
+    use super::*;
+    use async_trait::async_trait;
+    use std::sync::{Arc, Mutex};
+    use tablex_core::{
+        driver::{Connection, RowEdit},
+        error::Result,
+        schema::{SchemaNode, TableDetail},
+        Error,
+    };
+
+    /// Records what it is asked to run, and can be told to fail on a statement.
+    struct Recorder {
+        ran: Arc<Mutex<Vec<String>>>,
+        fail_on: Option<&'static str>,
+    }
+
+    #[async_trait]
+    impl Connection for Recorder {
+        async fn execute(&mut self, sql: &str, _opts: &FetchOptions) -> Result<QueryOutcome> {
+            if self.fail_on.is_some_and(|needle| sql.contains(needle)) {
+                return Err(Error::query("boom"));
+            }
+            self.ran.lock().unwrap().push(sql.to_string());
+            Ok(QueryOutcome {
+                statements: vec![StatementResult::Affected {
+                    rows_affected: 1,
+                    last_insert_id: None,
+                }],
+                elapsed_ms: 5,
+                notices: vec![format!("ran {sql}")],
+            })
+        }
+
+        async fn browse(&mut self, _parent: Option<&str>) -> Result<Vec<SchemaNode>> {
+            Ok(vec![])
+        }
+
+        async fn table_detail(
+            &mut self,
+            _schema: Option<&str>,
+            _table: &str,
+        ) -> Result<TableDetail> {
+            Err(Error::Unsupported("not needed".into()))
+        }
+
+        async fn apply_edit(&mut self, _edit: &RowEdit) -> Result<()> {
+            Ok(())
+        }
+
+        async fn ping(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn close(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    fn recorder(fail_on: Option<&'static str>) -> (Recorder, Arc<Mutex<Vec<String>>>) {
+        let ran = Arc::new(Mutex::new(Vec::new()));
+        (
+            Recorder {
+                ran: ran.clone(),
+                fail_on,
+            },
+            ran,
+        )
+    }
+
+    #[tokio::test]
+    async fn each_statement_is_reported_as_it_finishes() {
+        let (mut conn, ran) = recorder(None);
+        let mut reports = Vec::new();
+        let outcome = execute_reporting(
+            &mut conn,
+            "INSERT INTO t VALUES (1); INSERT INTO t VALUES (2); SELECT 'a;b'",
+            &FetchOptions::default(),
+            |done, total| reports.push((done, total)),
+        )
+        .await
+        .unwrap();
+
+        // A zero first, so the bar appears before the slow first statement
+        // rather than after it.
+        assert_eq!(reports, vec![(0, 3), (1, 3), (2, 3), (3, 3)]);
+        assert_eq!(ran.lock().unwrap().len(), 3);
+        // The pieces come back as one outcome, the way a driver returns them.
+        assert_eq!(outcome.statements.len(), 3);
+        assert_eq!(outcome.elapsed_ms, 15);
+        assert_eq!(outcome.notices.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_single_statement_goes_straight_through() {
+        let (mut conn, ran) = recorder(None);
+        let mut reports = Vec::new();
+        execute_reporting(
+            &mut conn,
+            "SELECT 1;",
+            &FetchOptions::default(),
+            |done, total| reports.push((done, total)),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            reports.is_empty(),
+            "nothing to report between one statement"
+        );
+        // Untouched: the driver sees the text as submitted, trailing `;` and all.
+        assert_eq!(ran.lock().unwrap().as_slice(), ["SELECT 1;"]);
+    }
+
+    #[tokio::test]
+    async fn a_failure_stops_the_run_where_it_happened() {
+        let (mut conn, ran) = recorder(Some("oops"));
+        let mut reports = Vec::new();
+        let err = execute_reporting(
+            &mut conn,
+            "SELECT 1; SELECT oops; SELECT 3",
+            &FetchOptions::default(),
+            |done, total| reports.push((done, total)),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, Error::Query { .. }));
+        // The third never ran: a script stops at its first error, as it does
+        // in every driver.
+        assert_eq!(ran.lock().unwrap().as_slice(), ["SELECT 1"]);
+        assert_eq!(reports, vec![(0, 3), (1, 3)]);
+    }
 }
 
 /// Append one execution to the history file.

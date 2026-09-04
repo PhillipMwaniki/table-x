@@ -28,6 +28,7 @@ import type {
   NotebookCell,
   Plan,
   QueryOutcome,
+  QueryProgress,
   RowEdit,
   StatementResult,
   TransactionState,
@@ -110,6 +111,13 @@ export interface Tab {
    */
   design?: Design | undefined;
   running: boolean;
+  /**
+   * How far a multi-statement run has got, while `running`.
+   *
+   * Null for a single statement, which has nothing to count, and once the run
+   * is over. The backend reports it; the tab is where the UI reads it from.
+   */
+  progress?: { done: number; total: number } | null;
   /** Index of the statement whose results are shown. */
   activeStatement: number;
   /**
@@ -290,6 +298,10 @@ interface WorkspaceState {
   bumpSchema: (connectionId: string) => void;
   setActiveStatement: (connectionId: string, tabId: string, index: number) => void;
   run: (connectionId: string, tabId: string, sqlOverride?: string) => Promise<void>;
+  /** Subscribe to the backend's per-statement progress. Safe to call more than once. */
+  watchProgress: () => Promise<void>;
+  /** Record a progress report against the tab it names. */
+  noteProgress: (progress: QueryProgress) => void;
   /** Stop whatever this connection is running. */
   cancelQuery: (connectionId: string) => Promise<void>;
   /** Re-read whether a transaction is open. */
@@ -376,6 +388,9 @@ function activeRows(tab: Tab): (StatementResult & { type: "rows" }) | null {
   const statement = tab.outcome?.statements[tab.activeStatement];
   return statement?.type === "rows" ? statement : null;
 }
+
+/** Whether the process-wide progress subscription has been made. */
+let watchingProgress = false;
 
 export const useWorkspace = create<WorkspaceState>((set, get) => ({
   tabs: {},
@@ -824,6 +839,37 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     await get().run(id, tabId);
   },
 
+  watchProgress: async () => {
+    if (watchingProgress) return;
+    watchingProgress = true;
+    // Imported here rather than at the top so the store loads without a Tauri
+    // shell, which is where its tests run.
+    const { listen } = await import("@tauri-apps/api/event");
+    await listen<QueryProgress>("query-progress", (event) => {
+      get().noteProgress(event.payload);
+    });
+  },
+
+  noteProgress: (progress) => {
+    // The id is a tab id, and tab ids are unique across connections, so the
+    // report carries no connection id and the tab is found by looking.
+    set((s) => {
+      for (const [connectionId, list] of Object.entries(s.tabs)) {
+        const tab = list.find((t) => t.id === progress.id);
+        // A report that arrives after the run finished — the events are async
+        // and the reply can overtake the last of them — must not put a bar
+        // back on a tab that has already shown its result.
+        if (!tab || !tab.running) continue;
+        return {
+          tabs: patchTab(s.tabs, connectionId, tab.id, {
+            progress: { done: progress.done, total: progress.total },
+          }),
+        };
+      }
+      return {};
+    });
+  },
+
   run: async (id, tabId, sqlOverride) => {
     const tab = tabsOf(get(), id).find((t) => t.id === tabId);
     if (!tab) return;
@@ -836,6 +882,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     set((s) => ({
       tabs: patchTab(s.tabs, id, tabId, {
         running: true,
+        progress: null,
         error: null,
         notice: undefined,
         plan: null,
@@ -856,6 +903,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         sql,
         max_rows: limit,
         offset,
+        progress_id: tabId,
       });
       // Only after it succeeded, and only for statements that could have moved
       // something: a CREATE DATABASE that failed leaves the tree correct, and
@@ -869,6 +917,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         tabs: patchTab(s.tabs, id, tabId, {
           outcome,
           running: false,
+          progress: null,
           activeStatement: 0,
           offset,
           limit,
@@ -891,6 +940,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       set((s) => ({
         tabs: patchTab(s.tabs, id, tabId, {
           running: false,
+          progress: null,
           error: cancelled ? null : failure(id, e),
           ...(cancelled ? { notice: "Cancelled." } : {}),
           // Keep the previous outcome visible. Blanking the grid on a typo

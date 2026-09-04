@@ -368,13 +368,38 @@ fn opens_a_routine_body(prefix: &str, word: &str) -> bool {
         return false;
     }
     let upper = prefix.to_ascii_uppercase();
-    let starts_a_definition = upper.trim_start().starts_with("CREATE")
-        || upper.trim_start().starts_with("ALTER")
-        || upper.trim_start().starts_with("REPLACE");
+    let starts_a_definition = matches!(first_word(&upper), "CREATE" | "ALTER" | "REPLACE");
     starts_a_definition
         && (contains_word(&upper, "TRIGGER")
             || contains_word(&upper, "PROCEDURE")
             || contains_word(&upper, "FUNCTION"))
+}
+
+/// The first word of a statement, looking past the comments in front of it.
+///
+/// A comment belongs to the statement that follows it, so `-- note\nCREATE
+/// TRIGGER` starts with the comment. MySQL's `/*!50003 CREATE*/` is the awkward
+/// case: it is a comment to every other engine and code to MySQL, and it is how
+/// mysqldump writes every routine. Its contents are read as code here, because
+/// a dump is only ever restored to MySQL.
+fn first_word(sql: &str) -> &str {
+    let mut rest = sql;
+    loop {
+        rest = rest.trim_start();
+        if let Some(after) = rest.strip_prefix("--") {
+            rest = after.split_once('\n').map_or("", |(_, tail)| tail);
+        } else if let Some(after) = rest.strip_prefix("/*!") {
+            rest = after.trim_start_matches(|c: char| c.is_ascii_digit());
+        } else if let Some(after) = rest.strip_prefix("/*") {
+            rest = after.split_once("*/").map_or("", |(_, tail)| tail);
+        } else {
+            break;
+        }
+    }
+    let end = rest
+        .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .unwrap_or(rest.len());
+    &rest[..end]
 }
 
 /// Whether an `END` closes a counted block.
@@ -1104,6 +1129,27 @@ mod tests {
             parts[1]
         );
         assert_eq!(split_byte_by_byte(sql), parts);
+    }
+
+    #[test]
+    fn a_routine_body_is_seen_through_the_comments_in_front_of_it() {
+        // What a driver receives after the DELIMITER lines are gone: the
+        // mysqldump form with CREATE inside a version comment, and a
+        // hand-written one with a note above it. Each is one statement.
+        let dump =
+            "/*!50003 CREATE*/ /*!50020 DEFINER=`root`@`localhost`*/ /*!50003 PROCEDURE `p`()\n\
+                    BEGIN\n  UPDATE t SET a = 1;\n  SELECT 1;\nEND */";
+        assert_eq!(split_statements(dump), vec![dump]);
+
+        let noted = "-- fires on every insert\n/* and this */ CREATE TRIGGER t AFTER INSERT ON u\n\
+                     BEGIN\n  UPDATE c SET n = n + 1;\nEND";
+        assert_eq!(split_statements(noted), vec![noted]);
+
+        // A transaction opened after a comment is still a transaction.
+        assert_eq!(
+            split_statements("-- start\nBEGIN; SELECT 1; COMMIT;"),
+            vec!["-- start\nBEGIN", "SELECT 1", "COMMIT"]
+        );
     }
 
     #[test]

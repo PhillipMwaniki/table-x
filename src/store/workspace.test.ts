@@ -99,3 +99,44 @@ describe("reconnecting", () => {
     expect(useWorkspace.getState().schemaVersion["conn-1"]).toBeUndefined();
   });
 });
+
+describe("progress reports", () => {
+  const tab = (id: string, running: boolean) =>
+    ({ id, kind: "query", title: id, running, progress: null }) as Tab;
+
+  beforeEach(() => {
+    useWorkspace.setState({
+      tabs: {
+        "conn-1": [tab("tab-1", false)],
+        "conn-2": [tab("tab-2", true), tab("tab-3", false)],
+      },
+      active: {},
+      schemaVersion: {},
+    });
+  });
+
+  it("lands on the running tab it names, whichever connection holds it", () => {
+    useWorkspace.getState().noteProgress({ id: "tab-2", done: 3, total: 40 });
+
+    const tabs = useWorkspace.getState().tabs;
+    expect(tabs["conn-2"]?.[0]?.progress).toEqual({ done: 3, total: 40 });
+    expect(tabs["conn-2"]?.[1]?.progress).toBeNull();
+    expect(tabs["conn-1"]?.[0]?.progress).toBeNull();
+  });
+
+  it("is dropped once the tab has stopped running", () => {
+    // The reply and the last event race; a late event must not put a bar
+    // back on a tab that is already showing its result.
+    const before = useWorkspace.getState().tabs;
+    useWorkspace.getState().noteProgress({ id: "tab-3", done: 40, total: 40 });
+
+    expect(useWorkspace.getState().tabs).toBe(before);
+  });
+
+  it("ignores a tab it cannot find", () => {
+    const before = useWorkspace.getState().tabs;
+    useWorkspace.getState().noteProgress({ id: "gone", done: 1, total: 2 });
+
+    expect(useWorkspace.getState().tabs).toBe(before);
+  });
+});

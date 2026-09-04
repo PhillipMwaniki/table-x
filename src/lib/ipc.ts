@@ -154,6 +154,8 @@ export const ipc = {
     max_rows?: number;
     offset?: number;
     timeout_secs?: number;
+    /** Names the run in `query-progress` events. Omit for runs nobody watches. */
+    progress_id?: string;
   }) => call<QueryOutcome>("execute", { request }),
 
   browse: (connection_id: string, parent?: string) =>
