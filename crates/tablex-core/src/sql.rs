@@ -14,6 +14,11 @@
 ///   how virtually every stored procedure is written
 /// - `BEGIN ... END` routine bodies, which is how the engines *without* dollar
 ///   quoting write a trigger or a procedure
+/// - `DELIMITER xx` lines, which is how mysqldump and every MySQL tutorial
+///   write a routine. The line is a client command, not SQL: it changes what
+///   ends a statement, and sending it to the server is a syntax error. Until
+///   the next `DELIMITER ;` a statement ends at `xx` and a lone `;` is just
+///   text.
 ///
 /// Trailing empty statements are dropped, so a trailing `;` does not produce a
 /// spurious empty execution.
@@ -23,6 +28,8 @@ pub fn split_statements(sql: &str) -> Vec<String> {
     out.extend(splitter.finish());
     out
 }
+
+const DEFAULT_DELIMITER: &str = ";";
 
 /// Where the scanner is, so it can stop mid-input and pick up where it left off.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +63,8 @@ pub struct Splitter {
     state: State,
     /// Nesting inside a `BEGIN ... END` routine body.
     depth: usize,
+    /// What ends a statement: `;` unless a `DELIMITER` line changed it.
+    delimiter: String,
 }
 
 impl Default for Splitter {
@@ -71,6 +80,7 @@ impl Splitter {
             scanned: 0,
             state: State::Normal,
             depth: 0,
+            delimiter: DEFAULT_DELIMITER.to_string(),
         }
     }
 
@@ -96,6 +106,7 @@ impl Splitter {
         self.scanned = 0;
         self.state = State::Normal;
         self.depth = 0;
+        self.delimiter = DEFAULT_DELIMITER.to_string();
         push_statement(&mut out, &rest);
         out
     }
@@ -202,96 +213,149 @@ impl Splitter {
                     i += 1;
                 }
 
-                State::Normal => match c {
-                    b'\'' | b'"' | b'`' => {
-                        self.state = State::Quoted(c);
-                        i += 1;
-                    }
-                    b'[' => {
-                        self.state = State::Bracketed;
-                        i += 1;
-                    }
-                    b'-' => {
-                        if i + 1 >= bytes.len() && !at_end {
+                State::Normal => {
+                    // A custom delimiter is checked before anything else: `$$`
+                    // must not be read as a dollar quote and `//` must not be
+                    // read as a comment when they are what ends the statement.
+                    if self.delimiter != DEFAULT_DELIMITER {
+                        let rest = &bytes[i..];
+                        if rest.starts_with(self.delimiter.as_bytes()) {
+                            let statement: String = self.buffer.drain(..i).collect();
+                            self.buffer.drain(..self.delimiter.len());
+                            push_statement(&mut out, &statement);
+                            self.depth = 0;
+                            i = 0;
+                            continue;
+                        }
+                        // The delimiter may be arriving one byte at a time.
+                        if !at_end && self.delimiter.as_bytes().starts_with(rest) {
                             break;
                         }
-                        if bytes.get(i + 1) == Some(&b'-') {
-                            self.state = State::LineComment;
-                            i += 2;
-                        } else {
+                    }
+                    match c {
+                        b'\'' | b'"' | b'`' => {
+                            self.state = State::Quoted(c);
                             i += 1;
                         }
-                    }
-                    b'/' => {
-                        if i + 1 >= bytes.len() && !at_end {
-                            break;
-                        }
-                        if bytes.get(i + 1) == Some(&b'*') {
-                            self.state = State::BlockComment(1);
-                            i += 2;
-                        } else {
+                        b'[' => {
+                            self.state = State::Bracketed;
                             i += 1;
                         }
-                    }
-                    b'$' => {
-                        match dollar_tag_end(bytes, i) {
-                            Some(tag_end) => {
-                                let tag = self.buffer[i..tag_end].to_string();
-                                self.state = State::DollarQuoted(tag);
-                                i = tag_end;
+                        b'-' => {
+                            if i + 1 >= bytes.len() && !at_end {
+                                break;
                             }
-                            // No closing `$` yet: either a parameter marker like
-                            // `$1`, or a tag still arriving. Only the end of
-                            // input can tell them apart.
-                            None if at_end => i += 1,
-                            None => break,
+                            if bytes.get(i + 1) == Some(&b'-') {
+                                self.state = State::LineComment;
+                                i += 2;
+                            } else {
+                                i += 1;
+                            }
                         }
-                    }
-                    b';' if self.depth == 0 => {
-                        let statement: String = self.buffer.drain(..i).collect();
-                        // Drop the semicolon itself.
-                        self.buffer.drain(..1);
-                        push_statement(&mut out, &statement);
-                        i = 0;
-                    }
-                    c if c.is_ascii_alphabetic() || c == b'_' => {
-                        let word_start = i;
-                        let mut end = i;
-                        while end < bytes.len()
-                            && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_')
-                        {
-                            end += 1;
+                        b'/' => {
+                            if i + 1 >= bytes.len() && !at_end {
+                                break;
+                            }
+                            if bytes.get(i + 1) == Some(&b'*') {
+                                self.state = State::BlockComment(1);
+                                i += 2;
+                            } else {
+                                i += 1;
+                            }
                         }
-                        // A word running to the end of the buffer may be half a
-                        // word; `BEGI` must not be mistaken for anything.
-                        if end == bytes.len() && !at_end {
-                            break;
+                        b'$' => {
+                            match dollar_tag_end(bytes, i) {
+                                Some(tag_end) => {
+                                    let tag = self.buffer[i..tag_end].to_string();
+                                    self.state = State::DollarQuoted(tag);
+                                    i = tag_end;
+                                }
+                                // No closing `$` yet: either a parameter marker like
+                                // `$1`, or a tag still arriving. Only the end of
+                                // input can tell them apart.
+                                None if at_end => i += 1,
+                                None => break,
+                            }
                         }
+                        b';' if self.depth == 0 && self.delimiter == DEFAULT_DELIMITER => {
+                            let statement: String = self.buffer.drain(..i).collect();
+                            // Drop the semicolon itself.
+                            self.buffer.drain(..1);
+                            push_statement(&mut out, &statement);
+                            i = 0;
+                        }
+                        c if c.is_ascii_alphabetic() || c == b'_' => {
+                            let word_start = i;
+                            let mut end = i;
+                            while end < bytes.len()
+                                && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_')
+                            {
+                                end += 1;
+                            }
+                            // A word running to the end of the buffer may be half a
+                            // word; `BEGI` must not be mistaken for anything.
+                            if end == bytes.len() && !at_end {
+                                break;
+                            }
 
-                        let word = &self.buffer[word_start..end];
-                        if self.depth > 0 {
-                            if word.eq_ignore_ascii_case("BEGIN")
-                                || word.eq_ignore_ascii_case("CASE")
+                            let word = &self.buffer[word_start..end];
+                            if word.eq_ignore_ascii_case("DELIMITER")
+                                && at_line_start(&self.buffer[..word_start])
                             {
-                                self.depth += 1;
-                            } else if word.eq_ignore_ascii_case("END")
-                                && closes_a_block(&self.buffer, end)
-                            {
-                                self.depth -= 1;
+                                // The command runs to the end of its line, which
+                                // has to have arrived to know what the new
+                                // delimiter is.
+                                let line_end = match self.buffer[end..].find('\n') {
+                                    Some(n) => end + n + 1,
+                                    None if at_end => self.buffer.len(),
+                                    None => break,
+                                };
+                                if let Some(token) =
+                                    self.buffer[end..line_end].split_whitespace().next()
+                                {
+                                    self.delimiter = token.to_string();
+                                }
+                                // The line is for us, not the server.
+                                self.buffer.drain(word_start..line_end);
+                                i = word_start;
+                                continue;
                             }
-                        } else if opens_a_routine_body(&self.buffer[..word_start], word) {
-                            self.depth = 1;
+                            if self.depth > 0 {
+                                if word.eq_ignore_ascii_case("BEGIN")
+                                    || word.eq_ignore_ascii_case("CASE")
+                                {
+                                    self.depth += 1;
+                                } else if word.eq_ignore_ascii_case("END")
+                                    && closes_a_block(&self.buffer, end)
+                                {
+                                    self.depth -= 1;
+                                }
+                            } else if opens_a_routine_body(&self.buffer[..word_start], word) {
+                                self.depth = 1;
+                            }
+                            i = end;
                         }
-                        i = end;
+                        _ => i += 1,
                     }
-                    _ => i += 1,
-                },
+                }
             }
         }
 
         self.scanned = i.min(self.buffer.len());
         out
     }
+}
+
+/// Whether nothing but whitespace stands between the last line break and here.
+///
+/// `DELIMITER` is a command to the mysql client, which reads it only as the
+/// first word of a line. Anywhere else — `SELECT delimiter FROM t` — it is an
+/// ordinary identifier.
+fn at_line_start(prefix: &str) -> bool {
+    prefix
+        .rsplit('\n')
+        .next()
+        .is_none_or(|line| line.trim().is_empty())
 }
 
 /// Whether `BEGIN` at this point opens a routine body rather than a transaction.
@@ -1001,6 +1065,89 @@ mod tests {
         // comment belongs to the statement that follows it rather than
         // standing as one of its own.
         assert_eq!(whole.len(), 6, "{whole:?}");
+    }
+
+    #[test]
+    fn a_delimiter_line_changes_what_ends_a_statement() {
+        // What mysqldump writes for a procedure: the body's own semicolons
+        // are text, `;;` ends it, and neither DELIMITER line is a statement.
+        let sql = "DELIMITER ;;\n\
+                   CREATE PROCEDURE p()\n\
+                   BEGIN\n  SET @a = 1;\n  SELECT @a;\nEND ;;\n\
+                   DELIMITER ;\n\
+                   SELECT 2;";
+        let parts = split_statements(sql);
+        assert_eq!(parts.len(), 2, "{parts:?}");
+        assert!(parts[0].starts_with("CREATE PROCEDURE p()"));
+        assert!(parts[0].ends_with("END"), "{:?}", parts[0]);
+        assert!(parts[0].contains("SET @a = 1;\n"));
+        assert_eq!(parts[1], "SELECT 2");
+        assert_eq!(split_byte_by_byte(sql), parts);
+    }
+
+    #[test]
+    fn a_dump_hides_create_in_a_version_comment() {
+        // mysqldump wraps the keywords in `/*!50003 ... */` so older servers
+        // skip them. The routine-body tracker cannot see CREATE through that,
+        // which is exactly why the delimiter has to be honoured.
+        let sql = "/*!50003 SET @saved_cs_client = @@character_set_client */ ;\n\
+                   DELIMITER ;;\n\
+                   /*!50003 CREATE*/ /*!50020 DEFINER=`root`@`localhost`*/ /*!50003 PROCEDURE `p`()\n\
+                   BEGIN\n  UPDATE t SET a = 1;\nEND */;;\n\
+                   DELIMITER ;\n\
+                   /*!50003 SET character_set_client = @saved_cs_client */ ;";
+        let parts = split_statements(sql);
+        assert_eq!(parts.len(), 3, "{parts:?}");
+        assert!(
+            parts[1].contains("UPDATE t SET a = 1;\nEND */"),
+            "{:?}",
+            parts[1]
+        );
+        assert_eq!(split_byte_by_byte(sql), parts);
+    }
+
+    #[test]
+    fn dollar_and_slash_delimiters_are_not_quotes_or_comments() {
+        let sql = "DELIMITER $$\nCREATE FUNCTION f() RETURNS INT\nBEGIN\n RETURN 1;\nEND$$\n\
+                   DELIMITER //\nCREATE FUNCTION g() RETURNS INT\nBEGIN\n RETURN 2;\nEND//\n\
+                   delimiter ;\nSELECT f(), g();";
+        let parts = split_statements(sql);
+        assert_eq!(parts.len(), 3, "{parts:?}");
+        assert!(parts[0].ends_with("RETURN 1;\nEND"), "{:?}", parts[0]);
+        assert!(parts[1].ends_with("RETURN 2;\nEND"), "{:?}", parts[1]);
+        assert_eq!(parts[2], "SELECT f(), g()");
+        assert_eq!(split_byte_by_byte(sql), parts);
+    }
+
+    #[test]
+    fn delimiter_is_a_command_only_at_the_start_of_a_line() {
+        // As an identifier or inside a string or comment it is nothing special.
+        assert_eq!(
+            split_statements(
+                "SELECT delimiter FROM t; SELECT 'DELIMITER ;;'; -- DELIMITER $$\nSELECT 3"
+            ),
+            vec![
+                "SELECT delimiter FROM t",
+                "SELECT 'DELIMITER ;;'",
+                "-- DELIMITER $$\nSELECT 3"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_custom_delimiter_does_not_outlive_the_input() {
+        let mut splitter = Splitter::new();
+        // Still `;;` at the end of this input: a lone `;` does not split.
+        assert_eq!(
+            splitter.push("DELIMITER ;;\nSELECT 1;;\nSELECT 2; SELECT 3"),
+            vec!["SELECT 1".to_string()]
+        );
+        assert_eq!(splitter.finish(), vec!["SELECT 2; SELECT 3".to_string()]);
+        // The next input is read with the default again.
+        assert_eq!(
+            splitter.push("SELECT 4; SELECT 5;"),
+            vec!["SELECT 4".to_string(), "SELECT 5".to_string()]
+        );
     }
 
     #[test]
