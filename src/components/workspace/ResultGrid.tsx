@@ -33,6 +33,24 @@ import { ContextMenu } from "../ui/ContextMenu";
 import type { MenuItem } from "../ui/ContextMenu";
 import { quickFilter, rowsForMenu, sourceTable } from "@/lib/rowcopy";
 import { useSettings } from "@/store/settings";
+import { useLayouts } from "@/store/layouts";
+import {
+  arrange,
+  clampWidth,
+  clearWidth,
+  columnKeys,
+  EMPTY_LAYOUT,
+  freeze,
+  frozenOffsets,
+  hideColumn,
+  isEmptyLayout,
+  moveColumn,
+  setWidth,
+  showAll,
+  showColumn,
+  widthFor,
+} from "@/lib/columns";
+import type { ColumnLayout } from "@/lib/columns";
 import type { QuickFilter } from "@/lib/rowcopy";
 import type { Column, ExportFormat, ResultSet, Value } from "@/lib/types";
 
@@ -141,6 +159,7 @@ function compareValues(a: Value, b: Value): number {
 export function ResultGrid({
   result,
   memoryKey,
+  layoutKey,
   onEdit,
   paging,
   onExportRows,
@@ -157,6 +176,15 @@ export function ResultGrid({
    * where there is nothing to come back to.
    */
   memoryKey?: string | undefined;
+  /**
+   * What to keep this grid's column arrangement under between runs.
+   *
+   * Distinct from `memoryKey`, which is per tab and lasts a session: the way
+   * you like a table's columns is about the table, and should be there when
+   * it is opened again tomorrow from any tab. Absent, the arrangement lasts
+   * as long as the grid does.
+   */
+  layoutKey?: string | undefined;
   onEdit: (rowIndex: number, columnIndex: number, next: Value) => Promise<void>;
   /** Page controls, absent for results that are not a page of anything. */
   paging?: PagingProps | undefined;
@@ -215,6 +243,30 @@ export function ResultGrid({
   useEffect(() => {
     if (memoryKey) remember(memoryKey, { sort, filter, columnFilters });
   }, [memoryKey, sort, filter, columnFilters]);
+
+  // The column arrangement: stored under the layout key when there is one,
+  // otherwise held here and gone with the grid.
+  const stored = useLayouts((s) => (layoutKey ? s.layouts[layoutKey] : undefined));
+  const setStored = useLayouts((s) => s.set);
+  const [local, setLocal] = useState<ColumnLayout>(EMPTY_LAYOUT);
+  const layout = (layoutKey ? stored : local) ?? EMPTY_LAYOUT;
+  const updateLayout = useCallback(
+    (next: (was: ColumnLayout) => ColumnLayout) => {
+      if (layoutKey) setStored(layoutKey, next);
+      else setLocal(next);
+    },
+    [layoutKey, setStored],
+  );
+  const keys = useMemo(() => columnKeys(result.columns), [result.columns]);
+  /** Source indexes of the columns on screen, left to right. */
+  const visible = useMemo(() => arrange(keys, layout), [keys, layout]);
+  /** A width being dragged, before it is committed to the layout. */
+  const [resizing, setResizing] = useState<{ col: number; width: number } | null>(null);
+  /** A header being dragged, and the slot it would drop into. */
+  const [reorder, setReorder] = useState<{ from: number; slot: number } | null>(null);
+  const [headerMenu, setHeaderMenu] = useState<{ x: number; y: number; col: number } | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const headerRow = useRef<HTMLDivElement>(null);
 
   // Before paint, so the rows do not flash at the top and then jump. The
   // virtualizer is told the same offset below, so it draws the right rows on
@@ -277,7 +329,7 @@ export function ResultGrid({
 
   // Column widths are measured from a sample of rows rather than every row:
   // scanning 100k rows to size a column is not worth the frame it costs.
-  const widths = useMemo(() => {
+  const measured = useMemo(() => {
     const sample = result.rows.slice(0, 100);
     // A monospace advance is close enough to 0.6em for sizing; measuring text
     // properly would cost a layout pass per column for a few pixels.
@@ -293,6 +345,71 @@ export function ResultGrid({
       );
     });
   }, [result, fontSize]);
+
+  // What each column is drawn at: the width under the pointer while one is
+  // being dragged, the chosen width when one was, and the measured one
+  // otherwise. By source index, like everything else about the result.
+  const widths = useMemo(
+    () =>
+      measured.map((m, i) =>
+        resizing?.col === i ? resizing.width : widthFor(keys[i] ?? "", m, layout),
+      ),
+    [measured, keys, layout, resizing],
+  );
+  const visibleWidths = useMemo(
+    () => visible.map((i) => widths[i] ?? MIN_COL_WIDTH),
+    [visible, widths],
+  );
+  const offsets = useMemo(
+    () => frozenOffsets(visibleWidths, layout.frozen, GUTTER_WIDTH),
+    [visibleWidths, layout.frozen],
+  );
+
+  /** The slot a header dragged to `clientX` would drop into. */
+  const slotAt = useCallback(
+    (clientX: number) => {
+      const row = headerRow.current;
+      if (!row) return 0;
+      const x = clientX - row.getBoundingClientRect().left - GUTTER_WIDTH;
+      let left = 0;
+      for (let d = 0; d < visibleWidths.length; d++) {
+        const width = visibleWidths[d] ?? 0;
+        if (x < left + width / 2) return d;
+        left += width;
+      }
+      return visibleWidths.length;
+    },
+    [visibleWidths],
+  );
+
+  const dropReorder = useCallback(() => {
+    if (!reorder) return;
+    const { from, slot } = reorder;
+    setReorder(null);
+    // Dropping a column on either side of where it already is moves nothing.
+    if (slot === from || slot === from + 1) return;
+    const key = keys[visible[from] ?? -1];
+    const before = slot < visible.length ? keys[visible[slot] ?? -1] : null;
+    if (key === undefined || before === undefined) return;
+    updateLayout((was) => moveColumn(keys, was, key, before));
+  }, [reorder, keys, visible, updateLayout]);
+
+  const hide = useCallback(
+    (col: number) => {
+      const key = keys[col];
+      if (key === undefined) return;
+      updateLayout((was) => hideColumn(was, key));
+      // A filter on a column you cannot see is a filter you cannot account
+      // for, so it goes with the column.
+      setColumnFilters((was) => {
+        if (!(col in was)) return was;
+        const next = { ...was };
+        delete next[col];
+        return next;
+      });
+    },
+    [keys, updateLayout],
+  );
 
   /**
    * Rows after filtering and sorting, carrying their original index so edits
@@ -491,7 +608,7 @@ export function ResultGrid({
     return () => window.removeEventListener("keydown", onKey);
   }, [editing]);
 
-  const totalWidth = widths.reduce((sum, w) => sum + w, 0);
+  const totalWidth = visibleWidths.reduce((sum, w) => sum + w, 0);
 
   /**
    * What a right-click on a cell offers.
@@ -667,12 +784,67 @@ export function ResultGrid({
   const panelKind = panelValue ? editorFor(panelValue) : null;
   const viewingValue = viewing ? result.rows[viewing.row]?.[viewing.col] : undefined;
 
+  /**
+   * What a right-click on a column name offers.
+   *
+   * The things that are about the column rather than its values: how it is
+   * sorted, how wide it is, whether it is shown, and whether it stays put.
+   */
+  const headerMenuItems = useMemo((): MenuItem[] => {
+    if (!headerMenu) return [];
+    const col = headerMenu.col;
+    const key = keys[col];
+    const column = result.columns[col];
+    if (key === undefined || !column) return [];
+    const at = visible.indexOf(col);
+    const isFrozen = at !== -1 && at < layout.frozen;
+
+    return [
+      {
+        label: "Sort ascending",
+        onSelect: () => setSort({ columnIndex: col, direction: "asc" }),
+      },
+      {
+        label: "Sort descending",
+        onSelect: () => setSort({ columnIndex: col, direction: "desc" }),
+      },
+      {
+        label: "Clear sort",
+        disabledReason: sort?.columnIndex === col ? undefined : "Not sorted by this column",
+        onSelect: () => setSort(null),
+      },
+      {
+        label: "Reset width",
+        separated: true,
+        disabledReason:
+          layout.widths[key] === undefined ? "Already at its measured width" : undefined,
+        onSelect: () => updateLayout((was) => clearWidth(was, key)),
+      },
+      {
+        label: isFrozen ? "Unfreeze columns" : `Freeze up to ${column.name}`,
+        onSelect: () => updateLayout((was) => freeze(was, isFrozen ? 0 : at + 1)),
+      },
+      { label: "Hide column", onSelect: () => hide(col) },
+      {
+        label: "Show all columns",
+        separated: true,
+        disabledReason: layout.hidden.length === 0 ? "Nothing is hidden" : undefined,
+        onSelect: () => updateLayout(showAll),
+      },
+      {
+        label: "Reset column layout",
+        disabledReason: isEmptyLayout(layout) ? "Nothing has been changed" : undefined,
+        onSelect: () => updateLayout(() => EMPTY_LAYOUT),
+      },
+    ];
+  }, [headerMenu, keys, result.columns, visible, layout, sort, updateLayout, hide]);
+
   if (charting) {
     return <ChartView result={result} onClose={() => setCharting(false)} />;
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="relative flex min-h-0 flex-1 flex-col">
       {panelValue && (panelKind === "json" || panelKind === "text") && (
         <ValuePanel
           title={`${result.columns[editing!.col]?.name ?? "Value"} — row ${editing!.row + 1}`}
@@ -707,6 +879,9 @@ export function ResultGrid({
         onInsertRow={onInsertRow}
         detailsOpen={detailsOpen}
         onToggleDetails={() => setDetailsOpen(!detailsOpen)}
+        hiddenCount={layout.hidden.length}
+        pickerOpen={pickerOpen}
+        onTogglePicker={() => setPickerOpen((was) => !was)}
         onDeleteSelected={
           onDeleteRows
             ? () =>
@@ -718,6 +893,22 @@ export function ResultGrid({
             : undefined
         }
       />
+
+      {pickerOpen && (
+        <ColumnPicker
+          columns={result.columns}
+          keys={keys}
+          hidden={layout.hidden}
+          onToggle={(col, shown) => {
+            if (shown) {
+              const key = keys[col];
+              if (key !== undefined) updateLayout((was) => showColumn(was, key));
+            } else hide(col);
+          }}
+          onShowAll={() => updateLayout(showAll)}
+          onClose={() => setPickerOpen(false)}
+        />
+      )}
 
       {cellError && (
         <div role="alert" className="shrink-0 bg-danger/10 px-2 py-1 text-[11px] text-danger">
@@ -742,7 +933,25 @@ export function ResultGrid({
         >
           <div style={{ width: totalWidth, minWidth: "100%" }}>
             {/* Header stays put while the body scrolls under it. */}
-            <div className="sticky top-0 z-10 flex border-b border-border bg-surface-2">
+            <div
+              ref={headerRow}
+              className="sticky top-0 z-10 flex border-b border-border bg-surface-2"
+            >
+              {/* Where a dragged column would land: a line at the boundary
+                  nearest the pointer, in content coordinates, so it scrolls
+                  with the columns it sits between. */}
+              {reorder && (
+                <div
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-y-0 z-30 w-0.5 bg-accent"
+                  style={{
+                    left:
+                      GUTTER_WIDTH +
+                      visibleWidths.slice(0, reorder.slot).reduce((sum, w) => sum + w, 0) -
+                      1,
+                  }}
+                />
+              )}
               <div
                 style={{ width: GUTTER_WIDTH }}
                 className="sticky left-0 z-20 shrink-0 border-r border-border bg-surface-2 p-0"
@@ -768,25 +977,51 @@ export function ResultGrid({
                   {selected.size > 0 && selected.size === view.length ? "■" : "□"}
                 </button>
               </div>
-              {result.columns.map((col, i) => (
-                <HeaderCell
-                  key={`${col.name}-${i}`}
-                  column={col}
-                  width={widths[i] ?? MIN_COL_WIDTH}
-                  sort={sort?.columnIndex === i ? sort.direction : null}
-                  isKey={result.key_columns.includes(col.name)}
-                  precision={guarantees.columns[i]?.precision ?? "none"}
-                  onSort={() =>
-                    setSort((s) =>
-                      s?.columnIndex === i && s.direction === "asc"
-                        ? { columnIndex: i, direction: "desc" }
-                        : s?.columnIndex === i && s.direction === "desc"
-                          ? null
-                          : { columnIndex: i, direction: "asc" },
-                    )
-                  }
-                />
-              ))}
+              {visible.map((i, d) => {
+                const col = result.columns[i];
+                if (!col) return null;
+                const left = offsets[d] ?? null;
+                return (
+                  <HeaderCell
+                    key={keys[i]}
+                    column={col}
+                    width={widths[i] ?? MIN_COL_WIDTH}
+                    sort={sort?.columnIndex === i ? sort.direction : null}
+                    isKey={result.key_columns.includes(col.name)}
+                    precision={guarantees.columns[i]?.precision ?? "none"}
+                    frozen={left === null ? undefined : { left, last: d === layout.frozen - 1 }}
+                    dragging={reorder?.from === d}
+                    onSort={() =>
+                      setSort((s) =>
+                        s?.columnIndex === i && s.direction === "asc"
+                          ? { columnIndex: i, direction: "desc" }
+                          : s?.columnIndex === i && s.direction === "desc"
+                            ? null
+                            : { columnIndex: i, direction: "asc" },
+                      )
+                    }
+                    onResize={(width) => setResizing({ col: i, width })}
+                    onResizeEnd={() => {
+                      setResizing((was) => {
+                        const key = keys[i];
+                        if (was && key !== undefined)
+                          updateLayout((layout) => setWidth(layout, key, was.width));
+                        return null;
+                      });
+                    }}
+                    onFit={() => {
+                      const key = keys[i];
+                      if (key !== undefined) updateLayout((was) => clearWidth(was, key));
+                    }}
+                    onDrag={(clientX) => setReorder({ from: d, slot: slotAt(clientX) })}
+                    onDrop={dropReorder}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setHeaderMenu({ x: e.clientX, y: e.clientY, col: i });
+                    }}
+                  />
+                );
+              })}
             </div>
 
             {/* Filter row, directly under the names it filters — the association
@@ -796,36 +1031,45 @@ export function ResultGrid({
                 style={{ width: GUTTER_WIDTH }}
                 className="sticky left-0 z-20 shrink-0 border-r border-border bg-surface-1"
               />
-              {result.columns.map((col, i) => (
-                <div
-                  key={`filter-${col.name}-${i}`}
-                  style={{ width: widths[i] ?? MIN_COL_WIDTH }}
-                  className="shrink-0 border-r border-border p-0.5"
-                >
-                  <input
-                    value={columnFilters[i] ?? ""}
-                    onChange={(e) =>
-                      setColumnFilters((was) => {
-                        const next = { ...was };
-                        // Removed rather than stored empty, so the count of
-                        // active filters is simply the size of this object.
-                        if (e.target.value) next[i] = e.target.value;
-                        else delete next[i];
-                        return next;
-                      })
-                    }
-                    placeholder="filter"
-                    aria-label={`Filter ${col.name}`}
-                    title={FILTER_HINT}
+              {visible.map((i, d) => {
+                const col = result.columns[i];
+                if (!col) return null;
+                const left = offsets[d] ?? null;
+                return (
+                  <div
+                    key={`filter-${keys[i]}`}
+                    style={{ width: widths[i] ?? MIN_COL_WIDTH, left: left ?? undefined }}
                     className={cx(
-                      "h-5 w-full rounded-sm border bg-surface-0 px-1 font-mono outline-none",
-                      "text-[length:calc(var(--text-data)*0.85)]",
-                      "placeholder:text-text-muted/40 focus:border-accent",
-                      columnFilters[i] ? "border-accent/60" : "border-transparent",
+                      "shrink-0 border-r border-border p-0.5",
+                      left !== null && "sticky z-[15] bg-surface-1",
+                      left !== null && d === layout.frozen - 1 && "border-r-2",
                     )}
-                  />
-                </div>
-              ))}
+                  >
+                    <input
+                      value={columnFilters[i] ?? ""}
+                      onChange={(e) =>
+                        setColumnFilters((was) => {
+                          const next = { ...was };
+                          // Removed rather than stored empty, so the count of
+                          // active filters is simply the size of this object.
+                          if (e.target.value) next[i] = e.target.value;
+                          else delete next[i];
+                          return next;
+                        })
+                      }
+                      placeholder="filter"
+                      aria-label={`Filter ${col.name}`}
+                      title={FILTER_HINT}
+                      className={cx(
+                        "h-5 w-full rounded-sm border bg-surface-0 px-1 font-mono outline-none",
+                        "text-[length:calc(var(--text-data)*0.85)]",
+                        "placeholder:text-text-muted/40 focus:border-accent",
+                        columnFilters[i] ? "border-accent/60" : "border-transparent",
+                      )}
+                    />
+                  </div>
+                );
+              })}
             </div>
 
             <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
@@ -842,6 +1086,12 @@ export function ResultGrid({
                 // the source index would put two of the same shade side by side —
                 // which is the one thing banding exists to prevent.
                 const banded = striped && virtual.index % 2 === 1;
+                // A frozen cell paints its own ground, or the cells scrolling
+                // under it would show through; this is the row's tint, for it
+                // to paint on top of that ground so the two match.
+                const tint = isSelected
+                  ? "before:bg-accent/15"
+                  : cx(banded && "before:bg-surface-1", "group-hover:before:bg-surface-2");
                 return (
                   <div
                     key={virtual.key}
@@ -850,7 +1100,7 @@ export function ResultGrid({
                     // so the first is free to mean "look at this row".
                     onMouseDown={() => setCurrent(sourceIndex)}
                     className={cx(
-                      "absolute flex border-b border-border/40",
+                      "group absolute flex border-b border-border/40",
                       // Hover is a step above the band rather than equal to it, or
                       // it would be invisible on every other row.
                       isSelected
@@ -901,13 +1151,21 @@ export function ResultGrid({
                       <span className="px-1">{(paging?.offset ?? 0) + sourceIndex + 1}</span>
                     </div>
 
-                    {row.map((cell, colIndex) => {
+                    {visible.map((colIndex, d) => {
+                      const cell = row[colIndex];
+                      if (!cell) return null;
                       const isEditing = editing?.row === sourceIndex && editing.col === colIndex;
+                      const left = offsets[d] ?? null;
                       return (
                         <Cell
-                          key={colIndex}
+                          key={keys[colIndex]}
                           value={cell}
                           width={widths[colIndex] ?? MIN_COL_WIDTH}
+                          frozen={
+                            left === null
+                              ? undefined
+                              : { left, last: d === layout.frozen - 1, tint }
+                          }
                           editable={result.editable}
                           nullable={result.columns[colIndex]?.nullable !== false}
                           editing={isEditing}
@@ -963,6 +1221,15 @@ export function ResultGrid({
 
       {menu && menuItems.length > 0 && (
         <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />
+      )}
+
+      {headerMenu && headerMenuItems.length > 0 && (
+        <ContextMenu
+          x={headerMenu.x}
+          y={headerMenu.y}
+          items={headerMenuItems}
+          onClose={() => setHeaderMenu(null)}
+        />
       )}
 
       <GuaranteesPanel
@@ -1082,6 +1349,9 @@ function GridToolbar({
   onInsertRow,
   detailsOpen,
   onToggleDetails,
+  hiddenCount,
+  pickerOpen,
+  onTogglePicker,
   onDeleteSelected,
 }: {
   result: ResultSet;
@@ -1099,6 +1369,10 @@ function GridToolbar({
   /** Whether the row panel is showing, and how to change that. */
   detailsOpen: boolean;
   onToggleDetails: () => void;
+  /** Columns taken off screen, said out loud so they are not lost. */
+  hiddenCount: number;
+  pickerOpen: boolean;
+  onTogglePicker: () => void;
   onDeleteSelected?: (() => void) | undefined;
 }) {
   return (
@@ -1195,6 +1469,21 @@ function GridToolbar({
         Chart
       </button>
 
+      {/* The count is the point: a hidden column leaves no gap behind, so
+          without it the only sign one was hidden would be its absence. */}
+      <button
+        onClick={onTogglePicker}
+        aria-expanded={pickerOpen}
+        className={cx(
+          "rounded px-1.5 py-0.5 text-text-muted hover:bg-surface-3 hover:text-text",
+          pickerOpen && "bg-surface-3 text-text",
+          hiddenCount > 0 && "text-accent",
+        )}
+        title="Choose which columns are shown"
+      >
+        Columns{hiddenCount > 0 && ` · ${hiddenCount} hidden`}
+      </button>
+
       {/* The connections pane's control, mirrored: the same window outline with
           the divider on the right instead of the left. Filled while the panel
           is hidden, which is the convention that button already set — the
@@ -1226,13 +1515,35 @@ function GridToolbar({
   );
 }
 
+/**
+ * How far a header has to move before it is a drag rather than a click.
+ *
+ * A pointer never lands perfectly still; below this the movement is the
+ * hand, not an intention.
+ */
+const DRAG_THRESHOLD = 5;
+
+/** Where a frozen cell sits, and whether it is the last one before the rest scroll. */
+interface Frozen {
+  left: number;
+  last: boolean;
+}
+
 function HeaderCell({
   column,
   width,
   sort,
   isKey,
   precision,
+  frozen,
+  dragging,
   onSort,
+  onResize,
+  onResizeEnd,
+  onFit,
+  onDrag,
+  onDrop,
+  onContextMenu,
 }: {
   column: Column;
   width: number;
@@ -1240,52 +1551,248 @@ function HeaderCell({
   isKey: boolean;
   /** How this column's numbers survived the trip — see `precisionOf`. */
   precision: Precision;
+  frozen?: Frozen | undefined;
+  /** Whether this is the header being dragged to a new place. */
+  dragging: boolean;
   onSort: () => void;
+  /** The width under the pointer, as it moves. */
+  onResize: (width: number) => void;
+  onResizeEnd: () => void;
+  /** Back to the measured width. */
+  onFit: () => void;
+  /** The pointer's position while the header is being dragged. */
+  onDrag: (clientX: number) => void;
+  onDrop: () => void;
+  onContextMenu: (e: React.MouseEvent) => void;
 }) {
+  /** Where a resize began, and the width it began from. */
+  const resize = useRef<{ x: number; width: number } | null>(null);
+  /** Where a press on the name landed, and whether it has moved far enough to be a drag. */
+  const press = useRef<{ x: number; moved: boolean } | null>(null);
+  /** Set by a drag's release so the click that follows it does not also sort. */
+  const dragged = useRef(false);
+
   return (
-    <button
-      onClick={onSort}
-      style={{ width }}
-      title={`${column.name} — ${column.type_name}${column.nullable === false ? " NOT NULL" : ""}`}
-      className="flex shrink-0 items-center gap-1 border-r border-border px-2 py-1 text-left hover:bg-surface-3"
+    <div
+      style={{ width, left: frozen?.left }}
+      onContextMenu={onContextMenu}
+      className={cx(
+        "relative flex shrink-0 border-r border-border",
+        frozen && "sticky z-[15] bg-surface-2",
+        frozen?.last && "border-r-2",
+        dragging && "opacity-50",
+      )}
     >
-      <span className="flex min-w-0 flex-col leading-tight">
-        <span className="flex items-center gap-1 truncate text-[length:var(--text-data)] font-medium text-text">
-          {isKey && (
-            <span aria-label="Key column" title="Key column" className="text-accent">
-              ⚿
-            </span>
-          )}
-          {column.name}
-          {/* Only "exact" gets a mark. An approximate column is the ordinary
+      <button
+        onClick={() => {
+          if (dragged.current) {
+            dragged.current = false;
+            return;
+          }
+          onSort();
+        }}
+        onPointerDown={(e) => {
+          if (e.button !== 0) return;
+          press.current = { x: e.clientX, moved: false };
+          e.currentTarget.setPointerCapture(e.pointerId);
+        }}
+        onPointerMove={(e) => {
+          const p = press.current;
+          if (!p) return;
+          if (!p.moved) {
+            if (Math.abs(e.clientX - p.x) < DRAG_THRESHOLD) return;
+            p.moved = true;
+          }
+          onDrag(e.clientX);
+        }}
+        onPointerUp={() => {
+          const p = press.current;
+          press.current = null;
+          if (p?.moved) {
+            dragged.current = true;
+            onDrop();
+          }
+        }}
+        onPointerCancel={() => {
+          if (press.current?.moved) onDrop();
+          press.current = null;
+        }}
+        title={`${column.name} — ${column.type_name}${column.nullable === false ? " NOT NULL" : ""}`}
+        className="flex min-w-0 flex-1 touch-none items-center gap-1 px-2 py-1 text-left hover:bg-surface-3"
+      >
+        <span className="flex min-w-0 flex-col leading-tight">
+          <span className="flex items-center gap-1 truncate text-[length:var(--text-data)] font-medium text-text">
+            {isKey && (
+              <span aria-label="Key column" title="Key column" className="text-accent">
+                ⚿
+              </span>
+            )}
+            {column.name}
+            {/* Only "exact" gets a mark. An approximate column is the ordinary
               case and badging every one of them would be noise; the panel
               names them when it matters. */}
-          {precision === "exact" && (
-            <span
-              aria-label="Exact — carried without rounding"
-              title="Carried as text from the server, digit for digit. Nothing on the path converts this column to a floating-point number."
-              className="text-ok"
-            >
-              ≡
-            </span>
-          )}
-        </span>
-        {/* The type line sits a fixed ratio under the column name, so it stays
+            {precision === "exact" && (
+              <span
+                aria-label="Exact — carried without rounding"
+                title="Carried as text from the server, digit for digit. Nothing on the path converts this column to a floating-point number."
+                className="text-ok"
+              >
+                ≡
+              </span>
+            )}
+          </span>
+          {/* The type line sits a fixed ratio under the column name, so it stays
             legible rather than vanishing as the data size grows. */}
-        <span className="truncate font-mono text-[length:calc(var(--text-data)*0.78)] text-text-muted">
-          {column.type_name}
+          <span className="truncate font-mono text-[length:calc(var(--text-data)*0.78)] text-text-muted">
+            {column.type_name}
+          </span>
         </span>
-      </span>
-      <span className="ml-auto text-[9px] text-text-muted">
-        {sort === "asc" ? "▲" : sort === "desc" ? "▼" : ""}
-      </span>
-    </button>
+        <span className="ml-auto text-[9px] text-text-muted">
+          {sort === "asc" ? "▲" : sort === "desc" ? "▼" : ""}
+        </span>
+      </button>
+      {/* The column's right edge. Dragged, it sets the width; double-clicked,
+          it gives the width back to the measurement. Wider than the line it
+          draws, because a two-pixel target is a target people miss. */}
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label={`Resize ${column.name}`}
+        onPointerDown={(e) => {
+          if (e.button !== 0) return;
+          e.stopPropagation();
+          e.preventDefault();
+          resize.current = { x: e.clientX, width };
+          e.currentTarget.setPointerCapture(e.pointerId);
+        }}
+        onPointerMove={(e) => {
+          const r = resize.current;
+          if (!r) return;
+          onResize(clampWidth(r.width + e.clientX - r.x));
+        }}
+        onPointerUp={() => {
+          if (!resize.current) return;
+          resize.current = null;
+          onResizeEnd();
+        }}
+        onPointerCancel={() => {
+          if (!resize.current) return;
+          resize.current = null;
+          onResizeEnd();
+        }}
+        onDoubleClick={(e) => {
+          e.stopPropagation();
+          onFit();
+        }}
+        className="absolute inset-y-0 -right-1 z-10 w-2 cursor-col-resize touch-none hover:bg-accent/60"
+      />
+    </div>
+  );
+}
+
+/**
+ * Every column, shown or not, with a box beside each.
+ *
+ * The header menu can hide a column but cannot bring one back — there is no
+ * header to right-click once it is gone — so this is the way back, and the
+ * place to hide several at once without opening a menu per column.
+ */
+function ColumnPicker({
+  columns,
+  keys,
+  hidden,
+  onToggle,
+  onShowAll,
+  onClose,
+}: {
+  columns: Column[];
+  keys: string[];
+  hidden: string[];
+  onToggle: (columnIndex: number, shown: boolean) => void;
+  onShowAll: () => void;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [search, setSearch] = useState("");
+
+  useEffect(() => {
+    const closeIfOutside = (e: PointerEvent) => {
+      if (!ref.current?.contains(e.target as Node)) onClose();
+    };
+    const closeOnEscape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("pointerdown", closeIfOutside);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", closeIfOutside);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [onClose]);
+
+  const needle = search.trim().toLowerCase();
+  const shown = columns
+    .map((column, i) => ({ column, i }))
+    .filter(({ column }) => !needle || column.name.toLowerCase().includes(needle));
+
+  return (
+    <div
+      ref={ref}
+      role="dialog"
+      aria-label="Columns"
+      className="absolute top-7 right-2 z-30 flex w-60 flex-col rounded-md border border-border bg-surface-1 shadow-lg"
+    >
+      <div className="flex items-center gap-1 border-b border-border p-1.5">
+        <input
+          autoFocus
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Find a column…"
+          aria-label="Find a column"
+          className="h-5 min-w-0 flex-1 rounded border border-border bg-surface-0 px-1.5 text-[11px] focus:border-accent focus:outline-none"
+        />
+        <button
+          onClick={onShowAll}
+          disabled={hidden.length === 0}
+          className="rounded px-1.5 py-0.5 text-[11px] text-accent hover:bg-accent/15 disabled:opacity-40 disabled:hover:bg-transparent"
+        >
+          Show all
+        </button>
+      </div>
+      <div className="max-h-72 overflow-y-auto p-1.5">
+        {shown.length === 0 ? (
+          <p className="px-1 py-2 text-[11px] text-text-muted">No column matches</p>
+        ) : (
+          shown.map(({ column, i }) => {
+            const key = keys[i] ?? column.name;
+            return (
+              <label
+                key={key}
+                className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 hover:bg-surface-2"
+              >
+                <input
+                  type="checkbox"
+                  checked={!hidden.includes(key)}
+                  onChange={(e) => onToggle(i, e.target.checked)}
+                  className="size-3.5 shrink-0 accent-[var(--color-accent)]"
+                />
+                <span className="truncate font-mono text-[11px] text-text">{column.name}</span>
+                <span className="ml-auto shrink-0 font-mono text-[10px] text-text-muted">
+                  {column.type_name}
+                </span>
+              </label>
+            );
+          })
+        )}
+      </div>
+    </div>
   );
 }
 
 function Cell({
   value,
   width,
+  frozen,
   editable,
   nullable,
   editing,
@@ -1299,6 +1806,11 @@ function Cell({
 }: {
   value: Value;
   width: number;
+  /**
+   * Where to stay while the row scrolls, with the row's tint to paint on the
+   * ground this cell has to supply for itself.
+   */
+  frozen?: (Frozen & { tint: string }) | undefined;
   editable: boolean;
   /** Whether the column accepts NULL, so the boolean list can offer it. */
   nullable: boolean;
@@ -1312,6 +1824,20 @@ function Cell({
   onCommitValue: (next: Value) => void;
   onContextMenu: (e: React.MouseEvent) => void;
 }) {
+  // A frozen cell needs a ground of its own — otherwise the cells scrolling
+  // under it show through — and then the row's tint over that ground, so it
+  // reads as part of the row it is in. The tint is a pseudo-element behind
+  // the text rather than a second background, because one element has one.
+  const stay = frozen
+    ? cx(
+        "sticky isolate z-[5] bg-surface-0",
+        "before:pointer-events-none before:absolute before:inset-0 before:-z-10 before:content-['']",
+        frozen.tint,
+        frozen.last && "border-r-2",
+      )
+    : undefined;
+  const place = { width, left: frozen?.left };
+
   if (editing) {
     const kind = editorFor(value);
 
@@ -1320,8 +1846,11 @@ function Cell({
     if (kind === "json" || kind === "text") {
       return (
         <div
-          style={{ width }}
-          className="shrink-0 truncate border border-accent px-2 font-mono text-[length:var(--text-data)] leading-[var(--row-height)]"
+          style={place}
+          className={cx(
+            "shrink-0 truncate border border-accent px-2 font-mono text-[length:var(--text-data)] leading-[var(--row-height)]",
+            stay,
+          )}
         >
           {formatValue(value)}
         </div>
@@ -1329,7 +1858,7 @@ function Cell({
     }
 
     return (
-      <div style={{ width }} className="shrink-0 border-r border-border p-0">
+      <div style={place} className={cx("shrink-0 border-r border-border p-0", stay)}>
         {kind === "bool" ? (
           <BoolEditor
             value={value}
@@ -1353,7 +1882,7 @@ function Cell({
 
   return (
     <div
-      style={{ width }}
+      style={place}
       onDoubleClick={editable || value.kind === "bytes" ? onBegin : undefined}
       onContextMenu={onContextMenu}
       className={cx(
@@ -1362,6 +1891,7 @@ function Cell({
         isNumeric(value) && "text-right",
         cellClass(value),
         editable && "cursor-text",
+        stay,
       )}
       title={value.kind === "bytes" ? undefined : formatValue(value)}
     >

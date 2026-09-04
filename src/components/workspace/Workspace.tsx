@@ -36,6 +36,7 @@ import { Dialog } from "../ui/Dialog";
 import type { MenuItem } from "../ui/ContextMenu";
 import { ipc, IpcError } from "@/lib/ipc";
 import { hasOrderBy } from "@/lib/paging";
+import { layoutKeyFor } from "@/lib/columns";
 import { readOnlyExplanation } from "@/lib/guarantees";
 import { drop, selectFrom, truncate } from "@/lib/statements";
 import { keyTypeFor } from "@/lib/design";
@@ -1475,6 +1476,7 @@ export function Workspace({
                          same key names what the grid remembers -- see `gridKey`. */
                       key={gridKey ?? undefined}
                       memoryKey={gridKey ?? undefined}
+                      layoutKey={layoutKeyFor(connection.id, tab, active)}
                       result={active}
                       onEdit={(row, col, next) => applyEdit(connection.id, tab.id, row, col, next)}
                       paging={{

@@ -16,6 +16,7 @@ import { Workspace } from "./components/workspace/Workspace";
 import { Banner, Button, Spinner, cx } from "./components/ui/primitives";
 import { useConnections } from "./store/connections";
 import { useSettings } from "./store/settings";
+import { useLayouts } from "./store/layouts";
 import { useUpdates } from "./store/updates";
 import { useCommands } from "./store/commands";
 import { useWorkspace } from "./store/workspace";
@@ -88,6 +89,7 @@ export default function App() {
   const [designsOpen, setDesignsOpen] = useState(false);
 
   const initSettings = useSettings((s) => s.init);
+  const initLayouts = useLayouts((s) => s.init);
   const settingsReady = useSettings((s) => s.ready);
   const checkForUpdates = useSettings((s) => s.checkForUpdates);
   const checkUpdate = useUpdates((s) => s.check);
@@ -164,7 +166,11 @@ export default function App() {
     // Appearance is loaded alongside the connections rather than after them:
     // it decides what the first paint looks like.
     void initSettings();
-  }, [init, initSettings]);
+    // Column layouts can follow: nothing draws a grid before a connection is
+    // open, and a layout that arrives a frame after the first one is applied
+    // to it then.
+    void initLayouts();
+  }, [init, initSettings, initLayouts]);
 
   // After the settings have loaded, so a user who turned this off is not asked
   // once more on every launch before the file is read. The store itself decides
