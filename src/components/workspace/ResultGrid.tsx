@@ -7,7 +7,7 @@
  * horizontal virtualization breaks native column-drag selection.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   cellClass,
@@ -80,6 +80,51 @@ interface Sort {
   direction: SortDirection;
 }
 
+/**
+ * What a grid remembers about a result while it is off screen.
+ *
+ * Only the active tab has a grid, so switching tabs unmounts it, and a fresh
+ * mount starts at the top with nothing sorted or filtered. Coming back to find
+ * the rows you had scrolled to gone from under you makes switching tabs cost
+ * more than it should. What is kept is display state — where you were and how
+ * you had arranged the rows — not the rows themselves, which the tab holds.
+ */
+interface GridMemory {
+  sort: Sort | null;
+  filter: string;
+  columnFilters: Record<number, string>;
+  scrollTop: number;
+  scrollLeft: number;
+}
+
+/** Remembered grids, keyed by the caller's `memoryKey`, oldest first. */
+const memories = new Map<string, GridMemory>();
+
+/**
+ * Bounded so a long session does not accumulate a memory for every result it
+ * ever showed. Closed tabs are not told apart from open ones — the key is
+ * opaque here — so the oldest go first, which is close enough.
+ */
+const MEMORY_LIMIT = 200;
+
+function remember(key: string, changes: Partial<GridMemory>) {
+  const was: GridMemory = memories.get(key) ?? {
+    sort: null,
+    filter: "",
+    columnFilters: {},
+    scrollTop: 0,
+    scrollLeft: 0,
+  };
+  // Re-inserting moves the key to the end, which is what keeps the eviction
+  // order meaningful: what was touched last is what is wanted next.
+  memories.delete(key);
+  memories.set(key, { ...was, ...changes });
+  if (memories.size > MEMORY_LIMIT) {
+    const oldest = memories.keys().next().value;
+    if (oldest !== undefined) memories.delete(oldest);
+  }
+}
+
 /** Compare two values for sorting, keeping NULLs together at the end. */
 function compareValues(a: Value, b: Value): number {
   if (a.kind === "null" && b.kind === "null") return 0;
@@ -95,6 +140,7 @@ function compareValues(a: Value, b: Value): number {
 
 export function ResultGrid({
   result,
+  memoryKey,
   onEdit,
   paging,
   onExportRows,
@@ -105,6 +151,12 @@ export function ResultGrid({
   onDuplicateRow,
 }: {
   result: ResultSet;
+  /**
+   * What to remember this grid's display state under while it is unmounted,
+   * and to restore it from when a grid with the same key mounts again. Absent
+   * where there is nothing to come back to.
+   */
+  memoryKey?: string | undefined;
   onEdit: (rowIndex: number, columnIndex: number, next: Value) => Promise<void>;
   /** Page controls, absent for results that are not a page of anything. */
   paging?: PagingProps | undefined;
@@ -150,10 +202,30 @@ export function ResultGrid({
   const detailsOpen = useSettings((s) => s.rowDetails);
   const setDetailsOpen = useSettings((s) => s.setRowDetails);
   const rowHeight = rowHeightFor(fontSize);
-  const [sort, setSort] = useState<Sort | null>(null);
-  const [filter, setFilter] = useState("");
+  // Read once, on mount: this is the state the grid had when it was last
+  // unmounted, and everything after is this instance's own.
+  const remembered = useRef(memoryKey ? memories.get(memoryKey) : undefined);
+  const [sort, setSort] = useState<Sort | null>(remembered.current?.sort ?? null);
+  const [filter, setFilter] = useState(remembered.current?.filter ?? "");
   /** Per-column expressions, keyed by column index. */
-  const [columnFilters, setColumnFilters] = useState<Record<number, string>>({});
+  const [columnFilters, setColumnFilters] = useState<Record<number, string>>(
+    remembered.current?.columnFilters ?? {},
+  );
+
+  useEffect(() => {
+    if (memoryKey) remember(memoryKey, { sort, filter, columnFilters });
+  }, [memoryKey, sort, filter, columnFilters]);
+
+  // Before paint, so the rows do not flash at the top and then jump. The
+  // virtualizer is told the same offset below, so it draws the right rows on
+  // the first frame rather than the top ones and then correcting.
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    const was = remembered.current;
+    if (!el || !was) return;
+    el.scrollTop = was.scrollTop;
+    el.scrollLeft = was.scrollLeft;
+  }, []);
   const [editing, setEditing] = useState<{ row: number; col: number } | null>(null);
   /** A binary cell open for reading. Viewing is not editing. */
   const [viewing, setViewing] = useState<{ row: number; col: number } | null>(null);
@@ -272,6 +344,7 @@ export function ResultGrid({
     getScrollElement: () => scroller.current,
     estimateSize: () => rowHeight,
     overscan: 12,
+    initialOffset: remembered.current?.scrollTop ?? 0,
   });
 
   // The virtualizer caches measurements, so a size change has to invalidate
@@ -653,7 +726,20 @@ export function ResultGrid({
       )}
 
       <div className="flex min-h-0 flex-1">
-        <div ref={scroller} className="min-h-0 flex-1 overflow-auto">
+        <div
+          ref={scroller}
+          className="min-h-0 flex-1 overflow-auto"
+          onScroll={(e) => {
+            // A map write per scroll event, not a render: nothing subscribes
+            // to the memory, it is only read by the next mount.
+            if (memoryKey) {
+              remember(memoryKey, {
+                scrollTop: e.currentTarget.scrollTop,
+                scrollLeft: e.currentTarget.scrollLeft,
+              });
+            }
+          }}
+        >
           <div style={{ width: totalWidth, minWidth: "100%" }}>
             {/* Header stays put while the body scrolls under it. */}
             <div className="sticky top-0 z-10 flex border-b border-border bg-surface-2">

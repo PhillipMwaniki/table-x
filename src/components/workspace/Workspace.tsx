@@ -915,6 +915,23 @@ export function Workspace({
 
   const active = tab?.outcome?.statements[tab.activeStatement];
 
+  /*
+   * Sorting, the row filter, the per-column filters and the scroll position are
+   * display state, so they live in the grid rather than on the tab -- see the
+   * note on `Tab.offset`. Only the active tab has a grid, so switching away
+   * unmounts it; this key is what the grid remembers that state under, and
+   * what brings it back when the tab is returned to.
+   *
+   * The column names are in the key because the filters are keyed by column
+   * index. Re-running the same query keeps your filter, which is what you want;
+   * running a different one drops it, rather than applying "> 100" to whatever
+   * now occupies column three.
+   */
+  const gridKey =
+    tab && active?.type === "rows"
+      ? `${tab.id}:${tab.activeStatement}:${active.columns.map((c) => c.name).join("\0")}`
+      : null;
+
   // Ctrl+Shift+F formats, matching every editor people arrive from. Bound on
   // the window so it works with the caret in the editor, where it is used.
   useEffect(() => {
@@ -1423,19 +1440,12 @@ export function Workspace({
                     </div>
                   ) : active?.type === "rows" ? (
                     <ResultGrid
-                      /* Sorting, the row filter and the per-column filters are
-                         display state, so they live in the grid rather than on
-                         the tab -- see the note on `Tab.offset`. That only holds
-                         while each result has a grid of its own: without a key,
-                         React reuses one instance across tab switches and the
-                         filter you typed follows you to the next tab.
-
-                         The column names are in the key because the filters are
-                         keyed by column index. Re-running the same query keeps
-                         your filter, which is what you want; running a different
-                         one drops it, rather than applying "> 100" to whatever
-                         now occupies column three. */
-                      key={`${tab.id}:${tab.activeStatement}:${active.columns.map((c) => c.name).join(" ")}`}
+                      /* Keyed so each result has a grid of its own: without a
+                         key, React reuses one instance across tab switches and
+                         the filter you typed follows you to the next tab. The
+                         same key names what the grid remembers -- see `gridKey`. */
+                      key={gridKey ?? undefined}
+                      memoryKey={gridKey ?? undefined}
                       result={active}
                       onEdit={(row, col, next) => applyEdit(connection.id, tab.id, row, col, next)}
                       paging={{
