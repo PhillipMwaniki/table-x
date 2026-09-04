@@ -73,6 +73,26 @@ export interface QueryError {
 export type TabKind =
   "query" | "table" | "activity" | "diagram" | "diff" | "privileges" | "notebook" | "design";
 
+/** A result a tab has kept from an earlier run. */
+export interface KeptResult {
+  id: string;
+  /** The statement that produced it, so the tab can say what it is. */
+  sql: string;
+  /** When it came back, in milliseconds since the epoch. */
+  at: number;
+  outcome: QueryOutcome;
+  activeStatement: number;
+}
+
+/**
+ * How many results a tab keeps.
+ *
+ * A comparison is between two or three things; past that the strip of tabs is
+ * a history, and the query history panel is the history. The oldest goes
+ * first.
+ */
+export const KEEP_LIMIT = 6;
+
 export interface Tab {
   id: string;
   kind: TabKind;
@@ -131,6 +151,18 @@ export interface Tab {
   progress?: { done: number; total: number } | null;
   /** Index of the statement whose results are shown. */
   activeStatement: number;
+  /**
+   * Earlier results this tab is holding on to.
+   *
+   * A run replaces the result before it, which is right until the two are
+   * what you wanted to compare. Keeping one takes a copy that the next run
+   * leaves alone. Session-only, for the reason results are not saved at all:
+   * a kept result is a claim about the database at one moment, and it says
+   * which moment on its tab.
+   */
+  kept?: KeptResult[];
+  /** The kept result being looked at, or null for the latest one. */
+  viewing?: string | null;
   /**
    * Rows skipped by the last fetch — the page this tab is showing.
    *
@@ -325,6 +357,12 @@ interface WorkspaceState {
   goToPage: (connectionId: string, tabId: string, offset: number) => Promise<void>;
   /** Set a table tab's WHERE and ORDER BY and fetch its first page again. */
   setClauses: (connectionId: string, tabId: string, clauses: Clauses) => Promise<void>;
+  /** Copy the tab's current result somewhere the next run will not replace it. */
+  keepResult: (connectionId: string, tabId: string) => void;
+  /** Look at a kept result, or at the latest one with `null`. */
+  viewKept: (connectionId: string, tabId: string, keptId: string | null) => void;
+  discardKept: (connectionId: string, tabId: string, keptId: string) => void;
+  setKeptStatement: (connectionId: string, tabId: string, keptId: string, index: number) => void;
 
   loadSession: (connectionId: string) => Promise<void>;
   /**
@@ -854,6 +892,48 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     await get().run(id, tabId);
   },
 
+  keepResult: (id, tabId) => {
+    const tab = tabsOf(get(), id).find((t) => t.id === tabId);
+    if (!tab?.outcome) return;
+    const kept: KeptResult = {
+      id: nextId(),
+      sql: tableStatement(tab),
+      at: Date.now(),
+      outcome: tab.outcome,
+      activeStatement: tab.activeStatement,
+    };
+    // Newest first, so the strip reads from the most recent backwards, and
+    // the oldest is the one that falls off the end.
+    const list = [kept, ...(tab.kept ?? [])].slice(0, KEEP_LIMIT);
+    set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { kept: list }) }));
+  },
+
+  viewKept: (id, tabId, keptId) =>
+    set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { viewing: keptId }) })),
+
+  discardKept: (id, tabId, keptId) => {
+    const tab = tabsOf(get(), id).find((t) => t.id === tabId);
+    if (!tab) return;
+    const kept = (tab.kept ?? []).filter((k) => k.id !== keptId);
+    set((s) => ({
+      tabs: patchTab(s.tabs, id, tabId, {
+        kept,
+        // Discarding the one being looked at goes back to the latest rather
+        // than to an empty pane.
+        viewing: tab.viewing === keptId ? null : (tab.viewing ?? null),
+      }),
+    }));
+  },
+
+  setKeptStatement: (id, tabId, keptId, index) => {
+    const tab = tabsOf(get(), id).find((t) => t.id === tabId);
+    if (!tab) return;
+    const kept = (tab.kept ?? []).map((k) =>
+      k.id === keptId ? { ...k, activeStatement: index } : k,
+    );
+    set((s) => ({ tabs: patchTab(s.tabs, id, tabId, { kept }) }));
+  },
+
   setClauses: async (id, tabId, clauses) => {
     // Back to the first page, as with any change to the statement: the offset
     // counted rows of a query that no longer exists.
@@ -949,6 +1029,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
           running: false,
           progress: null,
           activeStatement: 0,
+          // A run is asked for to be looked at; a kept result stays kept.
+          viewing: null,
           offset,
           limit,
           // A new result invalidates the edit history: the undo statements

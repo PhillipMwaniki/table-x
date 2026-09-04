@@ -30,6 +30,15 @@ export function BrowseBar({
 }) {
   const [draftWhere, setDraftWhere] = useState(where);
   const [draftOrder, setDraftOrder] = useState(orderBy);
+  // The clauses in force can change from outside the boxes — the paging
+  // bar's "order by the key" fills ORDER BY — and the drafts follow, or the
+  // box would show one thing while the rows were fetched with another.
+  const [seen, setSeen] = useState({ where, orderBy });
+  if (seen.where !== where || seen.orderBy !== orderBy) {
+    setSeen({ where, orderBy });
+    setDraftWhere(where);
+    setDraftOrder(orderBy);
+  }
   const dirty = draftWhere !== where || draftOrder !== orderBy;
 
   const apply = () => onApply({ where: draftWhere, orderBy: draftOrder });
@@ -52,7 +61,10 @@ export function BrowseBar({
         onChange={setDraftWhere}
         onEnter={apply}
         onEscape={revert}
-        onClear={() => onApply({ where: "", orderBy: draftOrder })}
+        onClear={() => {
+          setDraftWhere("");
+          onApply({ where: "", orderBy: draftOrder });
+        }}
       />
       <Clause
         keyword="ORDER BY"
@@ -62,7 +74,10 @@ export function BrowseBar({
         onChange={setDraftOrder}
         onEnter={apply}
         onEscape={revert}
-        onClear={() => onApply({ where: draftWhere, orderBy: "" })}
+        onClear={() => {
+          setDraftOrder("");
+          onApply({ where: draftWhere, orderBy: "" });
+        }}
       />
       {/* Present only while there is something to apply, so the bar at rest
           has no button that does nothing. */}

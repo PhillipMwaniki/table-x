@@ -51,6 +51,7 @@ import { useSettings } from "@/store/settings";
 import { useConnections } from "@/store/connections";
 import { useExports } from "@/store/exports";
 import { useWorkspace } from "@/store/workspace";
+import type { KeptResult } from "@/store/workspace";
 import type {
   ColumnDef,
   ConnectionConfig,
@@ -59,6 +60,7 @@ import type {
   ExportFormat,
   HazardItem,
   NodeKind,
+  QueryOutcome,
   Value,
   SchemaNode,
   StatementResult,
@@ -117,6 +119,10 @@ export function Workspace({
     applyEdit,
     goToPage,
     setClauses,
+    keepResult,
+    viewKept,
+    discardKept,
+    setKeptStatement,
     cancelQuery,
     beginTransaction,
     endTransaction,
@@ -921,7 +927,22 @@ export function Workspace({
     }
   };
 
-  const active = tab?.outcome?.statements[tab.activeStatement];
+  /**
+   * What the result pane shows: a kept result when one is being looked at,
+   * otherwise the latest. A kept result is read-only by construction — it is a
+   * copy of the rows as they were, and an edit made against it would be
+   * matched on values the table may no longer hold.
+   */
+  const shown = tab?.viewing ? (tab.kept?.find((k) => k.id === tab.viewing) ?? null) : null;
+  const outcome = shown?.outcome ?? tab?.outcome ?? null;
+  const statementIndex = shown ? shown.activeStatement : (tab?.activeStatement ?? 0);
+  const active = outcome?.statements[statementIndex];
+
+  /** Run into a new result: keep the one on screen, then run as usual. */
+  const runKeeping = (tabId: string, sqlOverride?: string) => {
+    keepResult(connection.id, tabId);
+    void runGuarded(tabId, sqlOverride);
+  };
 
   /*
    * Sorting, the row filter, the per-column filters and the scroll position are
@@ -937,7 +958,7 @@ export function Workspace({
    */
   const gridKey =
     tab && active?.type === "rows"
-      ? `${tab.id}:${tab.activeStatement}:${active.columns.map((c) => c.name).join("\0")}`
+      ? `${tab.id}:${shown?.id ?? "latest"}:${statementIndex}:${active.columns.map((c) => c.name).join("\0")}`
       : null;
 
   // Ctrl+Shift+F formats, matching every editor people arrive from. Bound on
@@ -963,6 +984,19 @@ export function Workspace({
         group: "Query",
         shortcut: "Ctrl+Enter",
         run: () => void runGuarded(tab.id),
+      },
+      {
+        id: "ws.run-keep",
+        title: "Run into a new result",
+        group: "Query",
+        shortcut: "Ctrl+Shift+Enter",
+        run: () => runKeeping(tab.id),
+      },
+      {
+        id: "ws.keep",
+        title: "Keep this result",
+        group: "Query",
+        run: () => keepResult(connection.id, tab.id),
       },
       {
         id: "ws.format",
@@ -1290,6 +1324,15 @@ export function Workspace({
                   </Button>
                   <Button
                     variant="ghost"
+                    className="h-6"
+                    disabled={!tab.outcome}
+                    onClick={() => keepResult(connection.id, tab.id)}
+                    title="Keep this result so the next run does not replace it. Ctrl+Shift+Enter keeps and runs in one step."
+                  >
+                    Keep result
+                  </Button>
+                  <Button
+                    variant="ghost"
                     className={cx("h-6", historyOpen && "bg-surface-3 text-text")}
                     onClick={() => setHistoryOpen(!historyOpen)}
                     aria-pressed={historyOpen}
@@ -1386,6 +1429,7 @@ export function Workspace({
                         value={tab.sql}
                         onChange={(sql) => setSql(connection.id, tab.id, sql)}
                         onRun={(text) => void runGuarded(tab.id, text)}
+                        onRunKeep={(text) => runKeeping(tab.id, text)}
                         driver={connection.driver}
                         completion={completion}
                         errorPosition={tab.error?.position}
@@ -1472,20 +1516,51 @@ export function Workspace({
                     </p>
                   )}
 
-                  {tab.outcome && tab.outcome.statements.length > 1 && (
+                  {tab.kept && tab.kept.length > 0 && (
+                    <KeptTabs
+                      kept={tab.kept}
+                      viewing={tab.viewing ?? null}
+                      latest={tab.outcome}
+                      onSelect={(id) => viewKept(connection.id, tab.id, id)}
+                      onDiscard={(id) => discardKept(connection.id, tab.id, id)}
+                    />
+                  )}
+
+                  {outcome && outcome.statements.length > 1 && (
                     <StatementTabs
-                      statements={tab.outcome.statements}
-                      active={tab.activeStatement}
-                      onSelect={(i) => setActiveStatement(connection.id, tab.id, i)}
+                      statements={outcome.statements}
+                      active={statementIndex}
+                      onSelect={(i) =>
+                        shown
+                          ? setKeptStatement(connection.id, tab.id, shown.id, i)
+                          : setActiveStatement(connection.id, tab.id, i)
+                      }
                     />
                   )}
 
                   {tab.plan ? (
                     <PlanView plan={tab.plan} onClose={() => clearPlan(connection.id, tab.id)} />
-                  ) : tab.running && !tab.outcome ? (
+                  ) : tab.running && !outcome ? (
                     <div className="flex flex-1 items-center justify-center">
                       <Spinner className="text-text-muted" />
                     </div>
+                  ) : active?.type === "rows" && shown ? (
+                    <ResultGrid
+                      key={gridKey ?? undefined}
+                      memoryKey={gridKey ?? undefined}
+                      layoutKey={layoutKeyFor(connection.id, tab, active)}
+                      // The copy, marked read-only however the run came back:
+                      // its rows are what the table held at the time, and
+                      // there is no undo path for a change made against them.
+                      result={{ ...active, editable: false }}
+                      onEdit={() => Promise.resolve()}
+                      onExportRows={(rows) => setExporting(rows)}
+                      onCopyRows={(request) => void copyRows(request)}
+                      readOnlyDetail={{
+                        reason: `This is a result kept at ${timeOf(shown.at)}.`,
+                        remedy: "Look at the latest result to edit, or run again.",
+                      }}
+                    />
                   ) : active?.type === "rows" ? (
                     <ResultGrid
                       /* Keyed so each result has a grid of its own: without a
@@ -1561,13 +1636,14 @@ export function Workspace({
                     </div>
                   )}
 
-                  {tab.outcome && (
+                  {outcome && (
                     <div className="flex h-5 shrink-0 items-center gap-3 border-t border-border bg-surface-1 px-2 text-[10.5px] text-text-muted">
-                      <span>{tab.outcome.elapsed_ms} ms</span>
-                      {tab.outcome.statements.length > 1 && (
-                        <span>{tab.outcome.statements.length} statements</span>
+                      {shown && <span className="text-accent">Kept {timeOf(shown.at)}</span>}
+                      <span>{outcome.elapsed_ms} ms</span>
+                      {outcome.statements.length > 1 && (
+                        <span>{outcome.statements.length} statements</span>
                       )}
-                      {tab.outcome.notices.map((n, i) => (
+                      {outcome.notices.map((n, i) => (
                         <span key={i} className="truncate text-warn">
                           {n}
                         </span>
@@ -2003,6 +2079,90 @@ function TransactionControls({
         Roll back
       </Button>
     </span>
+  );
+}
+
+/** A clock time, to the second, the way a result's tab labels itself. */
+function timeOf(at: number): string {
+  return new Date(at).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+/** What a result's tab says about it, in the space a tab has. */
+function describeOutcome(outcome: QueryOutcome): string {
+  const first = outcome.statements[0];
+  if (!first) return "no result";
+  const more = outcome.statements.length > 1 ? ` +${outcome.statements.length - 1}` : "";
+  if (first.type === "rows") {
+    return `${first.rows.length}${first.truncated ? "+" : ""} rows${more}`;
+  }
+  return `${first.rows_affected} affected${more}`;
+}
+
+/**
+ * The results a tab is holding, with the latest first.
+ *
+ * Each kept one is labelled with the time it came back, because that is the
+ * thing that makes it different from the latest: the same statement, an
+ * earlier moment. The latest has no time, since it is the one that is current.
+ */
+function KeptTabs({
+  kept,
+  viewing,
+  latest,
+  onSelect,
+  onDiscard,
+}: {
+  kept: KeptResult[];
+  viewing: string | null;
+  latest: QueryOutcome | null;
+  onSelect: (id: string | null) => void;
+  onDiscard: (id: string) => void;
+}) {
+  const tabClass = (current: boolean) =>
+    cx(
+      "flex shrink-0 items-center gap-1 rounded px-2 py-0.5 text-[10.5px] whitespace-nowrap",
+      current ? "bg-surface-3 text-text" : "text-text-muted hover:bg-surface-2",
+    );
+  return (
+    <div
+      role="tablist"
+      aria-label="Results"
+      className="flex h-6 shrink-0 items-center gap-px overflow-x-auto border-b border-border bg-surface-1 px-1"
+    >
+      <button
+        role="tab"
+        aria-selected={viewing === null}
+        onClick={() => onSelect(null)}
+        className={tabClass(viewing === null)}
+        title="The result of the last run"
+      >
+        Latest{latest ? ` · ${describeOutcome(latest)}` : ""}
+      </button>
+      {kept.map((k) => (
+        <span key={k.id} className={tabClass(viewing === k.id)}>
+          <button
+            role="tab"
+            aria-selected={viewing === k.id}
+            onClick={() => onSelect(k.id)}
+            title={k.sql}
+          >
+            {timeOf(k.at)} · {describeOutcome(k.outcome)}
+          </button>
+          <button
+            onClick={() => onDiscard(k.id)}
+            className="rounded px-0.5 text-text-muted/60 hover:text-text"
+            title="Let this result go"
+            aria-label={`Discard the result kept at ${timeOf(k.at)}`}
+          >
+            ✕
+          </button>
+        </span>
+      ))}
+    </div>
   );
 }
 

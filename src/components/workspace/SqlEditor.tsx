@@ -176,6 +176,7 @@ export function SqlEditor({
   value,
   onChange,
   onRun,
+  onRunKeep,
   driver,
   completion,
   errorPosition,
@@ -183,6 +184,8 @@ export function SqlEditor({
   value: string;
   onChange: (sql: string) => void;
   onRun: (selectionOrAll: string) => void;
+  /** Run into a new result, keeping the one on screen. Falls back to `onRun`. */
+  onRunKeep?: ((selectionOrAll: string) => void) | undefined;
   driver: string;
   completion: CompletionScope | null;
   /** 1-based offset reported by the database, underlined in the editor. */
@@ -204,10 +207,10 @@ export function SqlEditor({
   // would then describe a render that never committed. An effect runs only for
   // the ones that did — and it runs before any keystroke can reach the keymap,
   // which is the only thing that reads this.
-  const handlers = useRef({ onChange, onRun });
+  const handlers = useRef({ onChange, onRun, onRunKeep });
   useEffect(() => {
-    handlers.current = { onChange, onRun };
-  }, [onChange, onRun]);
+    handlers.current = { onChange, onRun, onRunKeep };
+  }, [onChange, onRun, onRunKeep]);
 
   useEffect(() => {
     if (!host.current || view.current) return;
@@ -218,6 +221,12 @@ export function SqlEditor({
       const { from, to } = v.state.selection.main;
       const text = from === to ? v.state.doc.toString() : v.state.sliceDoc(from, to);
       handlers.current.onRun(text);
+      return true;
+    };
+    const runKeepCommand = (v: EditorView) => {
+      const { from, to } = v.state.selection.main;
+      const text = from === to ? v.state.doc.toString() : v.state.sliceDoc(from, to);
+      (handlers.current.onRunKeep ?? handlers.current.onRun)(text);
       return true;
     };
 
@@ -235,6 +244,9 @@ export function SqlEditor({
           // autocomplete or newline handlers.
           { key: "Mod-Enter", run: runCommand, preventDefault: true },
           { key: "Shift-Enter", run: runCommand, preventDefault: true },
+          // Ctrl+Shift+Enter keeps the result on screen and runs into a new
+          // one, so the two can be compared.
+          { key: "Mod-Shift-Enter", run: runKeepCommand, preventDefault: true },
           ...closeBracketsKeymap,
           ...completionKeymap,
           ...searchKeymap,
