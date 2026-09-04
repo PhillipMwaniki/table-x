@@ -6,11 +6,13 @@
  * catalog on connect would stall the UI for something the user may never open.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ipc } from "@/lib/ipc";
 import { Spinner, cx } from "../ui/primitives";
 import { matchesName, splitHighlight } from "@/lib/tree";
 import { useWorkspace } from "@/store/workspace";
+import { useCommands } from "@/store/commands";
+import type { Command } from "@/store/commands";
 import { noteLinkFailure } from "@/store/connections";
 import type { NodeKind, SchemaNode } from "@/lib/types";
 
@@ -114,6 +116,59 @@ export function SchemaTree({
     loading: new Set(),
     failed: {},
   });
+
+  /**
+   * Every loaded object, offered to the palette by name.
+   *
+   * The tree is where objects are found by browsing; the palette is where
+   * they are found by typing, and a catalog of three hundred tables needs the
+   * second as much as the first. Only what has been loaded: the palette can
+   * offer what the tree knows, and it does not go to the server to know more.
+   *
+   * The handlers live in a ref so this re-registers when the tree changes,
+   * not on every render of the workspace that passes fresh closures down.
+   */
+  const registerCommands = useCommands((s) => s.register);
+  const handlers = useRef({ onOpenTable, onOpenScript });
+  useEffect(() => {
+    handlers.current = { onOpenTable, onOpenScript };
+  }, [onOpenTable, onOpenScript]);
+  useEffect(() => {
+    if (!roots) return;
+    const commands: Command[] = [];
+    const walk = (nodes: SchemaNode[], context: NodeContext) => {
+      for (const node of nodes) {
+        const opens =
+          node.kind === "table" || node.kind === "view" || node.kind === "materialized_view";
+        const scripted =
+          node.kind === "function" || node.kind === "procedure" || node.kind === "trigger";
+        if (opens || scripted) {
+          // Where it lives, in the order it is addressed: the schema when
+          // there is one, the database when the server has several.
+          const where = [context.database, context.schema].filter(Boolean).join(" · ");
+          const kind = node.kind.replace("_", " ");
+          commands.push({
+            id: `open:${connectionId}:${node.id}`,
+            title: node.name,
+            group: where ? `${kind} · ${where}` : kind,
+            run: () =>
+              opens
+                ? handlers.current.onOpenTable({ ...node, ...context })
+                : handlers.current.onOpenScript({ ...node, ...context }),
+          });
+        }
+        const children = tree.children[node.id];
+        if (children) {
+          walk(children, {
+            database: node.kind === "database" ? node.name : context.database,
+            schema: node.kind === "schema" ? node.name : context.schema,
+          });
+        }
+      }
+    };
+    walk(roots, {});
+    return registerCommands(`tree:${connectionId}`, commands);
+  }, [registerCommands, connectionId, roots, tree.children]);
 
   useEffect(() => {
     let cancelled = false;

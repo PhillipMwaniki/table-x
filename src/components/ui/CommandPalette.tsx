@@ -1,5 +1,7 @@
 /**
- * Ctrl+K over every action the app can do right now.
+ * Ctrl+K over every action the app can do right now, and every object the
+ * tree has loaded, so a table is as reachable by typing its name as an action
+ * is by typing its verb.
  *
  * Also where the keyboard shortcuts live: each command shows its own, so the
  * palette doubles as the reference nobody would otherwise go looking for.
@@ -9,6 +11,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { cx } from "./primitives";
 import { fuzzyFilter } from "@/lib/fuzzy";
 import { useCommands } from "@/store/commands";
+
+/** Rows the palette shows at most. */
+const MAX_SHOWN = 80;
 
 export function CommandPalette() {
   const open = useCommands((s) => s.open);
@@ -20,7 +25,13 @@ export function CommandPalette() {
   const listRef = useRef<HTMLUListElement>(null);
 
   const commands = useMemo(() => Object.values(sources).flat(), [sources]);
-  const matches = useMemo(() => fuzzyFilter(query, commands, (c) => c.title), [query, commands]);
+  // Capped because the loaded objects of a large catalog are in here too, and
+  // a list of two thousand tables is not a list anybody reads down; a few
+  // more characters narrow it faster than scrolling would.
+  const matches = useMemo(
+    () => fuzzyFilter(query, commands, (c) => c.title).slice(0, MAX_SHOWN),
+    [query, commands],
+  );
 
   // Every keystroke changes the list, so the highlight returns to the top —
   // otherwise Enter runs whatever happens to be at the old index.
@@ -80,7 +91,7 @@ export function CommandPalette() {
               setOpen(false);
             }
           }}
-          placeholder="Type a command…"
+          placeholder="Type a command, a table, or a saved query…"
           aria-label="Search commands"
           className="h-11 w-full shrink-0 border-b border-border bg-transparent px-3 text-[13px] text-text outline-none placeholder:text-text-muted/60"
         />
