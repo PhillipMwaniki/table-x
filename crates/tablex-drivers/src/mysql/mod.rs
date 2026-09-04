@@ -1180,7 +1180,10 @@ impl MysqlConnection {
                     type_name,
                     nullable: nullable == "YES",
                     default,
-                    auto_increment: extra.contains("auto_increment"),
+                    // Case-folded: the word is lowercase on every MySQL and
+                    // MariaDB seen so far, but a generated key that goes
+                    // unrecognised is copied into every duplicate.
+                    auto_increment: extra.to_ascii_lowercase().contains("auto_increment"),
                     ordinal,
                     comment,
                 },
