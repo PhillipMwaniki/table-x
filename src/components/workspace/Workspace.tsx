@@ -30,6 +30,9 @@ import { StructureView } from "./StructureView";
 import { InsertRowDialog } from "./InsertRowDialog";
 import { CreateTableDialog } from "./CreateTableDialog";
 import { NameDialog } from "./NameDialog";
+import { ParametersDialog } from "./ParametersDialog";
+import { findParameters, substitute } from "@/lib/params";
+import type { Parameter } from "@/lib/params";
 import { DesignView } from "./DesignView";
 import { Button, Spinner, cx } from "../ui/primitives";
 import { ContextMenu } from "../ui/ContextMenu";
@@ -149,6 +152,12 @@ export function Workspace({
   const watchExports = useExports((s) => s.watch);
   const beginExport = useExports((s) => s.begin);
   const endExport = useExports((s) => s.end);
+  /** A submission held back until its placeholders have values. */
+  const [asking, setAsking] = useState<{
+    tabId: string;
+    sql: string;
+    parameters: Parameter[];
+  } | null>(null);
   /** A submission held back until its hazards are confirmed. */
   const [pending, setPending] = useState<{
     tabId: string;
@@ -684,10 +693,28 @@ export function Workspace({
    * anyway: the same scanner backs the read-only guard and the MCP refusal, and
    * a second copy in the frontend would eventually disagree with them.
    */
-  const runGuarded = async (tabId: string, sqlOverride?: string) => {
+  const runGuarded = async (
+    tabId: string,
+    sqlOverride?: string,
+    options: {
+      /** The placeholders have already been filled; do not ask again. */
+      filled?: boolean;
+    } = {},
+  ) => {
     const current = activeTab(connection.id)?.id === tabId ? activeTab(connection.id) : null;
     const sql = sqlOverride ?? current?.sql ?? "";
     if (!sql.trim()) return;
+
+    // A statement with holes in it is asked for its values first. Only what
+    // was typed or pasted: a table tab's statement is this application's own,
+    // and the dialog's own resubmission has been filled already.
+    if (!options.filled && current?.kind !== "table") {
+      const parameters = findParameters(sql, connection.driver);
+      if (parameters.length > 0) {
+        setAsking({ tabId, sql, parameters });
+        return;
+      }
+    }
 
     try {
       const report = await ipc.inspectStatement(connection.id, sql);
@@ -1793,6 +1820,28 @@ export function Workspace({
             ))}
           </div>
         </Dialog>
+      )}
+
+      {asking && (
+        <ParametersDialog
+          // Keyed on the statement so a different query gets a fresh form
+          // rather than the previous one's rows.
+          key={asking.sql}
+          open
+          parameters={asking.parameters}
+          driver={connection.driver}
+          onClose={() => setAsking(null)}
+          onSubmit={(values) => {
+            const held = asking;
+            setAsking(null);
+            const filled = substitute(held.sql, values, connection.driver);
+            if (!filled.ok) {
+              setTabError(connection.id, held.tabId, filled.error);
+              return;
+            }
+            void runGuarded(held.tabId, filled.sql, { filled: true });
+          }}
+        />
       )}
 
       {pending && (
