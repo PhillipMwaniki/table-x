@@ -164,6 +164,14 @@ export interface Tab {
   /** The kept result being looked at, or null for the latest one. */
   viewing?: string | null;
   /**
+   * Kept at the left and out of reach of the close button.
+   *
+   * For the tab you keep coming back to among the ones you open and shut:
+   * pinning is a way of saying which is which, so a "close others" can act on
+   * the rest.
+   */
+  pinned?: boolean;
+  /**
    * Rows skipped by the last fetch — the page this tab is showing.
    *
    * Kept on the tab rather than in the grid because it is a property of the
@@ -316,6 +324,15 @@ interface WorkspaceState {
     name: string,
   ) => void;
   closeTab: (connectionId: string, tabId: string) => void;
+  /** Close every unpinned tab except this one. */
+  closeOtherTabs: (connectionId: string, keepTabId: string) => void;
+  /** Close every unpinned tab to the right of this one. */
+  closeTabsToRight: (connectionId: string, tabId: string) => void;
+  /** Close several tabs at once, moving focus the way a single close does. */
+  closeTabs: (connectionId: string, tabIds: string[]) => void;
+  /** Put a tab immediately before another, or last with `null`. */
+  moveTab: (connectionId: string, tabId: string, beforeTabId: string | null) => void;
+  togglePin: (connectionId: string, tabId: string) => void;
   selectTab: (connectionId: string, tabId: string) => Promise<void>;
 
   setSql: (connectionId: string, tabId: string, sql: string) => void;
@@ -668,6 +685,80 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     }));
   },
 
+  closeOtherTabs: (id, keepTabId) => {
+    const list = tabsOf(get(), id);
+    get().closeTabs(
+      id,
+      list.filter((t) => t.id !== keepTabId && !t.pinned).map((t) => t.id),
+    );
+  },
+
+  closeTabsToRight: (id, tabId) => {
+    const list = tabsOf(get(), id);
+    const from = list.findIndex((t) => t.id === tabId);
+    if (from === -1) return;
+    get().closeTabs(
+      id,
+      list
+        .slice(from + 1)
+        .filter((t) => !t.pinned)
+        .map((t) => t.id),
+    );
+  },
+
+  closeTabs: (id, tabIds) => {
+    if (tabIds.length === 0) return;
+    const closing = new Set(tabIds);
+    const list = tabsOf(get(), id);
+    const remaining = list.filter((t) => !closing.has(t.id));
+    const active = get().active[id] ?? "";
+    // The tab being looked at survives when it can; otherwise the nearest
+    // survivor to its left, as a single close does.
+    let nextActive = active;
+    if (closing.has(active)) {
+      const index = list.findIndex((t) => t.id === active);
+      const left = list
+        .slice(0, index)
+        .reverse()
+        .find((t) => !closing.has(t.id));
+      nextActive = left?.id ?? remaining[0]?.id ?? "";
+    }
+    set((s) => ({
+      tabs: { ...s.tabs, [id]: remaining },
+      active: { ...s.active, [id]: nextActive },
+    }));
+  },
+
+  moveTab: (id, tabId, beforeTabId) => {
+    if (tabId === beforeTabId) return;
+    const list = tabsOf(get(), id);
+    const moving = list.find((t) => t.id === tabId);
+    if (!moving) return;
+    const rest = list.filter((t) => t.id !== tabId);
+    let at = beforeTabId === null ? rest.length : rest.findIndex((t) => t.id === beforeTabId);
+    if (at === -1) return;
+    // Pinned tabs stay at the left as a block. A drop that would break the
+    // block lands at its edge instead: an unpinned tab cannot get in among
+    // the pinned ones, and a pinned one cannot leave them.
+    const pinnedCount = rest.filter((t) => t.pinned).length;
+    at = moving.pinned ? Math.min(at, pinnedCount) : Math.max(at, pinnedCount);
+    rest.splice(at, 0, moving);
+    set((s) => ({ tabs: { ...s.tabs, [id]: rest } }));
+  },
+
+  togglePin: (id, tabId) => {
+    const list = tabsOf(get(), id);
+    const tab = list.find((t) => t.id === tabId);
+    if (!tab) return;
+    const pinned = !tab.pinned;
+    const rest = list.filter((t) => t.id !== tabId);
+    // Pinning joins the end of the pinned block; unpinning joins the front
+    // of the rest, so the tab moves as little as it can.
+    const at = rest.filter((t) => t.pinned).length;
+    rest.splice(at, 0, { ...tab, pinned });
+    set((s) => ({ tabs: { ...s.tabs, [id]: rest } }));
+  },
+
   selectTab: async (id, tabId) => {
     set((s) => ({ active: { ...s.active, [id]: tabId } }));
 
@@ -791,6 +882,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         ...(entry.cells ? { cells: entry.cells } : {}),
         ...(typeof entry.where === "string" ? { where: entry.where } : {}),
         ...(typeof entry.orderBy === "string" ? { orderBy: entry.orderBy } : {}),
+        ...(entry.pinned === true ? { pinned: true } : {}),
         notebookId: entry.notebookId,
       }),
     );

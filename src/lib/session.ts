@@ -35,6 +35,7 @@ export interface SavedTab {
   orderBy?: string | undefined;
   /** Which half of a table tab was showing. */
   view?: "data" | "structure";
+  pinned?: boolean;
   cells?: NotebookCell[];
   notebookId?: string | undefined;
 }
@@ -69,6 +70,7 @@ export function toSaved(tabs: Tab[], activeId: string | undefined): SavedWorkspa
       ...(tab.where ? { where: tab.where } : {}),
       ...(tab.orderBy ? { orderBy: tab.orderBy } : {}),
       ...(tab.view ? { view: tab.view } : {}),
+      ...(tab.pinned ? { pinned: true } : {}),
       ...(tab.cells ? { cells: tab.cells } : {}),
       ...(tab.notebookId !== undefined ? { notebookId: tab.notebookId } : {}),
     })),

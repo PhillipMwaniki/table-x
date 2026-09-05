@@ -87,6 +87,12 @@ describe("toSaved", () => {
     expect(JSON.stringify(toSaved([tab({ kind: "table" })], "tab-1"))).not.toContain("where");
   });
 
+  it("keeps a pin, and writes nothing for a tab without one", () => {
+    const saved = toSaved([tab({ pinned: true }), tab({ id: "tab-2" })], "tab-1");
+    expect(saved.tabs[0]?.pinned).toBe(true);
+    expect("pinned" in (saved.tabs[1] ?? {})).toBe(false);
+  });
+
   it("keeps which side of a table tab was showing", () => {
     const saved = toSaved([tab({ kind: "table", title: "users", view: "structure" })], "tab-1");
     expect(saved.tabs[0]?.view).toBe("structure");
