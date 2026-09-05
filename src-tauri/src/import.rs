@@ -1,4 +1,4 @@
-//! Running a SQL file against a connection.
+//! Running a SQL file, or loading a file's rows, against a connection.
 //!
 //! The file is read in chunks and split into statements as it arrives, so a
 //! multi-gigabyte dump never exists in memory — only the statement currently
@@ -116,69 +116,65 @@ pub async fn run(
 /// without building a statement so large a server rejects it.
 const ROWS_PER_INSERT: usize = 200;
 
-pub struct CsvImportRequest {
+/// Records the sample read for a preview is taken from.
+///
+/// Enough rows for the type guesses to mean something — one decimal in the
+/// hundredth row is what makes a column a number — without reading a file
+/// that may be a gigabyte to show twenty rows.
+const SAMPLE_ROWS: usize = 1_000;
+
+/// Where the rows come from.
+pub enum Source {
+    /// A delimited text file, read a chunk at a time.
+    Csv { delimiter: char },
+    /// One worksheet of a workbook, read whole. `None` is the first sheet.
+    Sheet { name: Option<String> },
+}
+
+/// A column of a table that does not exist yet.
+pub struct NewColumn {
+    pub name: String,
+    /// In the engine's own spelling; see `infer::type_name`.
+    pub type_name: String,
+}
+
+pub struct RowsImportRequest {
     pub id: String,
     pub connection_id: String,
     pub path: String,
-    /// The target table, quoted and qualified by the driver.
-    pub qualified: String,
+    pub source: Source,
     pub schema: Option<String>,
     pub table: String,
-    pub delimiter: char,
+    /// The target table, quoted and qualified by the driver. Ignored when the
+    /// table is being created: the name is built here, from the same rule.
+    pub qualified: String,
     /// Whether the first record names the columns rather than holding data.
     pub has_header: bool,
     /// Target column for each field position. `None` skips that field.
     pub mapping: Vec<Option<String>>,
     /// Whether an empty field means NULL rather than an empty string.
     pub null_as_empty: bool,
+    /// Create the table first, with these columns.
+    pub create: Option<Vec<NewColumn>>,
 }
 
-/// Load a delimited file into a table, returning the rows inserted.
+/// Load a file's rows into a table, returning the rows inserted.
 ///
 /// Nothing is emptied first and nothing is deduplicated: the file is appended,
 /// which is the only behaviour that cannot lose data the user did not ask to
 /// lose. Replacing a table is a TRUNCATE they can run themselves, deliberately.
-pub async fn run_csv(
+/// Creating the table is the one exception in shape, and it creates: a table
+/// that already exists makes the CREATE fail before a row is touched.
+pub async fn run_rows(
     state: &AppState,
-    request: CsvImportRequest,
+    request: RowsImportRequest,
     cancel: Arc<AtomicBool>,
     on_progress: impl Fn(Progress) + Sync,
 ) -> Result<u64> {
-    let file = std::fs::File::open(&request.path)
-        .map_err(|e| Error::Io(format!("could not open {}: {}", request.path, e)))?;
-    let total_bytes = file.metadata().ok().map(|m| m.len());
-    let mut reader_source = std::io::BufReader::new(file);
-
     let label = file_label(&request.path);
+    let config = state.config_for(&request.connection_id).await?;
     let session = state.sessions.get(&request.connection_id).await?;
     let mut guard = session.connection.lock().await;
-
-    // Column types decide how each field is written; without them everything
-    // would be a quoted string, which MySQL turns into a silent zero on a
-    // boolean column.
-    let types: HashMap<String, String> = match guard
-        .table_detail(request.schema.as_deref(), &request.table)
-        .await
-    {
-        Ok(detail) => detail
-            .columns
-            .into_iter()
-            .map(|c| (c.name, c.type_name))
-            .collect(),
-        Err(_) => HashMap::new(),
-    };
-
-    let report = |bytes: u64, done: bool| {
-        on_progress(Progress {
-            id: request.id.clone(),
-            label: label.clone(),
-            unit: "KB".into(),
-            rows: bytes / 1024,
-            total: total_bytes.map(|b| b / 1024),
-            done,
-        });
-    };
-    report(0, false);
 
     let opts = FetchOptions {
         max_rows: Some(1),
@@ -186,20 +182,63 @@ pub async fn run_csv(
         timeout_secs: None,
     };
 
-    let mut csv = CsvReader::new(request.delimiter);
-    let mut buffer = vec![0u8; CHUNK];
-    let mut leftover: Vec<u8> = Vec::new();
-    let mut read_bytes = 0u64;
-    let mut inserted = 0u64;
-    let mut skipped_header = !request.has_header;
-    let mut batch: Vec<String> = Vec::with_capacity(ROWS_PER_INSERT);
+    // The table, and the types that decide how each field is written. Without
+    // them everything would be a quoted string, which MySQL turns into a
+    // silent zero on a boolean column.
+    let (qualified, types): (String, HashMap<String, String>) = match &request.create {
+        Some(columns) => {
+            let quote = tablex_core::diff::Dialect::for_driver(&config.driver).quote;
+            let qualified = match &request.schema {
+                Some(schema) => format!(
+                    "{}.{}",
+                    quote_ident(schema, quote),
+                    quote_ident(&request.table, quote)
+                ),
+                None => quote_ident(&request.table, quote),
+            };
+            let definitions: Vec<String> = columns
+                .iter()
+                .map(|c| format!("  {} {}", quote_ident(&c.name, quote), c.type_name))
+                .collect();
+            if definitions.is_empty() {
+                return Err(Error::Config("a table needs at least one column".into()));
+            }
+            let sql = format!("CREATE TABLE {qualified} (\n{}\n)", definitions.join(",\n"));
+            guard.execute(&sql, &opts).await.map_err(|e| Error::Query {
+                message: format!("{e}\n\nwhile creating {}", request.table),
+                position: None,
+                code: None,
+            })?;
+            (
+                qualified,
+                columns
+                    .iter()
+                    .map(|c| (c.name.clone(), c.type_name.clone()))
+                    .collect(),
+            )
+        }
+        None => {
+            let types = match guard
+                .table_detail(request.schema.as_deref(), &request.table)
+                .await
+            {
+                Ok(detail) => detail
+                    .columns
+                    .into_iter()
+                    .map(|c| (c.name, c.type_name))
+                    .collect(),
+                Err(_) => HashMap::new(),
+            };
+            (request.qualified.clone(), types)
+        }
+    };
 
     // The column list is fixed for every statement, so it is built once.
     let target_columns: Vec<String> = request
         .mapping
         .iter()
         .flatten()
-        .map(|name| quote_ident(name, quote_char(&request.qualified)))
+        .map(|name| quote_ident(name, quote_char(&qualified)))
         .collect();
     if target_columns.is_empty() {
         return Err(Error::Config(
@@ -207,66 +246,119 @@ pub async fn run_csv(
         ));
     }
 
-    loop {
-        if cancel.load(Ordering::Relaxed) {
-            return Err(Error::Cancelled);
-        }
+    let mut batch: Vec<String> = Vec::with_capacity(ROWS_PER_INSERT);
+    let mut inserted = 0u64;
+    let mut skipped_header = !request.has_header;
 
-        let n = reader_source
-            .read(&mut buffer)
-            .map_err(|e| Error::Io(format!("could not read {}: {}", request.path, e)))?;
-        if n == 0 {
-            break;
-        }
-        read_bytes += n as u64;
+    match &request.source {
+        Source::Csv { delimiter } => {
+            let file = std::fs::File::open(&request.path)
+                .map_err(|e| Error::Io(format!("could not open {}: {}", request.path, e)))?;
+            let total_bytes = file.metadata().ok().map(|m| m.len());
+            let mut reader_source = std::io::BufReader::new(file);
+            let report = |bytes: u64, done: bool| {
+                on_progress(Progress {
+                    id: request.id.clone(),
+                    label: label.clone(),
+                    unit: "KB".into(),
+                    rows: bytes / 1024,
+                    total: total_bytes.map(|b| b / 1024),
+                    done,
+                });
+            };
+            report(0, false);
 
-        leftover.extend_from_slice(&buffer[..n]);
-        let text = take_utf8(&mut leftover);
+            let mut csv = CsvReader::new(*delimiter);
+            let mut buffer = vec![0u8; CHUNK];
+            let mut leftover: Vec<u8> = Vec::new();
+            let mut read_bytes = 0u64;
 
-        for record in csv.push(&text) {
-            if !skipped_header {
-                skipped_header = true;
-                continue;
+            loop {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err(Error::Cancelled);
+                }
+                let n = reader_source
+                    .read(&mut buffer)
+                    .map_err(|e| Error::Io(format!("could not read {}: {}", request.path, e)))?;
+                if n == 0 {
+                    break;
+                }
+                read_bytes += n as u64;
+                leftover.extend_from_slice(&buffer[..n]);
+                let text = take_utf8(&mut leftover);
+
+                for record in csv.push(&text) {
+                    if !skipped_header {
+                        skipped_header = true;
+                        continue;
+                    }
+                    batch.push(values_of(&record, &request, &types));
+                    if batch.len() >= ROWS_PER_INSERT {
+                        inserted +=
+                            flush(&mut **guard, &qualified, &target_columns, &mut batch, &opts)
+                                .await?;
+                    }
+                }
+                report(read_bytes, false);
             }
-            batch.push(values_of(&record, &request, &types));
-            if batch.len() >= ROWS_PER_INSERT {
-                inserted += flush(
-                    &mut **guard,
-                    &request.qualified,
-                    &target_columns,
-                    &mut batch,
-                    &opts,
-                )
-                .await?;
+            if let Some(record) = csv.finish() {
+                if skipped_header {
+                    batch.push(values_of(&record, &request, &types));
+                }
             }
+            if !batch.is_empty() {
+                inserted +=
+                    flush(&mut **guard, &qualified, &target_columns, &mut batch, &opts).await?;
+            }
+            report(read_bytes, true);
         }
-        report(read_bytes, false);
+
+        Source::Sheet { name } => {
+            // A worksheet is read whole: it is bounded by the spreadsheet's own
+            // limits, and there is no reading half of a zip.
+            let (_, rows) = tablex_core::sheet::read_sheet(&request.path, name.as_deref())?;
+            let total = rows.len() as u64;
+            let report = |done_rows: u64, done: bool| {
+                on_progress(Progress {
+                    id: request.id.clone(),
+                    label: label.clone(),
+                    unit: "rows".into(),
+                    rows: done_rows,
+                    total: Some(total),
+                    done,
+                });
+            };
+            report(0, false);
+            for (i, record) in rows.iter().enumerate() {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err(Error::Cancelled);
+                }
+                if !skipped_header {
+                    skipped_header = true;
+                    continue;
+                }
+                batch.push(values_of(record, &request, &types));
+                if batch.len() >= ROWS_PER_INSERT {
+                    inserted +=
+                        flush(&mut **guard, &qualified, &target_columns, &mut batch, &opts).await?;
+                    report(i as u64 + 1, false);
+                }
+            }
+            if !batch.is_empty() {
+                inserted +=
+                    flush(&mut **guard, &qualified, &target_columns, &mut batch, &opts).await?;
+            }
+            report(total, true);
+        }
     }
 
-    if let Some(record) = csv.finish() {
-        if skipped_header {
-            batch.push(values_of(&record, &request, &types));
-        }
-    }
-    if !batch.is_empty() {
-        inserted += flush(
-            &mut **guard,
-            &request.qualified,
-            &target_columns,
-            &mut batch,
-            &opts,
-        )
-        .await?;
-    }
-
-    report(read_bytes, true);
     Ok(inserted)
 }
 
 /// One record as a `(...)` tuple, in mapped column order.
 fn values_of(
     record: &[String],
-    request: &CsvImportRequest,
+    request: &RowsImportRequest,
     types: &HashMap<String, String>,
 ) -> String {
     let mut values = Vec::new();
@@ -345,26 +437,63 @@ fn take_utf8(leftover: &mut Vec<u8>) -> String {
     }
 }
 
-/// Read the first records of a file, for the mapping preview.
-pub fn preview(
-    path: &str,
-    delimiter: Option<char>,
-    rows: usize,
-) -> Result<(char, Vec<Vec<String>>)> {
-    let bytes =
-        std::fs::read(path).map_err(|e| Error::Io(format!("could not read {path}: {e}")))?;
-    // Enough to see the shape without loading a gigabyte to show ten rows.
-    let head = &bytes[..bytes.len().min(64 * 1024)];
-    let text = String::from_utf8_lossy(head);
+/// What a file looks like, for the mapping dialog.
+pub struct Preview {
+    /// The delimiter used, given or sniffed. Absent for a worksheet.
+    pub delimiter: Option<char>,
+    /// The workbook's sheets, and the one read. Empty for a delimited file.
+    pub sheets: Vec<String>,
+    pub sheet: Option<String>,
+    /// The first records, header included if there is one.
+    pub rows: Vec<Vec<String>>,
+    /// A longer run of records, for guessing the columns' types.
+    pub sample: Vec<Vec<String>>,
+}
 
-    let delimiter = delimiter.unwrap_or_else(|| tablex_core::csv::sniff_delimiter(&text));
-    let mut reader = CsvReader::new(delimiter);
-    let mut records = reader.push(&text);
-    if records.len() < rows {
-        records.extend(reader.finish());
+/// Read the first records of a file without importing anything.
+pub fn preview(path: &str, source: &Source, rows: usize) -> Result<Preview> {
+    match source {
+        Source::Csv { delimiter } => {
+            let bytes = std::fs::read(path)
+                .map_err(|e| Error::Io(format!("could not read {path}: {e}")))?;
+            // Enough to see the shape without loading a gigabyte to show ten
+            // rows. A whole-file scan is what the import itself is for.
+            let head = &bytes[..bytes.len().min(256 * 1024)];
+            let text = String::from_utf8_lossy(head);
+            let delimiter = if *delimiter == '\0' {
+                tablex_core::csv::sniff_delimiter(&text)
+            } else {
+                *delimiter
+            };
+            let mut reader = CsvReader::new(delimiter);
+            let mut records = reader.push(&text);
+            // The last record of a truncated head may be half a line; keep it
+            // only when the whole file was read.
+            if head.len() == bytes.len() {
+                records.extend(reader.finish());
+            }
+            records.truncate(SAMPLE_ROWS);
+            Ok(Preview {
+                delimiter: Some(delimiter),
+                sheets: Vec::new(),
+                sheet: None,
+                rows: records.iter().take(rows).cloned().collect(),
+                sample: records,
+            })
+        }
+        Source::Sheet { name } => {
+            let sheets = tablex_core::sheet::sheet_names(path)?;
+            let (sheet, mut records) = tablex_core::sheet::read_sheet(path, name.as_deref())?;
+            records.truncate(SAMPLE_ROWS);
+            Ok(Preview {
+                delimiter: None,
+                sheets,
+                sheet: Some(sheet),
+                rows: records.iter().take(rows).cloned().collect(),
+                sample: records,
+            })
+        }
     }
-    records.truncate(rows);
-    Ok((delimiter, records))
 }
 
 /// Run one statement, naming it if it fails.
@@ -624,5 +753,55 @@ mod tests {
         assert!(reports.iter().all(|(unit, _)| unit == "KB"), "{reports:?}");
         assert_eq!(reports.first().map(|r| r.1), Some(false));
         assert_eq!(reports.last().map(|r| r.1), Some(true));
+    }
+
+    #[tokio::test]
+    async fn creates_the_table_before_loading_a_file_into_it() {
+        let dir = temp_dir("create");
+        let path = write(&dir, "people.csv", "name,age\nAnn,41\nBob,\n");
+        let (state, applied) = state_with(&dir, None).await;
+
+        let count = run_rows(
+            &state,
+            RowsImportRequest {
+                id: "i2".into(),
+                connection_id: "c1".into(),
+                path,
+                source: Source::Csv { delimiter: ',' },
+                schema: None,
+                table: "people".into(),
+                qualified: String::new(),
+                has_header: true,
+                mapping: vec![Some("name".into()), Some("age".into())],
+                null_as_empty: true,
+                create: Some(vec![
+                    NewColumn {
+                        name: "name".into(),
+                        type_name: "TEXT".into(),
+                    },
+                    NewColumn {
+                        name: "age".into(),
+                        type_name: "INTEGER".into(),
+                    },
+                ]),
+            },
+            Arc::new(AtomicBool::new(false)),
+            |_| {},
+        )
+        .await
+        .expect("import");
+
+        assert_eq!(count, 2);
+        let applied = applied.lock().unwrap();
+        // The table first, in the driver's quoting, then the rows -- typed by
+        // the columns just created, since there is no catalogue to ask yet.
+        assert_eq!(
+            applied[0],
+            "CREATE TABLE \"people\" (\n  \"name\" TEXT,\n  \"age\" INTEGER\n)"
+        );
+        assert_eq!(
+            applied[1],
+            "INSERT INTO \"people\" (\"name\", \"age\") VALUES ('Ann', 41), ('Bob', NULL)"
+        );
     }
 }

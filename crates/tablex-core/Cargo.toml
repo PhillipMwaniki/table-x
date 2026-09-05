@@ -20,6 +20,7 @@ indexmap.workspace = true
 url.workspace = true
 percent-encoding.workspace = true
 tracing.workspace = true
+calamine.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }

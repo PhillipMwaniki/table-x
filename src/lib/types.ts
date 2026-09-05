@@ -545,9 +545,32 @@ export interface ServerActivity {
 }
 
 /** The first rows of a delimited file, for mapping its columns. */
-export interface CsvPreview {
-  delimiter: string;
+/** Where an import's rows come from. */
+export type ImportSource =
+  { kind: "csv"; delimiter?: string | null } | { kind: "sheet"; name?: string | null };
+
+/** What a column's values in a file look like, as the backend guesses it. */
+export type InferredKind =
+  "text" | "integer" | { number: { scale: number } } | "boolean" | "date" | "date_time";
+
+export interface InferredColumn {
+  /** From the header when there is one, else `column_N`. */
+  name: string;
+  kind: InferredKind;
+  /** The kind in the engine's own spelling. */
+  type_name: string;
+}
+
+/** What a file looks like, for the import dialog. */
+export interface ImportPreview {
+  /** The delimiter used, given or sniffed. Null for a worksheet. */
+  delimiter: string | null;
+  /** The workbook's sheets and the one read. Empty for a delimited file. */
+  sheets: string[];
+  sheet: string | null;
   rows: string[][];
+  /** One per column of the file, from a sample of its rows. */
+  columns: InferredColumn[];
 }
 
 /** A query the user chose to keep. */

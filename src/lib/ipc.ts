@@ -13,7 +13,8 @@ import type {
   CompletionScope,
   ConnectionConfig,
   Change,
-  CsvPreview,
+  ImportPreview,
+  ImportSource,
   DdlOutcome,
   Design,
   DdlPlan,
@@ -376,23 +377,37 @@ export const ipc = {
     call<void>("kill_session", { connection_id, session_id }),
 
   /** Read the first rows of a delimited file, sniffing the delimiter if unsure. */
-  previewCsv: (path: string, delimiter?: string) =>
-    call<CsvPreview>("preview_csv", { path, delimiter: delimiter ?? null }),
+  /**
+   * The first rows of a file, and a guess at each column's type.
+   *
+   * Takes the connection so the guesses are spelled in the engine's own types.
+   */
+  previewImport: (connection_id: string, path: string, source: ImportSource, has_header: boolean) =>
+    call<ImportPreview>("preview_import", { connection_id, path, source, has_header }),
 
-  /** Load a delimited file into a table, returning rows inserted. */
-  importCsv: (args: {
+  /**
+   * Load a file's rows into a table, returning rows inserted.
+   *
+   * With `create`, the table is made first from those columns; `qualified`
+   * is then unused, since the backend builds the name by the driver's rule.
+   */
+  importRows: (args: {
     id: string;
     connection_id: string;
     path: string;
+    source: ImportSource;
     qualified: string;
     schema?: string | undefined;
     table: string;
-    delimiter: string;
     has_header: boolean;
     /** Target column per field position; null skips that field. */
     mapping: (string | null)[];
     null_as_empty: boolean;
-  }) => call<number>("import_csv", { request: { ...args, schema: args.schema ?? null } }),
+    create?: { name: string; type_name: string }[] | undefined;
+  }) =>
+    call<number>("import_rows", {
+      request: { ...args, schema: args.schema ?? null, create: args.create ?? null },
+    }),
 
   /** Run every statement in a SQL file, returning how many were applied. */
   importSql: (args: { id: string; connection_id: string; path: string }) =>

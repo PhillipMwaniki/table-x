@@ -17,7 +17,8 @@ import { HistoryPanel } from "./HistoryPanel";
 import { TabBar } from "./TabBar";
 import { ExportProgress } from "./ExportProgress";
 import { SplitHandle } from "./SplitHandle";
-import { CsvImportDialog } from "./CsvImportDialog";
+import { ImportDialog } from "./ImportDialog";
+import type { ImportPlan, ImportTarget } from "./ImportDialog";
 import { ActivityPanel } from "./ActivityPanel";
 import { PlanView } from "./PlanView";
 import { DiagramView } from "./DiagramView";
@@ -220,12 +221,8 @@ export function Workspace({
     label: string;
   } | null>(null);
 
-  /** The file and table a mapping dialog is open for, if any. */
-  const [csvImport, setCsvImport] = useState<{
-    path: string;
-    node: SchemaNode & { schema?: string | undefined };
-    columns: ColumnDef[];
-  } | null>(null);
+  /** The file and target an import dialog is open for, if any. */
+  const [importing, setImporting] = useState<{ path: string; target: ImportTarget } | null>(null);
   const [menu, setMenu] = useState<{
     node: SchemaNode & { schema?: string | undefined };
     x: number;
@@ -591,58 +588,81 @@ export function Workspace({
    * so the dialog can show the mapping already made rather than an empty form
    * asking the user to describe their own file back to us.
    */
-  const importCsv = async (node: SchemaNode & { schema?: string | undefined }) => {
-    const path = await open({
-      multiple: false,
-      filters: [{ name: "Delimited text", extensions: ["csv", "tsv", "txt"] }],
-    });
+  const IMPORTABLE = [
+    { name: "Data files", extensions: ["csv", "tsv", "txt", "xlsx", "xlsm", "xls", "ods"] },
+  ];
+
+  const importInto = async (node: SchemaNode & { schema?: string | undefined }) => {
+    const path = await open({ multiple: false, filters: IMPORTABLE });
     if (typeof path !== "string") return;
 
     const current = activeTab(connection.id);
     try {
       const detail = await ipc.tableDetail(connection.id, node.name, node.schema);
-      setCsvImport({ path, node, columns: detail.columns });
+      setImporting({
+        path,
+        target: {
+          kind: "existing",
+          table: node.name,
+          schema: node.schema,
+          qualified: node.qualified ?? node.name,
+          columns: detail.columns,
+        },
+      });
     } catch (e) {
       reportJobFailure(e as IpcError, current?.id, `Import into ${node.name}`);
     }
   };
 
+  /**
+   * Import a file into a table that does not exist yet.
+   *
+   * The dialog guesses the columns from the file; the table is created when
+   * the import runs, in the schema the menu was opened on.
+   */
+  const importAsNew = async (schema: string | undefined) => {
+    const path = await open({ multiple: false, filters: IMPORTABLE });
+    if (typeof path !== "string") return;
+    setImporting({ path, target: { kind: "new", schema } });
+  };
+
   /** Run the import the dialog just described. */
-  const runCsvImport = async (
-    target: { path: string; node: SchemaNode & { schema?: string | undefined } },
-    options: {
-      delimiter: string;
-      hasHeader: boolean;
-      mapping: (string | null)[];
-      nullAsEmpty: boolean;
-    },
-  ) => {
-    setCsvImport(null);
+  const runImport = async (job: { path: string; target: ImportTarget }, plan: ImportPlan) => {
+    setImporting(null);
     const id = crypto.randomUUID();
     const current = activeTab(connection.id);
-    beginExport(id, `Importing ${target.path.split(/[\\/]/).pop()}`, "KB");
+    beginExport(
+      id,
+      `Importing ${job.path.split(/[\\/]/).pop()}`,
+      plan.source.kind === "sheet" ? "rows" : "KB",
+    );
     try {
-      const rows = await ipc.importCsv({
+      const rows = await ipc.importRows({
         id,
         connection_id: connection.id,
-        path: target.path,
-        qualified: target.node.qualified ?? target.node.name,
-        schema: target.node.schema,
-        table: target.node.name,
-        delimiter: options.delimiter,
-        has_header: options.hasHeader,
-        mapping: options.mapping,
-        null_as_empty: options.nullAsEmpty,
+        path: job.path,
+        source: plan.source,
+        qualified: job.target.kind === "existing" ? job.target.qualified : "",
+        schema: job.target.schema,
+        table: plan.table,
+        has_header: plan.hasHeader,
+        mapping: plan.mapping,
+        null_as_empty: plan.nullAsEmpty,
+        create: plan.create,
       });
+      // A new table is a change to the catalogue; the tree should show it.
+      if (plan.create) bumpSchema(connection.id);
       if (current) {
         setTabNotice(
           connection.id,
           current.id,
-          `Imported ${rows.toLocaleString()} rows into ${target.node.name}`,
+          plan.create
+            ? `Created ${plan.table} and imported ${rows.toLocaleString()} rows`
+            : `Imported ${rows.toLocaleString()} rows into ${plan.table}`,
         );
       }
     } catch (e) {
-      reportJobFailure(e as IpcError, current?.id, `Import into ${target.node.name}`);
+      reportJobFailure(e as IpcError, current?.id, `Import into ${plan.table}`);
     } finally {
       endExport(id);
     }
@@ -1771,7 +1791,11 @@ export function Workspace({
                   label: `${connection.name}${schema ? ` · ${schema}` : ""}`,
                 });
               },
-              onImportCsv: () => void importCsv(menu.node),
+              onImportInto: () => void importInto(menu.node),
+              onImportNew: () =>
+                void importAsNew(
+                  menu.node.kind === "schema" ? menu.node.name : (menu.node.schema ?? undefined),
+                ),
               onRefresh: menu.refresh,
             },
           )}
@@ -1873,6 +1897,10 @@ export function Workspace({
               onSelect: () => setNewTable(true),
             },
             {
+              label: "Import a file as a new table…",
+              onSelect: () => void importAsNew(undefined),
+            },
+            {
               label: "New schema…",
               separated: true,
               // Offered only where the engine has a statement for it. Oracle
@@ -1940,14 +1968,16 @@ export function Workspace({
         />
       )}
 
-      {csvImport && (
-        <CsvImportDialog
+      {importing && (
+        <ImportDialog
+          // Keyed on the file so a second import starts from a clean form.
+          key={importing.path}
           open
-          path={csvImport.path}
-          table={csvImport.node.name}
-          columns={csvImport.columns}
-          onClose={() => setCsvImport(null)}
-          onImport={(options) => void runCsvImport(csvImport, options)}
+          path={importing.path}
+          connectionId={connection.id}
+          target={importing.target}
+          onClose={() => setImporting(null)}
+          onImport={(plan) => void runImport(importing, plan)}
         />
       )}
 
@@ -1997,7 +2027,10 @@ export function menuFor(
     onExport: (format: ExportFormat, extension: string) => void;
     onExportDatabase: () => void;
     onImport: () => void;
-    onImportCsv: () => void;
+    /** Load a file's rows into this table. */
+    onImportInto: () => void;
+    /** Load a file's rows into a table made for them, here. */
+    onImportNew: () => void;
     onActivity: () => void;
     onPrivileges: () => void;
     onDiagram: () => void;
@@ -2013,6 +2046,7 @@ export function menuFor(
   if (node.kind === "database") {
     items.push({ label: "Export database as SQL…", onSelect: actions.onExportDatabase });
     items.push({ label: "Import SQL file…", onSelect: actions.onImport });
+    items.push({ label: "Import a file as a new table…", onSelect: actions.onImportNew });
     if (options.foreignKeys) {
       items.push({ label: "Diagram…", onSelect: actions.onDiagram });
     }
@@ -2078,7 +2112,16 @@ export function menuFor(
   }
 
   if (node.kind === "table") {
-    items.push({ label: "Import CSV file…", onSelect: actions.onImportCsv });
+    items.push({ label: "Import a file into this table…", onSelect: actions.onImportInto });
+  }
+  // Wherever a table could be created: a schema, or the folder that holds the
+  // tables. A database offers it above, in its own menu.
+  if (node.kind === "schema" || (node.kind === "folder" && node.name.toLowerCase() === "tables")) {
+    items.push({
+      label: "Import a file as a new table…",
+      separated: true,
+      onSelect: actions.onImportNew,
+    });
   }
 
   if (actions.onRefresh) {

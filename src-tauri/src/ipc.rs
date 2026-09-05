@@ -975,48 +975,126 @@ pub async fn export_database(
     Ok(rows)
 }
 
-/// What the frontend asks for when loading a delimited file.
+/// Where an import's rows come from, as the frontend describes it.
 #[derive(Deserialize)]
-pub struct CsvImportArgs {
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ImportSourceArgs {
+    /// A delimited file. No delimiter means "sniff one".
+    Csv { delimiter: Option<String> },
+    /// A worksheet. No name means the first.
+    Sheet { name: Option<String> },
+}
+
+impl From<ImportSourceArgs> for crate::import::Source {
+    fn from(source: ImportSourceArgs) -> Self {
+        match source {
+            ImportSourceArgs::Csv { delimiter } => crate::import::Source::Csv {
+                delimiter: delimiter.and_then(|d| d.chars().next()).unwrap_or('\0'),
+            },
+            ImportSourceArgs::Sheet { name } => crate::import::Source::Sheet { name },
+        }
+    }
+}
+
+/// A column of a table to be created for an import.
+#[derive(Deserialize)]
+pub struct NewColumnArgs {
+    pub name: String,
+    pub type_name: String,
+}
+
+/// What the frontend asks for when loading a file's rows.
+#[derive(Deserialize)]
+pub struct RowsImportArgs {
     pub id: String,
     pub connection_id: String,
     pub path: String,
-    pub qualified: String,
+    pub source: ImportSourceArgs,
     #[serde(default)]
     pub schema: Option<String>,
     pub table: String,
-    pub delimiter: String,
+    /// The driver's quoted, qualified name for an existing table. Unused when
+    /// `create` is given, since the table does not exist to have one.
+    #[serde(default)]
+    pub qualified: String,
     pub has_header: bool,
     /// Target column per field position; null skips that field.
     pub mapping: Vec<Option<String>>,
     pub null_as_empty: bool,
+    /// Create the table first, with these columns.
+    #[serde(default)]
+    pub create: Option<Vec<NewColumnArgs>>,
 }
 
-/// What a delimited file looks like, for the mapping dialog.
+/// One column of a file, as the preview guesses it.
 #[derive(Serialize)]
-pub struct CsvPreview {
-    /// The delimiter used, whether given or sniffed.
-    pub delimiter: String,
-    pub rows: Vec<Vec<String>>,
+pub struct InferredColumn {
+    pub name: String,
+    pub kind: tablex_core::infer::Kind,
+    pub type_name: String,
 }
 
-/// Read the first rows of a delimited file without importing anything.
+/// What a file looks like, for the import dialog.
+#[derive(Serialize)]
+pub struct ImportPreview {
+    /// The delimiter used, given or sniffed. Absent for a worksheet.
+    pub delimiter: Option<String>,
+    pub sheets: Vec<String>,
+    pub sheet: Option<String>,
+    pub rows: Vec<Vec<String>>,
+    pub columns: Vec<InferredColumn>,
+}
+
+/// Read the first rows of a file without importing anything, and guess what
+/// each column is, in the connection's own type names.
 #[tauri::command(rename_all = "snake_case")]
-pub fn preview_csv(path: String, delimiter: Option<String>) -> IpcResult<CsvPreview> {
-    let wanted = delimiter.and_then(|d| d.chars().next());
-    let (delimiter, rows) = crate::import::preview(&path, wanted, 20)?;
-    Ok(CsvPreview {
-        delimiter: delimiter.to_string(),
-        rows,
+pub async fn preview_import(
+    state: tauri::State<'_, AppState>,
+    connection_id: String,
+    path: String,
+    source: ImportSourceArgs,
+    has_header: bool,
+) -> IpcResult<ImportPreview> {
+    let config = state.config_for(&connection_id).await?;
+    let source: crate::import::Source = source.into();
+    let preview = crate::import::preview(&path, &source, 20)?;
+
+    let width = preview.sample.iter().map(Vec::len).max().unwrap_or(0);
+    let (header, body): (Vec<String>, &[Vec<String>]) = match preview.sample.split_first() {
+        Some((first, rest)) if has_header => {
+            let mut header = first.clone();
+            header.resize(width, String::new());
+            (header, rest)
+        }
+        _ => (vec![String::new(); width], &preview.sample[..]),
+    };
+    let names = tablex_core::infer::column_names(&header);
+    let kinds = tablex_core::infer::infer_columns(body, width);
+    let columns = names
+        .into_iter()
+        .zip(kinds)
+        .map(|(name, kind)| InferredColumn {
+            name,
+            kind,
+            type_name: tablex_core::infer::type_name(kind, &config.driver),
+        })
+        .collect();
+
+    Ok(ImportPreview {
+        delimiter: preview.delimiter.map(|d| d.to_string()),
+        sheets: preview.sheets,
+        sheet: preview.sheet,
+        rows: preview.rows,
+        columns,
     })
 }
 
-/// Load a delimited file into a table.
+/// Load a file's rows into a table, creating it first when asked.
 #[tauri::command(rename_all = "snake_case")]
-pub async fn import_csv(
+pub async fn import_rows(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
-    request: CsvImportArgs,
+    request: RowsImportArgs,
 ) -> IpcResult<u64> {
     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     state
@@ -1026,19 +1104,28 @@ pub async fn import_csv(
         .insert(request.id.clone(), cancel.clone());
     let id = request.id.clone();
 
-    let result = crate::import::run_csv(
+    let result = crate::import::run_rows(
         &state,
-        crate::import::CsvImportRequest {
+        crate::import::RowsImportRequest {
             id: request.id,
             connection_id: request.connection_id,
             path: request.path,
-            qualified: request.qualified,
+            source: request.source.into(),
             schema: request.schema,
             table: request.table,
-            delimiter: request.delimiter.chars().next().unwrap_or(','),
+            qualified: request.qualified,
             has_header: request.has_header,
             mapping: request.mapping,
             null_as_empty: request.null_as_empty,
+            create: request.create.map(|columns| {
+                columns
+                    .into_iter()
+                    .map(|c| crate::import::NewColumn {
+                        name: c.name,
+                        type_name: c.type_name,
+                    })
+                    .collect()
+            }),
         },
         cancel,
         |progress| {

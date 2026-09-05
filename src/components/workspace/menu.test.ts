@@ -22,7 +22,8 @@ const actions = {
   onExport: noop,
   onExportDatabase: noop,
   onImport: noop,
-  onImportCsv: noop,
+  onImportInto: noop,
+  onImportNew: noop,
   onActivity: noop,
   onDiagram: noop,
   onCompare: noop,
@@ -46,6 +47,7 @@ describe("menuFor", () => {
     expect(items).toEqual([
       "Export database as SQL…",
       "Import SQL file…",
+      "Import a file as a new table…",
       "Diagram…",
       "Compare with…",
       "Server activity…",
@@ -69,7 +71,7 @@ describe("menuFor", () => {
     expect(items).toContain("Export as CSV…");
     expect(items).toContain("Export as JSON…");
     expect(items).toContain("Export as SQL inserts…");
-    expect(items).toContain("Import CSV file…");
+    expect(items).toContain("Import a file into this table…");
   });
 
   it("does not offer to import into a view", () => {
@@ -80,7 +82,7 @@ describe("menuFor", () => {
       { driver: "mysql", tableScripts: true, foreignKeys: true, privileges: true },
       actions,
     );
-    expect(items).not.toContain("Import CSV file…");
+    expect(items).not.toContain("Import a file into this table…");
   });
 
   it("hides the CREATE statement where the driver cannot produce one", () => {
@@ -136,13 +138,21 @@ describe("menuFor", () => {
 
   it("offers a folder only what applies to a folder", () => {
     // A folder is a level of the tree, not an object: it has no name worth
-    // copying as SQL and nothing to open.
+    // copying as SQL and nothing to open. The tables folder is where a table
+    // would be made, so it is where a file can become one.
     const items = labels(
       node("folder", { qualified: undefined, name: "Tables" }),
       { driver: "mysql", tableScripts: true, foreignKeys: true, privileges: true },
       actions,
     );
-    expect(items).toEqual(["Refresh"]);
+    expect(items).toEqual(["Import a file as a new table…", "Refresh"]);
+    expect(
+      labels(
+        node("folder", { qualified: undefined, name: "Views" }),
+        { driver: "mysql", tableScripts: true, foreignKeys: true, privileges: true },
+        actions,
+      ),
+    ).toEqual(["Refresh"]);
   });
 
   it("gives every menu at least one usable item or none at all", () => {

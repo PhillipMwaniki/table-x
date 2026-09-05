@@ -51,6 +51,8 @@ indexmap = { version = "2", features = ["serde"] }
 url = "2"
 percent-encoding = "2"
 clap = { version = "4", features = ["derive", "env"] }
+# Spreadsheets, for import. Reading only: the workbook writer is our own.
+calamine = { version = "0.26", features = ["dates"] }
 
 # Profiles: debug builds of a DB client are unusably slow without optimized deps.
 [profile.dev.package."*"]
