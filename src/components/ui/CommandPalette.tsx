@@ -10,7 +10,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cx } from "./primitives";
 import { fuzzyFilter } from "@/lib/fuzzy";
+import { bindingFor } from "@/lib/keymap";
 import { useCommands } from "@/store/commands";
+import { useSettings } from "@/store/settings";
 
 /** Rows the palette shows at most. */
 const MAX_SHOWN = 80;
@@ -19,6 +21,11 @@ export function CommandPalette() {
   const open = useCommands((s) => s.open);
   const setOpen = useCommands((s) => s.setOpen);
   const sources = useCommands((s) => s.sources);
+  // The binding in force rather than the one a command was registered with:
+  // a shortcut somebody changed should read here as what it now is.
+  const keymap = useSettings((s) => s.keymap);
+  const shortcutOf = (command: { id: string; shortcut?: string | undefined }) =>
+    bindingFor(command.id, keymap) || command.shortcut;
 
   const [query, setQuery] = useState("");
   const [highlighted, setHighlighted] = useState(0);
@@ -123,7 +130,7 @@ export function CommandPalette() {
                   >
                     {command.group}
                   </span>
-                  {command.shortcut && (
+                  {shortcutOf(command) && (
                     <span
                       className={cx(
                         "shrink-0 rounded border px-1 font-mono text-[10px]",
@@ -132,7 +139,7 @@ export function CommandPalette() {
                           : "border-border text-text-muted",
                       )}
                     >
-                      {command.shortcut}
+                      {shortcutOf(command)}
                     </span>
                   )}
                 </button>

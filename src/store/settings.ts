@@ -21,6 +21,7 @@ import {
   rowHeightFor,
 } from "@/lib/settings";
 import type { Settings, ThemeChoice } from "@/lib/settings";
+import type { Keymap } from "@/lib/keymap";
 
 const FILE = "settings.json";
 const KEY = "appearance";
@@ -39,6 +40,7 @@ interface SettingsState extends Settings {
   setStripedRows: (striped: boolean) => void;
   setRowDetails: (open: boolean) => void;
   setCheckForUpdates: (check: boolean) => void;
+  setKeymap: (keymap: Keymap) => void;
   reset: () => void;
 }
 
@@ -100,6 +102,7 @@ export const useSettings = create<SettingsState>((set, get) => {
       stripedRows,
       rowDetails,
       checkForUpdates,
+      keymap,
     } = get();
     const next: Settings = {
       theme,
@@ -111,6 +114,7 @@ export const useSettings = create<SettingsState>((set, get) => {
       stripedRows,
       rowDetails,
       checkForUpdates,
+      keymap,
       ...changes,
     };
     set(next);
@@ -156,6 +160,7 @@ export const useSettings = create<SettingsState>((set, get) => {
     setStripedRows: (stripedRows) => commit({ stripedRows }),
     setRowDetails: (rowDetails) => commit({ rowDetails }),
     setCheckForUpdates: (checkForUpdates) => commit({ checkForUpdates }),
+    setKeymap: (keymap) => commit({ keymap }),
     reset: () => commit(DEFAULT_SETTINGS),
   };
 });

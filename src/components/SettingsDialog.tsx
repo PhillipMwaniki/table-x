@@ -10,6 +10,8 @@ import { Dialog } from "./ui/Dialog";
 import { Button, Checkbox, Field, Input, Select, cx } from "./ui/primitives";
 import { useSettings } from "@/store/settings";
 import { DATA_FONTS, MAX_FONT_SIZE, MIN_FONT_SIZE, THEMES, UI_FONTS } from "@/lib/settings";
+import { ACTIONS, bindingFor, conflicts, isValidBinding, keyOf } from "@/lib/keymap";
+import type { Keymap } from "@/lib/keymap";
 
 /**
  * Whether a stack's first family is actually installed.
@@ -39,6 +41,8 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
     setStripedRows,
     checkForUpdates,
     setCheckForUpdates,
+    keymap,
+    setKeymap,
     setTheme,
     setUiFont,
     setDataFont,
@@ -75,7 +79,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
     <Dialog
       open={open}
       onClose={onClose}
-      title="Appearance"
+      title="Settings"
       description="Changes apply as you make them."
       footer={
         <div className="flex items-center justify-between">
@@ -214,7 +218,124 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
           ))}
         </div>
       </section>
+
+      <Shortcuts keymap={keymap} onChange={setKeymap} />
     </Dialog>
+  );
+}
+
+/**
+ * Every shortcut, with a way to change it.
+ *
+ * Click a binding and press the keys you want instead; Backspace takes the
+ * binding away, Escape leaves it as it was. Two actions on one key are
+ * pointed out rather than refused: one may fire only in the editor and the
+ * other only outside it, which is a choice, not a mistake.
+ */
+function Shortcuts({ keymap, onChange }: { keymap: Keymap; onChange: (keymap: Keymap) => void }) {
+  /** The action whose binding is being recorded. */
+  const [recording, setRecording] = useState<string | null>(null);
+  const shared = useMemo(() => conflicts(keymap), [keymap]);
+  const customised = Object.keys(keymap).length > 0;
+
+  useEffect(() => {
+    if (!recording) return;
+    const onKey = (e: KeyboardEvent) => {
+      // Caught on the way down, and stopped there, so the press records
+      // rather than running whatever it is currently bound to.
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        setRecording(null);
+        return;
+      }
+      if (e.key === "Backspace" || e.key === "Delete") {
+        onChange({ ...keymap, [recording]: "" });
+        setRecording(null);
+        return;
+      }
+      const key = keyOf(e);
+      if (!key || !isValidBinding(key)) return;
+      const next = { ...keymap };
+      const fallback = ACTIONS.find((a) => a.id === recording)?.key;
+      // Choosing the default again is not a customisation.
+      if (key === fallback) delete next[recording];
+      else next[recording] = key;
+      onChange(next);
+      setRecording(null);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [recording, keymap, onChange]);
+
+  const reset = (id: string) => {
+    const next = { ...keymap };
+    delete next[id];
+    onChange(next);
+  };
+
+  return (
+    <section className="mt-4 space-y-2">
+      <div className="flex items-center justify-between">
+        <h3 className="text-[11px] font-medium text-text-muted">Shortcuts</h3>
+        {customised && (
+          <button onClick={() => onChange({})} className="text-[11px] text-accent hover:underline">
+            Reset all
+          </button>
+        )}
+      </div>
+      <p className="text-[11px] text-text-muted/70">
+        Click a shortcut and press the keys you want instead. Backspace removes it; Escape leaves
+        it. Ctrl+Enter and Ctrl+Shift+Enter in the editor are the editor's own and stay as they are.
+      </p>
+      <ul className="divide-y divide-border rounded-md border border-border">
+        {ACTIONS.map((action) => {
+          const binding = bindingFor(action.id, keymap);
+          const others = shared[action.id];
+          const changed = action.id in keymap;
+          return (
+            <li key={action.id} className="flex items-center gap-2 px-2 py-1">
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[12px] text-text">{action.label}</span>
+                {others && (
+                  <span className="block truncate text-[10px] text-warn">
+                    Also {others.map((o) => o.label).join(", ")}
+                  </span>
+                )}
+                {!action.inEditor && (
+                  <span className="block truncate text-[10px] text-text-muted/70">
+                    Not while typing in the editor
+                  </span>
+                )}
+              </span>
+              {changed && (
+                <button
+                  onClick={() => reset(action.id)}
+                  className="text-[10px] text-text-muted hover:text-text"
+                  title={`Back to ${action.key}`}
+                >
+                  reset
+                </button>
+              )}
+              <button
+                onClick={() => setRecording(recording === action.id ? null : action.id)}
+                aria-label={`Change the shortcut for ${action.label}`}
+                className={cx(
+                  "min-w-[7.5rem] rounded border px-1.5 py-0.5 font-mono text-[10.5px]",
+                  recording === action.id
+                    ? "border-accent bg-accent/15 text-accent"
+                    : binding
+                      ? "border-border text-text hover:border-accent"
+                      : "border-dashed border-border text-text-muted hover:border-accent",
+                )}
+              >
+                {recording === action.id ? "Press keys…" : binding || "Not bound"}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 

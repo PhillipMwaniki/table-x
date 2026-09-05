@@ -537,20 +537,6 @@ export function ResultGrid({
       el.scrollLeft = left + width - el.clientWidth;
   }, [currentMatch, virtualizer, visible, visibleWidths, offsets, layout.frozen]);
 
-  // Ctrl+F, unless the caret is in the editor, which has a find of its own
-  // and is the one meant when you are typing there.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== "f")
-        return;
-      if ((e.target as HTMLElement | null)?.closest?.(".cm-editor")) return;
-      e.preventDefault();
-      openFind();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [openFind]);
-
   const registerCommands = useCommands((s) => s.register);
   useEffect(
     () =>

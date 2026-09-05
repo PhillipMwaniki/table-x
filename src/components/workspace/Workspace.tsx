@@ -8,7 +8,7 @@
  * has more than one.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { SchemaTree } from "./SchemaTree";
 import { SqlEditor } from "./SqlEditor";
 import { BrowseBar } from "./BrowseBar";
@@ -53,7 +53,7 @@ import { useCommands } from "@/store/commands";
 import { useSettings } from "@/store/settings";
 import { useConnections } from "@/store/connections";
 import { useExports } from "@/store/exports";
-import { useWorkspace } from "@/store/workspace";
+import { tabsOf, useWorkspace } from "@/store/workspace";
 import type { KeptResult } from "@/store/workspace";
 import type {
   ColumnDef,
@@ -136,6 +136,7 @@ export function Workspace({
     clearPlan,
     undo,
     redo,
+    selectTab,
   } = useWorkspace();
 
   const historyOpen = useHistory((s) => s.open);
@@ -257,46 +258,6 @@ export function Workspace({
     void watchExports();
     void watchProgress();
   }, [watchExports, watchProgress]);
-
-  // Undo/redo are global shortcuts while this pane is mounted. Bound on window
-  // rather than the grid so they work regardless of which element has focus,
-  // except inside the editor, which has its own text history.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const inEditor = (e.target as HTMLElement)?.closest?.(".cm-editor");
-      if (inEditor) return;
-      const mod = e.ctrlKey || e.metaKey;
-      if (!mod || e.key.toLowerCase() !== "z" || !tab) return;
-      e.preventDefault();
-      void (e.shiftKey ? redo(connection.id, tab.id) : undo(connection.id, tab.id));
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [connection.id, tab, undo, redo]);
-
-  // History gets its own handler rather than joining the one above, because it
-  // must work while the caret is in the editor — that is where you are when you
-  // want a previous statement back.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== "h") return;
-      e.preventDefault();
-      setHistoryOpen(!useHistory.getState().open);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [setHistoryOpen]);
-
-  // A new query tab is Ctrl+T, as it is in every tabbed application.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== "t") return;
-      e.preventDefault();
-      openQuery(connection.id);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [connection.id, openQuery]);
 
   /**
    * Fetch an object's source and open it in its own tab.
@@ -1026,18 +987,6 @@ export function Workspace({
       ? `${tab.id}:${shown?.id ?? "latest"}:${statementIndex}:${active.columns.map((c) => c.name).join("\0")}`
       : null;
 
-  // Ctrl+Shift+F formats, matching every editor people arrive from. Bound on
-  // the window so it works with the caret in the editor, where it is used.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey) || !e.shiftKey || e.key.toLowerCase() !== "f") return;
-      e.preventDefault();
-      void formatCurrentSql();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  });
-
   // Registered while this workspace is mounted, so the palette offers running
   // a query only when there is something to run it against.
   useEffect(() => {
@@ -1159,6 +1108,38 @@ export function Workspace({
         shortcut: "Ctrl+Z",
         run: () => void undo(connection.id, tab.id),
       },
+      {
+        id: "ws.redo",
+        title: "Redo cell edit",
+        group: "Data",
+        shortcut: "Ctrl+Shift+Z",
+        run: () => void redo(connection.id, tab.id),
+      },
+      // Neighbours in the strip, wrapping at either end the way a browser does.
+      {
+        id: "ws.next-tab",
+        title: "Next tab",
+        group: "Tabs",
+        shortcut: "Ctrl+PageDown",
+        run: () => {
+          const list = tabsOf(useWorkspace.getState(), connection.id);
+          const at = list.findIndex((t) => t.id === tab.id);
+          const next = list[(at + 1) % list.length];
+          if (next) void selectTab(connection.id, next.id);
+        },
+      },
+      {
+        id: "ws.prev-tab",
+        title: "Previous tab",
+        group: "Tabs",
+        shortcut: "Ctrl+PageUp",
+        run: () => {
+          const list = tabsOf(useWorkspace.getState(), connection.id);
+          const at = list.findIndex((t) => t.id === tab.id);
+          const prev = list[(at - 1 + list.length) % list.length];
+          if (prev) void selectTab(connection.id, prev.id);
+        },
+      },
     ]);
   }, [
     registerCommands,
@@ -1170,6 +1151,8 @@ export function Workspace({
     setHistoryOpen,
     setPanelTab,
     undo,
+    redo,
+    selectTab,
   ]);
 
   /**
@@ -1179,16 +1162,12 @@ export function Workspace({
    * this needs the result's own key columns rather than only the connection and
    * the driver.
    */
-  const readOnlyDetail = useMemo(
-    () =>
-      readOnlyExplanation({
-        connectionReadOnly: connection.read_only,
-        driverName: driver?.name ?? "This driver",
-        hasProvenance: driver?.capabilities.column_provenance ?? false,
-        keyColumns: active?.type === "rows" ? active.key_columns : [],
-      }),
-    [connection.read_only, driver, active],
-  );
+  const readOnlyDetail = readOnlyExplanation({
+    connectionReadOnly: connection.read_only,
+    driverName: driver?.name ?? "This driver",
+    hasProvenance: driver?.capabilities.column_provenance ?? false,
+    keyColumns: active?.type === "rows" ? active.key_columns : [],
+  });
 
   return (
     <div className="flex min-h-0 flex-1">

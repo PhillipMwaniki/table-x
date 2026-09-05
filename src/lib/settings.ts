@@ -5,6 +5,9 @@
  * can be tested without a DOM or a Tauri host.
  */
 
+import { normalizeKeymap } from "./keymap";
+import type { Keymap } from "./keymap";
+
 /** Whether a theme is a light or a dark one, which is what `dark:` keys on. */
 export type Appearance = "light" | "dark";
 
@@ -127,6 +130,13 @@ export interface Settings {
    * mean nothing else will tell somebody a security fix shipped.
    */
   checkForUpdates: boolean;
+  /**
+   * Keyboard shortcuts changed from their defaults, by action id.
+   *
+   * Only the changes: a default that moves in a later version moves for
+   * everyone who did not choose otherwise. See `lib/keymap`.
+   */
+  keymap: Keymap;
 }
 
 /** Page sizes offered in the grid. */
@@ -152,6 +162,7 @@ export const DEFAULT_SETTINGS: Settings = {
   stripedRows: true,
   rowDetails: false,
   checkForUpdates: true,
+  keymap: {},
 };
 
 /**
@@ -258,5 +269,6 @@ export function normalize(stored: unknown): Settings {
       typeof raw.checkForUpdates === "boolean"
         ? raw.checkForUpdates
         : DEFAULT_SETTINGS.checkForUpdates,
+    keymap: normalizeKeymap(raw.keymap),
   };
 }

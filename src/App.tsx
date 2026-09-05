@@ -19,6 +19,7 @@ import { useSettings } from "./store/settings";
 import { useLayouts } from "./store/layouts";
 import { useUpdates } from "./store/updates";
 import { useCommands } from "./store/commands";
+import { actionsFor, keyOf } from "./lib/keymap";
 import { useWorkspace } from "./store/workspace";
 import { DesignView } from "./components/workspace/DesignView";
 import { DesignList } from "./components/workspace/DesignList";
@@ -180,23 +181,31 @@ export default function App() {
     void checkUpdate(checkForUpdates);
   }, [settingsReady, checkForUpdates, checkUpdate]);
 
-  // Ctrl+, is the settings shortcut everywhere else; there is no reason for
-  // this app to be the exception. Ctrl+K opens the palette, which is where
-  // every other shortcut can be discovered.
+  // Every shortcut in the app goes through here. A key press is spelled the
+  // way the keymap spells it, matched against the bindings in force, and the
+  // command it names is run if something has registered it — so a shortcut
+  // for "run query" does nothing with no query open, the same as the palette
+  // entry. Inside the editor only the actions that say so fire; the rest are
+  // the editor's own keys there.
+  const keymap = useSettings((s) => s.keymap);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey)) return;
-      if (e.key === ",") {
+      const key = keyOf(e);
+      if (!key) return;
+      const inEditor = Boolean((e.target as HTMLElement | null)?.closest?.(".cm-editor"));
+      const commands = useCommands.getState().all();
+      for (const action of actionsFor(key, keymap)) {
+        if (inEditor && !action.inEditor) continue;
+        const command = commands.find((c) => c.id === action.id);
+        if (!command) continue;
         e.preventDefault();
-        setSettingsOpen((was) => !was);
-      } else if (e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        setPaletteOpen(!useCommands.getState().open);
+        command.run();
+        return;
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [setPaletteOpen]);
+  }, [keymap]);
 
   // Commands that exist whatever is open, plus one per saved connection so the
   // palette can reach a connection without touching the sidebar.
@@ -213,10 +222,21 @@ export default function App() {
       },
       {
         id: "app.settings",
-        title: "Appearance settings",
+        title: "Settings",
         group: "View",
-        shortcut: "Ctrl+,",
-        run: () => setSettingsOpen(true),
+        run: () => setSettingsOpen((was) => !was),
+      },
+      {
+        id: "app.palette",
+        title: "Command palette",
+        group: "View",
+        run: () => setPaletteOpen(!useCommands.getState().open),
+      },
+      {
+        id: "app.sidebar",
+        title: sidebarCollapsed ? "Show the connections pane" : "Hide the connections pane",
+        group: "View",
+        run: () => setSidebarCollapsed((was) => !was),
       },
       {
         id: "app.designs",
@@ -258,7 +278,18 @@ export default function App() {
           },
         })),
     ]);
-  }, [registerCommands, connections, open, select, connect, reconnect, rowDetails, setRowDetails]);
+  }, [
+    registerCommands,
+    connections,
+    open,
+    select,
+    connect,
+    reconnect,
+    rowDetails,
+    setRowDetails,
+    setPaletteOpen,
+    sidebarCollapsed,
+  ]);
 
   const selected = connections.find((c) => c.id === selectedId) ?? null;
 
@@ -304,8 +335,8 @@ export default function App() {
 
         <button
           onClick={() => setSettingsOpen(true)}
-          title={update ? `Table X ${update.latest} is available` : "Appearance (Ctrl+,)"}
-          aria-label="Appearance settings"
+          title={update ? `Table X ${update.latest} is available` : "Settings (Ctrl+,)"}
+          aria-label="Settings"
           className="no-drag relative flex size-7 items-center justify-center rounded text-[19px] leading-none text-text-muted hover:bg-surface-2 hover:text-text"
         >
           ⚙
