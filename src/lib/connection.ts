@@ -68,6 +68,36 @@ export function retargetConfig(
  * port for SQLite — fields nothing reads, that suggest a setting exists where
  * none does.
  */
+/**
+ * Whether a write against `database` on this connection touches production.
+ *
+ * The same rule the backend applies, so the badge and the gate agree: the
+ * whole connection, or a list of names compared without regard to case,
+ * since two of the engines fold them and a list typed by hand should not have
+ * to know which. A connection saved before the setting existed is not
+ * production.
+ */
+export function inProduction(config: ConnectionConfig, database: string | null): boolean {
+  const scope = config.production ?? { scope: "none" };
+  switch (scope.scope) {
+    case "none":
+      return false;
+    case "all":
+      return true;
+    case "databases":
+      return (
+        database !== null &&
+        scope.names.some((n) => n.trim().toLowerCase() === database.toLowerCase())
+      );
+  }
+}
+
+/** Whether any part of this connection is production, for the sidebar's badge. */
+export function hasProduction(config: ConnectionConfig): boolean {
+  const scope = config.production ?? { scope: "none" };
+  return scope.scope === "all" || (scope.scope === "databases" && scope.names.length > 0);
+}
+
 export function forDriver(config: ConnectionConfig, driver: DriverInfo): ConnectionConfig {
   if (driver.file_based) {
     return {

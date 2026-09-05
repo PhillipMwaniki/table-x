@@ -13,6 +13,7 @@ import { Banner, Button, Checkbox, Field, Input, Select } from "./ui/primitives"
 import { ipc, IpcError } from "@/lib/ipc";
 import { folderNames, normalizeFolder } from "@/lib/folders";
 import { defaultDriver, forDriver, retargetConfig } from "@/lib/connection";
+import type { Production } from "@/lib/types";
 import { useConnections } from "@/store/connections";
 import type { ConnectionConfig, DriverInfo, TlsMode } from "@/lib/types";
 
@@ -416,6 +417,62 @@ export function ConnectionDialog({
               checked={config.confirm_destructive ?? Boolean(config.color)}
               onChange={(on) => patch({ confirm_destructive: on })}
             />
+          </div>
+        )}
+
+        {/* Production is about every write, not only the destructive ones,
+            and a server often holds one production database beside its
+            staging copies — so the scope can be a list of names. A read-only
+            connection has nothing to ask about. */}
+        {!config.read_only && (
+          <div className="grid grid-cols-2 gap-3 border-t border-border pt-3">
+            <Field
+              label="Production"
+              hint="Every write here asks first, each time, and the workspace says so while you are in it."
+            >
+              <Select
+                value={config.production?.scope ?? "none"}
+                onChange={(e) => {
+                  const scope = e.target.value as Production["scope"];
+                  patch({
+                    production:
+                      scope === "databases"
+                        ? {
+                            scope,
+                            names:
+                              config.production?.scope === "databases"
+                                ? config.production.names
+                                : [],
+                          }
+                        : { scope },
+                  });
+                }}
+              >
+                <option value="none">Not production</option>
+                <option value="all">The whole connection</option>
+                <option value="databases">Only these databases</option>
+              </Select>
+            </Field>
+            {config.production?.scope === "databases" && (
+              <Field label="Databases" hint="Names, separated by commas. Case does not matter.">
+                <Input
+                  value={config.production.names.join(", ")}
+                  spellCheck={false}
+                  placeholder="app_prod, billing"
+                  onChange={(e) =>
+                    patch({
+                      production: {
+                        scope: "databases",
+                        names: e.target.value
+                          .split(",")
+                          .map((n) => n.trim())
+                          .filter(Boolean),
+                      },
+                    })
+                  }
+                />
+              </Field>
+            )}
           </div>
         )}
       </div>

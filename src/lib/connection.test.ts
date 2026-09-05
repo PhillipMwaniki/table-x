@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { defaultDriver, forDriver, retargetConfig } from "./connection";
+import {
+  defaultDriver,
+  forDriver,
+  hasProduction,
+  inProduction,
+  retargetConfig,
+} from "./connection";
 import type { ConnectionConfig, DriverInfo } from "./types";
 
 function driver(id: string, overrides: Partial<DriverInfo> = {}): DriverInfo {
@@ -128,5 +134,30 @@ describe("defaultDriver", () => {
 
   it("has nothing to offer a build with no drivers at all", () => {
     expect(defaultDriver([])).toBeUndefined();
+  });
+});
+
+describe("inProduction", () => {
+  it("is nothing for a connection that never said", () => {
+    expect(inProduction(config(), "app")).toBe(false);
+    expect(hasProduction(config())).toBe(false);
+  });
+
+  it("covers every database when the whole connection is production", () => {
+    const c = config({ production: { scope: "all" } });
+    expect(inProduction(c, "anything")).toBe(true);
+    // A file database has no name to check and is still production.
+    expect(inProduction(c, null)).toBe(true);
+    expect(hasProduction(c)).toBe(true);
+  });
+
+  it("matches listed databases by name, without regard to case", () => {
+    const c = config({ production: { scope: "databases", names: ["App_Prod", " billing "] } });
+    expect(inProduction(c, "app_prod")).toBe(true);
+    expect(inProduction(c, "billing")).toBe(true);
+    expect(inProduction(c, "app_staging")).toBe(false);
+    expect(inProduction(c, null)).toBe(false);
+    expect(hasProduction(c)).toBe(true);
+    expect(hasProduction(config({ production: { scope: "databases", names: [] } }))).toBe(false);
   });
 });

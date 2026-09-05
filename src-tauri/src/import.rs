@@ -612,6 +612,7 @@ mod tests {
             color: None,
             read_only: false,
             confirm_destructive: None,
+            production: Default::default(),
             options: IndexMap::new(),
         });
 

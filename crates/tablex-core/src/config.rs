@@ -7,6 +7,19 @@
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
+/// How much of a connection is production.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "scope", rename_all = "snake_case")]
+pub enum Production {
+    /// None of it.
+    #[default]
+    None,
+    /// The whole connection: every database it can reach.
+    All,
+    /// Only these databases, by name.
+    Databases { names: Vec<String> },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectionConfig {
     /// Stable identifier; also the keychain lookup key for this connection.
@@ -61,6 +74,15 @@ pub struct ConnectionConfig {
     /// override in either direction.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confirm_destructive: Option<bool>,
+
+    /// Which of this connection's databases hold production data.
+    ///
+    /// Distinct from the colour tag and the destructive gate: those mark a
+    /// connection and ask about statements that destroy. Production is about
+    /// *every* write, and a server often holds one production database beside
+    /// its staging copies, so the scope can be a list of names.
+    #[serde(default)]
+    pub production: Production,
 
     /// Driver-specific extras that do not warrant a first-class field.
     ///
@@ -205,6 +227,19 @@ impl ConnectionConfig {
         self.confirm_destructive.unwrap_or(self.color.is_some())
     }
 
+    /// Whether a write against `database` on this connection touches production.
+    ///
+    /// Names are compared without regard to case, since two of the engines here
+    /// fold them and a list typed by hand should not have to know which.
+    pub fn in_production(&self, database: Option<&str>) -> bool {
+        match &self.production {
+            Production::None => false,
+            Production::All => true,
+            Production::Databases { names } => database
+                .is_some_and(|current| names.iter().any(|n| n.eq_ignore_ascii_case(current))),
+        }
+    }
+
     /// A short summary for the connection list, e.g. `postgres@db.example.com:5432/app`.
     pub fn summary(&self) -> String {
         if let Some(path) = &self.file_path {
@@ -292,6 +327,7 @@ mod tests {
             color: None,
             read_only: true,
             confirm_destructive: None,
+            production: Default::default(),
             options: IndexMap::new(),
         }
     }
@@ -382,5 +418,37 @@ mod tests {
             serde_json::from_str(r#"{"id":"x","name":"n","driver":"sqlite"}"#).expect("parse");
         assert_eq!(c.tls.mode, TlsMode::Prefer);
         assert!(!c.read_only);
+    }
+
+    #[test]
+    fn production_can_be_the_whole_connection_or_some_of_its_databases() {
+        let mut c = base();
+        assert!(!c.in_production(Some("app")));
+
+        c.production = Production::All;
+        assert!(c.in_production(Some("app")));
+        assert!(
+            c.in_production(None),
+            "a file database has no name to check"
+        );
+
+        c.production = Production::Databases {
+            names: vec!["App_Prod".into()],
+        };
+        assert!(c.in_production(Some("app_prod")), "names fold case");
+        assert!(!c.in_production(Some("app_staging")));
+        assert!(!c.in_production(None));
+    }
+
+    #[test]
+    fn a_connection_saved_before_production_existed_is_not_production() {
+        let c: ConnectionConfig =
+            serde_json::from_str(r#"{"id":"x","name":"n","driver":"sqlite"}"#).expect("parse");
+        assert_eq!(c.production, Production::None);
+        let round = serde_json::to_string(&c).expect("serialize");
+        assert!(
+            round.contains(r#""production":{"scope":"none"}"#),
+            "{round}"
+        );
     }
 }

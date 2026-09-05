@@ -194,8 +194,18 @@ export interface ConnectionConfig {
   read_only: boolean;
   /** Ask before destructive statements. Null follows the colour tag. */
   confirm_destructive?: boolean | null | undefined;
+  /**
+   * Which of this connection's databases hold production data.
+   *
+   * Absent on connections saved before it existed, which means none.
+   */
+  production?: Production | undefined;
   options: Record<string, string>;
 }
+
+/** How much of a connection is production. */
+export type Production =
+  { scope: "none" } | { scope: "all" } | { scope: "databases"; names: string[] };
 
 // ---------------------------------------------------------------------------
 // Results
@@ -332,6 +342,8 @@ export interface HazardReport {
   /** Whether this connection is configured to ask before destroying data. */
   confirms: boolean;
   hazards: HazardItem[];
+  /** Whether the statement would change the database at all. */
+  writes: boolean;
 }
 
 /** A writing statement rewritten as a read of the rows it would touch. */

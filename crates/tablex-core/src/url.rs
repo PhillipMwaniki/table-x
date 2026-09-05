@@ -140,6 +140,7 @@ pub fn parse(input: &str) -> Result<ParsedUrl> {
             // default is the guard there, and it is enforced before the driver
             // is reached rather than by asking.
             confirm_destructive: Some(false),
+            production: Default::default(),
             options,
         },
         password: url.password().map(decode),

@@ -189,6 +189,7 @@ mod tests {
             color: None,
             read_only: false,
             confirm_destructive: None,
+            production: Default::default(),
             options: IndexMap::new(),
         };
         // Saving a database password must never overwrite a key passphrase.
@@ -1424,6 +1425,12 @@ pub struct HazardReport {
     /// Whether this connection is configured to ask before destroying data.
     pub confirms: bool,
     pub hazards: Vec<HazardItem>,
+    /// Whether the statement would change the database at all.
+    ///
+    /// Wider than `hazards`: an INSERT is a write and not a hazard. Production
+    /// asks about writes, so the frontend needs this answered by the same
+    /// scanner that backs the read-only guard rather than by a second one.
+    pub writes: bool,
 }
 
 #[derive(Serialize)]
@@ -1442,6 +1449,7 @@ pub async fn inspect_statement(
     let config = state.config_for(&connection_id).await?;
     Ok(HazardReport {
         confirms: config.confirms_destructive(),
+        writes: tablex_core::sql::looks_like_write(&sql),
         hazards: tablex_core::sql::hazards(&sql)
             .into_iter()
             .map(|h| HazardItem {

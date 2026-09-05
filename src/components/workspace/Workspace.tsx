@@ -43,6 +43,7 @@ import { ipc, IpcError } from "@/lib/ipc";
 import { hasOrderBy } from "@/lib/paging";
 import { layoutKeyFor } from "@/lib/columns";
 import { tableStatement } from "@/lib/browse";
+import { inProduction } from "@/lib/connection";
 import { readOnlyExplanation } from "@/lib/guarantees";
 import { drop, selectFrom, truncate } from "@/lib/statements";
 import { keyTypeFor } from "@/lib/design";
@@ -176,6 +177,8 @@ export function Workspace({
      * the gate is about the decision, not about the shape of what follows it.
      */
     onConfirm?: () => void;
+    /** What to do if it is not — for a caller waiting on the answer. */
+    onCancel?: () => void;
   } | null>(null);
 
   /** The table an insert form is open for, with its columns. */
@@ -327,6 +330,7 @@ export function Workspace({
     const current = activeTab(connection.id);
     const source = sourceOf(current?.outcome?.statements[current.activeStatement]);
     if (!current) return;
+    if (!(await confirmProduction(`a new row in ${table}`))) return;
 
     try {
       await ipc.insertRow(connection.id, {
@@ -355,11 +359,13 @@ export function Workspace({
       .inspectStatement(connection.id, "DELETE FROM x WHERE id = 1")
       .catch(() => null);
 
-    if (report?.confirms) {
+    const asksProduction = production && !connection.read_only;
+    if (report?.confirms || asksProduction) {
       setPending({
         tabId: current.id,
         sql: `${rowIndexes.length} selected row${rowIndexes.length === 1 ? "" : "s"}`,
         hazards: [
+          ...(asksProduction ? [productionHazard()] : []),
           {
             summary: `deletes ${rowIndexes.length} row${rowIndexes.length === 1 ? "" : "s"} from ${
               sourceOf(current.outcome?.statements[current.activeStatement])?.table ?? "this table"
@@ -629,6 +635,7 @@ export function Workspace({
   /** Run the import the dialog just described. */
   const runImport = async (job: { path: string; target: ImportTarget }, plan: ImportPlan) => {
     setImporting(null);
+    if (!(await confirmProduction(`an import into ${plan.table}`))) return;
     const id = crypto.randomUUID();
     const current = activeTab(connection.id);
     beginExport(
@@ -677,6 +684,41 @@ export function Workspace({
    * anyway: the same scanner backs the read-only guard and the MCP refusal, and
    * a second copy in the frontend would eventually disagree with them.
    */
+  /**
+   * Whether the session is pointed at production right now.
+   *
+   * Read every render rather than once, because switching database is what
+   * moves a connection with a per-database scope in and out of it.
+   */
+  const production = inProduction(connection, database);
+
+  /** The line the confirmation shows for a production write. */
+  const productionHazard = (): HazardItem => ({
+    summary: `writes to production${database ? ` (${database})` : ""} on ${connection.name}`,
+    unbounded: false,
+  });
+
+  /**
+   * Ask before a write on production, every time.
+   *
+   * Resolves true when there is nothing to ask — not production, or the
+   * connection is read-only and the write will be refused anyway — or when the
+   * dialog is confirmed; false when it is dismissed. The confirmation is not
+   * remembered: a production write is a decision each time it is made.
+   */
+  const confirmProduction = (describe: string): Promise<boolean> => {
+    if (!production || connection.read_only) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      setPending({
+        tabId: activeTab(connection.id)?.id ?? "",
+        sql: describe,
+        hazards: [productionHazard()],
+        onConfirm: () => resolve(true),
+        onCancel: () => resolve(false),
+      });
+    });
+  };
+
   const runGuarded = async (
     tabId: string,
     sqlOverride?: string,
@@ -702,8 +744,16 @@ export function Workspace({
 
     try {
       const report = await ipc.inspectStatement(connection.id, sql);
-      if (report.confirms && report.hazards.length > 0) {
-        setPending({ tabId, sql, hazards: report.hazards });
+      // Production asks about every write, the destructive gate about the
+      // ones that destroy; a statement can be both, and then the dialog says
+      // both. A read on production asks nothing.
+      const asksProduction = production && !connection.read_only && report.writes;
+      const hazards = [
+        ...(asksProduction ? [productionHazard()] : []),
+        ...(report.confirms ? report.hazards : []),
+      ];
+      if (hazards.length > 0) {
+        setPending({ tabId, sql, hazards });
         return;
       }
     } catch {
@@ -1306,6 +1356,24 @@ export function Workspace({
                     <span className="text-[10.5px] text-text-muted">Ctrl+Enter</span>
                   )}
 
+                  {/* Always visible while the session is on production,
+                      because the moment it matters is the moment before the
+                      statement runs, and a badge on the connection list is
+                      behind you by then. */}
+                  {production && (
+                    <span
+                      role="status"
+                      title={
+                        connection.read_only
+                          ? "Production, and read-only: writes are refused."
+                          : `Production${database ? ` (${database})` : ""}: every write asks first, each time.`
+                      }
+                      className="rounded bg-danger/15 px-1.5 py-0.5 text-[10px] font-semibold tracking-wider text-danger uppercase"
+                    >
+                      Production
+                    </span>
+                  )}
+
                   {/* Two views of one table, so a toggle rather than a second
                       tab: looking at a table means moving between what is in
                       it and how it is built, repeatedly. */}
@@ -1659,7 +1727,13 @@ export function Workspace({
                       memoryKey={gridKey ?? undefined}
                       layoutKey={layoutKeyFor(connection.id, tab, active)}
                       result={active}
-                      onEdit={(row, col, next) => applyEdit(connection.id, tab.id, row, col, next)}
+                      onEdit={async (row, col, next) => {
+                        // A cell edit is a write like any other; on production
+                        // it asks first, and a dismissed dialog leaves the cell
+                        // as it was.
+                        if (!(await confirmProduction("one cell edit"))) return;
+                        await applyEdit(connection.id, tab.id, row, col, next);
+                      }}
                       paging={{
                         offset: tab.offset,
                         limit: tab.limit || pageSize,
@@ -1856,7 +1930,11 @@ export function Workspace({
           connectionName={connection.name}
           hazards={pending.hazards}
           sql={pending.sql}
-          onCancel={() => setPending(null)}
+          onCancel={() => {
+            const held = pending;
+            setPending(null);
+            held.onCancel?.();
+          }}
           onConfirm={() => {
             const held = pending;
             setPending(null);
